@@ -25,7 +25,12 @@ let package = Package(
             dependencies: [],
             path: "Sources/DCRenderKit",
             resources: [
-                // Metal shaders will be added in Round 4+ as .process resources.
+                // All Metal shaders live under Shaders/; SPM compiles them
+                // into the default metallib bundled with the target. Swift
+                // filter structs live under Filters/ and must stay out of
+                // this rule (otherwise SPM reclassifies .swift files as
+                // resources and silently skips compiling them).
+                .process("Shaders"),
             ]
         ),
         .testTarget(
