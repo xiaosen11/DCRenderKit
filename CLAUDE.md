@@ -140,12 +140,29 @@ if (gid.x >= output.get_width() || gid.y >= output.get_height()) return;
 
 ## 测试规范
 
-每个 filter 必须有：
-- **Identity 测试** — 零参数等于原图
-- **极值测试** — ±100 或最大范围不崩溃、不 NaN
-- **Reference 测试**（Phase 3）— 与 Lightroom/参考实现对比 pixel MSE
+**写任何测试前必读 `.claude/rules/testing.md`**。该规则文件包含：
 
-每个核心类（Pipeline、TexturePool、Dispatcher）必须有 smoke test（Round 12 交付，Phase 3 补齐覆盖率）。
+- **Part 1 — 设计原则**：源数据覆盖条件轴、断言"方向+数值+精度"三要素、
+  写断言前必须从 first principles 推导预期值、SDK 契约必须独立绑定测试
+- **Part 2 — 失败时的 mindset**：默认假设实现错不是断言错、强制排查
+  流程、禁止直接放宽断言或翻方向
+
+每个 filter 的最小测试集：
+
+| 类别 | 问什么 |
+|------|--------|
+| Identity | 零参数 output === input |
+| 极值不崩 | ±100 下 output 有限在 gamut |
+| **方向性** | 正参数让 output 变亮 / 变暗 |
+| **数值** | 典型输入下 output 匹配公式推导（±容限） |
+| **契约** | SDK 承诺的格式 / 状态匹配 |
+
+每个核心类（Pipeline、TexturePool、Dispatcher）必须有契约测试 + smoke test。
+
+**历史教训（2026-04-17 P0）**：测试套件 202 个 case 全绿却漏掉了用户真机
+抓出的精度链 bug——因为所有端到端测试的 source 都是 `rgba16Float`，整个
+bgra8Unorm 相机路径无测试覆盖，且断言只测"in-gamut + finite"而非方向性
+效果。详见 `.claude/rules/testing.md` §1.1 §2.4。
 
 ## Git 规范
 
