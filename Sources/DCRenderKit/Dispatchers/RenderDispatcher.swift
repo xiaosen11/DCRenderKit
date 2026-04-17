@@ -191,7 +191,8 @@ public struct RenderDispatcher {
                 draw,
                 encoder: encoder,
                 uniformPool: uniformPool,
-                samplerCache: samplerCache
+                samplerCache: samplerCache,
+                commandBuffer: commandBuffer
             )
         }
 
@@ -205,7 +206,8 @@ public struct RenderDispatcher {
         _ draw: DrawCall,
         encoder: MTLRenderCommandEncoder,
         uniformPool: UniformBufferPool,
-        samplerCache: SamplerCache
+        samplerCache: SamplerCache,
+        commandBuffer: MTLCommandBuffer
     ) throws {
         // Vertex stage
         encoder.setVertexBuffer(
@@ -214,7 +216,10 @@ public struct RenderDispatcher {
             index: 0
         )
         try bindVertexUniforms(
-            draw.vertexUniforms, encoder: encoder, pool: uniformPool
+            draw.vertexUniforms,
+            encoder: encoder,
+            pool: uniformPool,
+            commandBuffer: commandBuffer
         )
 
         // Fragment stage — textures
@@ -230,7 +235,10 @@ public struct RenderDispatcher {
 
         // Fragment stage — uniforms
         try bindFragmentUniforms(
-            draw.fragmentUniforms, encoder: encoder, pool: uniformPool
+            draw.fragmentUniforms,
+            encoder: encoder,
+            pool: uniformPool,
+            commandBuffer: commandBuffer
         )
 
         // Draw
@@ -243,14 +251,14 @@ public struct RenderDispatcher {
 
     // MARK: - Private uniform binding helpers
 
-    /// Bind vertex-stage uniforms, preferring `setVertexBytes` for small
-    /// payloads so multiple draws in one command buffer don't contend
-    /// over `UniformBufferPool`'s ring. Same rationale as
-    /// `ComputeDispatcher`'s uniform binding.
+    /// Bind vertex-stage uniforms. Uses `setVertexBytes` for small
+    /// payloads (≤ 4 KB, the common case) and the command-buffer-fenced
+    /// `UniformBufferPool` for larger ones.
     private static func bindVertexUniforms(
         _ uniforms: FilterUniforms,
         encoder: MTLRenderCommandEncoder,
-        pool: UniformBufferPool
+        pool: UniformBufferPool,
+        commandBuffer: MTLCommandBuffer
     ) throws {
         guard uniforms.byteCount > 0 else { return }
         if uniforms.byteCount <= 4096 {
@@ -265,7 +273,10 @@ public struct RenderDispatcher {
                     index: 1
                 )
             }
-        } else if let binding = try pool.nextBuffer(for: uniforms) {
+        } else if let binding = try pool.nextBuffer(
+            for: uniforms,
+            commandBuffer: commandBuffer
+        ) {
             encoder.setVertexBuffer(binding.buffer, offset: binding.offset, index: 1)
         }
     }
@@ -274,7 +285,8 @@ public struct RenderDispatcher {
     private static func bindFragmentUniforms(
         _ uniforms: FilterUniforms,
         encoder: MTLRenderCommandEncoder,
-        pool: UniformBufferPool
+        pool: UniformBufferPool,
+        commandBuffer: MTLCommandBuffer
     ) throws {
         guard uniforms.byteCount > 0 else { return }
         if uniforms.byteCount <= 4096 {
@@ -289,7 +301,10 @@ public struct RenderDispatcher {
                     index: 0
                 )
             }
-        } else if let binding = try pool.nextBuffer(for: uniforms) {
+        } else if let binding = try pool.nextBuffer(
+            for: uniforms,
+            commandBuffer: commandBuffer
+        ) {
             encoder.setFragmentBuffer(binding.buffer, offset: binding.offset, index: 0)
         }
     }

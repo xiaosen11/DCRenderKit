@@ -250,6 +250,7 @@ final class SamplerCacheTests: XCTestCase {
 final class UniformBufferPoolTests: XCTestCase {
 
     var device: Device!
+    var queue: MTLCommandQueue!
     var pool: UniformBufferPool!
 
     override func setUpWithError() throws {
@@ -257,50 +258,180 @@ final class UniformBufferPoolTests: XCTestCase {
             throw XCTSkip("Metal device required")
         }
         device = d
-        pool = UniformBufferPool(device: d, capacity: 3, bufferSize: 256)
+        queue = try XCTUnwrap(d.metalDevice.makeCommandQueue())
+        pool = UniformBufferPool(
+            device: d,
+            capacity: 3,
+            maxBuffers: 8,
+            bufferSize: 256
+        )
     }
 
     override func tearDown() {
         pool = nil
+        queue = nil
         device = nil
         super.tearDown()
     }
 
+    // MARK: - Empty / single-use paths
+
     func testEmptyUniformsReturnsNil() throws {
-        let result = try pool.nextBuffer(for: .empty)
+        let cb = try XCTUnwrap(queue.makeCommandBuffer())
+        let result = try pool.nextBuffer(for: .empty, commandBuffer: cb)
         XCTAssertNil(result)
+        cb.commit()
     }
 
     func testPODUniformsBind() throws {
         struct Params { var a: Float = 1.0; var b: Float = 2.0 }
+        let cb = try XCTUnwrap(queue.makeCommandBuffer())
         let u = FilterUniforms(Params())
-        let result = try pool.nextBuffer(for: u)
+        let result = try pool.nextBuffer(for: u, commandBuffer: cb)
         let binding = try XCTUnwrap(result)
 
         let ptr = binding.buffer.contents().advanced(by: binding.offset)
             .assumingMemoryBound(to: Params.self)
         XCTAssertEqual(ptr.pointee.a, 1.0)
         XCTAssertEqual(ptr.pointee.b, 2.0)
+        cb.commit()
     }
 
-    func testRingRotation() throws {
-        // With capacity 3, the 4th allocation should wrap to the first buffer.
-        struct SmallParams { var v: Int32 = 0 }
-        var seenBuffers: [MTLBuffer] = []
+    // MARK: - Fence guarantees — the whole point of the refactor
+
+    func testSameCommandBufferGetsDistinctBuffers() throws {
+        // The bug that originally lived here: a single command buffer
+        // encoding N > capacity dispatches got overwriting buffer slots.
+        // Contract now: within one command buffer, every request returns
+        // a distinct backing buffer.
+        struct P { var v: Int32 = 0 }
+        let cb = try XCTUnwrap(queue.makeCommandBuffer())
+        var seen: [MTLBuffer] = []
         for i in 0..<6 {
-            var p = SmallParams(); p.v = Int32(i)
-            let result = try pool.nextBuffer(for: FilterUniforms(p))
-            let binding = try XCTUnwrap(result)
-            seenBuffers.append(binding.buffer)
+            var p = P(); p.v = Int32(i)
+            let binding = try XCTUnwrap(
+                pool.nextBuffer(for: FilterUniforms(p), commandBuffer: cb)
+            )
+            seen.append(binding.buffer)
         }
-        // With capacity=3, buffer 0 == buffer 3, buffer 1 == buffer 4, etc.
-        XCTAssertTrue(seenBuffers[0] === seenBuffers[3])
-        XCTAssertTrue(seenBuffers[1] === seenBuffers[4])
-        XCTAssertTrue(seenBuffers[2] === seenBuffers[5])
+        cb.commit()
+        cb.waitUntilCompleted()
+
+        // All six backing buffers must be unique.
+        for i in 0..<seen.count {
+            for j in (i + 1)..<seen.count {
+                XCTAssertFalse(seen[i] === seen[j], "buffers \(i) and \(j) aliased")
+            }
+        }
     }
 
-    func testOversizedUniformsFallback() throws {
-        // bufferSize is 256. Make uniforms that exceed it.
+    func testPoolGrowsBeyondInitialCapacity() throws {
+        // Initial capacity 3, maxBuffers 8. A 5-dispatch command buffer
+        // must force growth from 3 → 5 slots.
+        struct P { var v: Float = 0 }
+        XCTAssertEqual(pool.currentSlotCount, 3)
+
+        let cb = try XCTUnwrap(queue.makeCommandBuffer())
+        for _ in 0..<5 {
+            _ = try pool.nextBuffer(for: FilterUniforms(P()), commandBuffer: cb)
+        }
+        XCTAssertEqual(pool.currentSlotCount, 5)
+        cb.commit()
+    }
+
+    func testReservationsReleaseAfterCommandBufferCompletes() throws {
+        // 3 dispatches on one command buffer → 3 reservations. After
+        // completion, the pool must have 0 reservations (all slots free
+        // again).
+        struct P { var v: Float = 0 }
+        let cb = try XCTUnwrap(queue.makeCommandBuffer())
+        for _ in 0..<3 {
+            _ = try pool.nextBuffer(for: FilterUniforms(P()), commandBuffer: cb)
+        }
+        XCTAssertEqual(pool.reservedSlotCount, 3)
+
+        cb.commit()
+        cb.waitUntilCompleted()
+
+        // `addCompletedHandler` is invoked on an unspecified GPU thread;
+        // give it up to half a second before declaring the release failed.
+        let releasedExpectation = expectation(description: "reservations released")
+        DispatchQueue.global().async { [self] in
+            for _ in 0..<50 {
+                if pool.reservedSlotCount == 0 {
+                    releasedExpectation.fulfill()
+                    return
+                }
+                Thread.sleep(forTimeInterval: 0.01)
+            }
+        }
+        wait(for: [releasedExpectation], timeout: 1.0)
+        XCTAssertEqual(pool.reservedSlotCount, 0)
+    }
+
+    func testSeparateCommandBuffersCanShareSlotsAfterCompletion() throws {
+        struct P { var v: Float = 0 }
+
+        // First command buffer reserves all 3 initial slots.
+        let cbA = try XCTUnwrap(queue.makeCommandBuffer())
+        var firstWave: [MTLBuffer] = []
+        for _ in 0..<3 {
+            let binding = try XCTUnwrap(
+                pool.nextBuffer(for: FilterUniforms(P()), commandBuffer: cbA)
+            )
+            firstWave.append(binding.buffer)
+        }
+        cbA.commit()
+        cbA.waitUntilCompleted()
+        // Spin until reservations have actually released (handler is async).
+        let deadline = Date().addingTimeInterval(1.0)
+        while pool.reservedSlotCount != 0, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.005)
+        }
+        XCTAssertEqual(pool.reservedSlotCount, 0)
+
+        // Second command buffer: slots should be reused (not grow).
+        let slotsBefore = pool.currentSlotCount
+        let cbB = try XCTUnwrap(queue.makeCommandBuffer())
+        var secondWave: [MTLBuffer] = []
+        for _ in 0..<3 {
+            let binding = try XCTUnwrap(
+                pool.nextBuffer(for: FilterUniforms(P()), commandBuffer: cbB)
+            )
+            secondWave.append(binding.buffer)
+        }
+        XCTAssertEqual(pool.currentSlotCount, slotsBefore, "pool should not have grown")
+
+        // At least one buffer from the second wave should be identical to
+        // one from the first wave — the pool reused slots rather than
+        // allocating new ones.
+        let reusedAtLeastOne = secondWave.contains { b in
+            firstWave.contains { $0 === b }
+        }
+        XCTAssertTrue(reusedAtLeastOne)
+        cbB.commit()
+    }
+
+    func testFallbackToOneOffAtCapacityCap() throws {
+        // maxBuffers = 8. 10 requests on one command buffer should grow
+        // to 8 and then fall back to one-off for the last two without
+        // throwing.
+        struct P { var v: Float = 0 }
+        let cb = try XCTUnwrap(queue.makeCommandBuffer())
+        for _ in 0..<10 {
+            let binding = try pool.nextBuffer(
+                for: FilterUniforms(P()),
+                commandBuffer: cb
+            )
+            XCTAssertNotNil(binding)
+        }
+        XCTAssertLessThanOrEqual(pool.currentSlotCount, 8)
+        cb.commit()
+    }
+
+    // MARK: - Oversize path
+
+    func testOversizedUniformsGoThroughOneOff() throws {
         struct BigParams {
             var data: (UInt64, UInt64, UInt64, UInt64,
                        UInt64, UInt64, UInt64, UInt64,
@@ -317,11 +448,14 @@ final class UniformBufferPoolTests: XCTestCase {
                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
             )
         }
+        let cb = try XCTUnwrap(queue.makeCommandBuffer())
         let u = FilterUniforms(BigParams())
         XCTAssertGreaterThan(u.byteCount, 256)
-        // Should fall back to one-off allocation without throwing.
-        let result = try pool.nextBuffer(for: u)
+        let result = try pool.nextBuffer(for: u, commandBuffer: cb)
         XCTAssertNotNil(result)
+        // Oversize path doesn't hold a reservation (it's a one-off buffer).
+        XCTAssertEqual(pool.reservedSlotCount, 0)
+        cb.commit()
     }
 }
 

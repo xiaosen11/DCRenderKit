@@ -102,19 +102,12 @@ public struct ComputeDispatcher {
 
         // 5. Bind uniforms at buffer(0) if non-empty.
         //
-        // For small uniforms (the typical filter case — a handful of
-        // Floats), use `setBytes` which lets Metal manage transient
-        // storage internally. This bypasses the per-frame UniformBufferPool
-        // ring and sidesteps a critical bug: when a single command buffer
-        // encodes more dispatches than the pool's capacity, the ring wraps
-        // and a later dispatch overwrites an earlier dispatch's uniforms
-        // that the GPU has not yet consumed — silently corrupting outputs.
-        // `setBytes` is bounded to 4 KB on Metal, which covers every
-        // filter we ship (all uniforms are under 64 bytes).
-        //
-        // For the rare large-uniform case (> 4 KB), fall back to the pool,
-        // which is still fine because oversize uniforms hit the pool's
-        // `allocateOneOff` path and get a dedicated buffer.
+        // Two paths:
+        //  - ≤ 4 KB (covers every filter we ship): `setBytes`, which
+        //    lets Metal manage per-dispatch transient storage internally.
+        //  - > 4 KB: `UniformBufferPool`, which now reserves buffers
+        //    per command buffer and grows on demand. Both paths are
+        //    correct under unlimited dispatches per command buffer.
         if uniforms.byteCount > 0 {
             if uniforms.byteCount <= 4096 {
                 var scratch = [UInt8](repeating: 0, count: uniforms.byteCount)
@@ -128,7 +121,10 @@ public struct ComputeDispatcher {
                         index: 0
                     )
                 }
-            } else if let binding = try uniformPool.nextBuffer(for: uniforms) {
+            } else if let binding = try uniformPool.nextBuffer(
+                for: uniforms,
+                commandBuffer: commandBuffer
+            ) {
                 encoder.setBuffer(binding.buffer, offset: binding.offset, index: 0)
             }
         }
