@@ -3,13 +3,15 @@
 //  DCRDemo
 //
 //  MTKView-backed SwiftUI view that drives the DCRenderKit Pipeline
-//  with camera frames delivered by CameraController. Renders the
-//  filtered output directly to the drawable — zero intermediate copies
-//  from camera frame to screen.
+//  with camera frames delivered by CameraController. The MTKView is
+//  paused — redraws fire only when a new camera frame arrives OR a
+//  parameter mutates. Idle GPU cost is zero; active redraw cadence
+//  is the camera's natural frame rate (~30 fps) plus slider activity.
 //
 
 import SwiftUI
 import MetalKit
+import Observation
 import DCRenderKit
 
 struct MetalCameraPreview: UIViewRepresentable {
@@ -33,16 +35,25 @@ struct MetalCameraPreview: UIViewRepresentable {
         view.colorPixelFormat = .bgra8Unorm
         view.framebufferOnly = false
         view.delegate = context.coordinator
-        view.isPaused = false
-        view.enableSetNeedsDisplay = false
-        view.preferredFramesPerSecond = 60
+        // Paused MTKView: redraw only on demand. Two demand sources —
+        // CameraController.onFrame for new camera data, and
+        // Observation.withObservationTracking for slider mutations.
+        view.isPaused = true
+        view.enableSetNeedsDisplay = true
         view.autoResizeDrawable = true
         context.coordinator.view = view
+        context.coordinator.registerObservation()
         return view
     }
 
     func updateUIView(_ uiView: MTKView, context: Context) {
-        // Parameters are read at render time through the captured reference.
+        // Nothing to push — the coordinator holds stable references
+        // and the view only needs to redraw when frames / params
+        // change, both handled internally.
+    }
+
+    static func dismantleUIView(_ uiView: MTKView, coordinator: Coordinator) {
+        coordinator.cancelObservation()
     }
 
     // MARK: - Coordinator
@@ -58,11 +69,11 @@ struct MetalCameraPreview: UIViewRepresentable {
 
         private let commandQueue: MTLCommandQueue
 
-        // Latest frame lands here from the camera queue; the MTKView
-        // drain picks it up on the next display tick. Lock-guarded so
-        // the two threads can't race.
+        // Latest camera frame lands here from the camera queue.
         private let frameLock = NSLock()
         private var latestFrame: CameraFrame?
+
+        private var cancelled = false
 
         init(
             device: MTLDevice,
@@ -82,12 +93,33 @@ struct MetalCameraPreview: UIViewRepresentable {
             }
         }
 
-        // Camera-queue callback. No actor isolation; lock-synchronized
-        // write to `latestFrame`.
+        /// Camera-queue callback. Lock-synchronized write, then hop
+        /// to main and ask MTKView to redraw.
         private func storeFrame(_ frame: CameraFrame) {
             frameLock.lock()
             latestFrame = frame
             frameLock.unlock()
+            DispatchQueue.main.async { [weak self] in
+                self?.view?.setNeedsDisplay()
+            }
+        }
+
+        @MainActor
+        func registerObservation() {
+            guard !cancelled else { return }
+            withObservationTracking {
+                _ = params.fingerprint
+            } onChange: { [weak self] in
+                DispatchQueue.main.async {
+                    guard let self, !self.cancelled else { return }
+                    self.view?.setNeedsDisplay()
+                    self.registerObservation()
+                }
+            }
+        }
+
+        func cancelObservation() {
+            cancelled = true
         }
 
         // MARK: - MTKViewDelegate
@@ -97,9 +129,6 @@ struct MetalCameraPreview: UIViewRepresentable {
         }
 
         nonisolated func draw(in view: MTKView) {
-            // MTKViewDelegate.draw is documented as main-thread; assume
-            // main actor isolation so we can touch `@MainActor` state
-            // (params, metrics) without bouncing through sync dispatch.
             MainActor.assumeIsolated {
                 performRender(in: view)
             }
@@ -126,8 +155,6 @@ struct MetalCameraPreview: UIViewRepresentable {
             let pipeline = Pipeline(input: .texture(frame.texture), steps: chain)
 
             do {
-                // SDK bridges format (rgba16Float → bgra8Unorm) and size
-                // from chain output to the drawable in one call.
                 try pipeline.encode(
                     into: commandBuffer,
                     writingTo: drawable.texture

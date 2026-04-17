@@ -2,13 +2,16 @@
 //  MetalImagePreview.swift
 //  DCRDemo
 //
-//  MTKView-backed preview for a single still image. Re-renders on
-//  every parameter change; the filter chain is lightweight so sub-
-//  100ms latency is achievable even at 12MP.
+//  MTKView-backed preview for a single still image. Renders on demand:
+//  the MTKView is paused, and redraws are triggered by
+//  `withObservationTracking` callbacks whenever any parameter on the
+//  bound `EditParameters` changes, or whenever the source texture
+//  swaps (sample-image switch). Idle GPU cost is zero.
 //
 
 import SwiftUI
 import MetalKit
+import Observation
 import DCRenderKit
 
 struct MetalImagePreview: UIViewRepresentable {
@@ -27,30 +30,23 @@ struct MetalImagePreview: UIViewRepresentable {
         view.colorPixelFormat = .bgra8Unorm
         view.framebufferOnly = false
         view.delegate = context.coordinator
-        // Drive the preview at 30 fps continuously. Paused
-        // (setNeedsDisplay-triggered) rendering is theoretically
-        // cheaper but requires SwiftUI Observation to propagate
-        // through the UIViewRepresentable boundary, which turned out
-        // to be fragile across different view hierarchies. A constant
-        // 30 fps loop reads params on every frame and always reflects
-        // the latest slider value — slightly higher GPU idle cost
-        // (~1–2 ms/frame doing nothing) in exchange for bulletproof
-        // live response.
-        view.isPaused = false
-        view.enableSetNeedsDisplay = false
-        view.preferredFramesPerSecond = 30
+        // Paused render. A redraw fires only when:
+        //  - a parameter on `params` mutates (Observation callback),
+        //  - the sample image changes (updateUIView below), or
+        //  - the drawable size changes (autoResizeDrawable).
+        view.isPaused = true
+        view.enableSetNeedsDisplay = true
         view.autoResizeDrawable = true
         context.coordinator.view = view
         return view
     }
 
     func updateUIView(_ uiView: MTKView, context: Context) {
-        // Coordinator reads the latest params / sourceTexture on every
-        // frame via captured references, so updateUIView's job is
-        // simply to keep those references current whenever the parent
-        // body hands us new values (e.g. after a sample-image switch).
-        context.coordinator.params = params
-        context.coordinator.sourceTexture = sourceTexture
+        context.coordinator.bind(params: params, sourceTexture: sourceTexture)
+    }
+
+    static func dismantleUIView(_ uiView: MTKView, coordinator: Coordinator) {
+        coordinator.cancelObservation()
     }
 
     // MARK: - Coordinator
@@ -61,10 +57,13 @@ struct MetalImagePreview: UIViewRepresentable {
         let device: MTLDevice
         let metrics: PerformanceMetrics
 
-        var params: EditParameters?
-        var sourceTexture: MTLTexture?
-
+        private var params: EditParameters?
+        private var sourceTexture: MTLTexture?
         private let commandQueue: MTLCommandQueue
+
+        /// Set to `true` when the coordinator has been dismantled; stops
+        /// the observation loop from re-registering after that point.
+        private var cancelled = false
 
         init(device: MTLDevice, metrics: PerformanceMetrics) {
             self.device = device
@@ -72,6 +71,54 @@ struct MetalImagePreview: UIViewRepresentable {
             self.commandQueue = device.makeCommandQueue()!
             super.init()
         }
+
+        /// Called by `updateUIView` whenever SwiftUI hands new values
+        /// (most often: a different `EditParameters` instance after a
+        /// sample-image switch). Refreshes the coordinator's refs,
+        /// triggers an immediate redraw, and re-arms the observation
+        /// callback against the new `params` identity.
+        @MainActor
+        func bind(params: EditParameters, sourceTexture: MTLTexture?) {
+            self.params = params
+            self.sourceTexture = sourceTexture
+            view?.setNeedsDisplay()
+            registerObservation()
+        }
+
+        func cancelObservation() {
+            cancelled = true
+        }
+
+        /// Arm a one-shot `withObservationTracking` that fires the
+        /// first time any observed property changes, then re-arms
+        /// itself so subsequent changes continue to trigger redraws.
+        ///
+        /// Why one-shot re-registration: `withObservationTracking`
+        /// fires its `onChange` exactly once per registration. Metal
+        /// image-processing apps often need continuous observation, so
+        /// the idiomatic pattern is to re-register from inside
+        /// `onChange` — the tracking runtime makes this cheap.
+        @MainActor
+        private func registerObservation() {
+            guard !cancelled, let params else { return }
+            // Read the fingerprint inside the tracking closure. The
+            // getter touches every stored @Observable property on the
+            // instance, so any slider / LUT preset change triggers
+            // `onChange` below.
+            withObservationTracking {
+                _ = params.fingerprint
+            } onChange: { [weak self] in
+                // `onChange` can fire on an unspecified thread. Hop to
+                // main, setNeedsDisplay, then re-arm tracking.
+                DispatchQueue.main.async {
+                    guard let self, !self.cancelled else { return }
+                    self.view?.setNeedsDisplay()
+                    self.registerObservation()
+                }
+            }
+        }
+
+        // MARK: - MTKViewDelegate
 
         nonisolated func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
 
