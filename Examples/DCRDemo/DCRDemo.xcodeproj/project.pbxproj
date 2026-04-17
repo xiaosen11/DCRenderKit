@@ -8,11 +8,15 @@
 
 /* Begin PBXBuildFile section */
 		083755A0E0A3B626E30BAD0B /* MetalCameraPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = E44627CC30DF49297F1E3344 /* MetalCameraPreview.swift */; };
+		19BA5FB689105F9311065E72 /* honey.cube in Resources */ = {isa = PBXBuildFile; fileRef = E7B2929550F8AB0A6BF49C50 /* honey.cube */; };
+		1C059038538C5FFFF1F2FA83 /* jade.cube in Resources */ = {isa = PBXBuildFile; fileRef = 04DE116BE5C3042F7B7FF6B3 /* jade.cube */; };
 		1D4F301241214E9887869037 /* PerformanceMetrics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CA09F80074291B25FF03E35 /* PerformanceMetrics.swift */; };
 		20496DFC44C7D6F8B3B2C0F4 /* EffectSlidersPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65C16B7DA4F5332AC33F3AB8 /* EffectSlidersPanel.swift */; };
 		20D14B910B201EA446A773D2 /* PhotoEditView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EBEAAE20F60E447FCA764490 /* PhotoEditView.swift */; };
 		261F69636C2F77E0C6460BF1 /* DCRenderKit in Frameworks */ = {isa = PBXBuildFile; productRef = D0BC8E0476EED2301E4E8E57 /* DCRenderKit */; };
 		2F38511B194F2BE6769D751B /* CameraView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A4E625691E9F025936F2461 /* CameraView.swift */; };
+		59857B44B703AB59FA46CD2A /* portrait.jpg in Resources */ = {isa = PBXBuildFile; fileRef = EE22E6493E17FB621A6D092E /* portrait.jpg */; };
+		6EA1312ADE27C8A100451871 /* frost.cube in Resources */ = {isa = PBXBuildFile; fileRef = C9385A8F07CC3AD760FF6676 /* frost.cube */; };
 		7C636011DF06F092E890892D /* CameraController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8937C7442A7C91D712CFD5B1 /* CameraController.swift */; };
 		89954293CD34AAC0B4BB1112 /* DCRDemoApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2851220BBF8F2567967F67DE /* DCRDemoApp.swift */; };
 		90D5454A61D459F81E019322 /* EditParameters.swift in Sources */ = {isa = PBXBuildFile; fileRef = 243DC8DE7E626BE78FB900FE /* EditParameters.swift */; };
@@ -21,12 +25,18 @@
 		AE843FBC28807B5B6E844E28 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A1FE0909F10511BD15366121 /* Assets.xcassets */; };
 		B57F5EA998CC42D36B5A3798 /* PerformanceHUD.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72FC6856BB21B1C63AF98CC5 /* PerformanceHUD.swift */; };
 		B836A7D4280ED9A31CB41E32 /* FilterChainBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1EDF6E4CCFAF6D0BB5BCFFF /* FilterChainBuilder.swift */; };
+		BB6F4F4394FA2EDB861FB358 /* amber.cube in Resources */ = {isa = PBXBuildFile; fileRef = DE15EED6FD28F7007E960590 /* amber.cube */; };
 		C145A6C9D99BBDD02067C577 /* MetalImagePreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C8A0BAD3E740D4F2E06C412 /* MetalImagePreview.swift */; };
+		C43B7E0D44287F8310D92835 /* bridge.jpg in Resources */ = {isa = PBXBuildFile; fileRef = 27CEF912510028489020A687 /* bridge.jpg */; };
+		CB092E5A72C508ABFBE62983 /* castle_night.jpg in Resources */ = {isa = PBXBuildFile; fileRef = E547584B16D7873986311A67 /* castle_night.jpg */; };
 		CD8945EFC9966CEAF8CDCD1C /* RootTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AA71D118E8F4A6B8F24E29D /* RootTabView.swift */; };
+		FE0F376C04B59B60558EE4F2 /* tower.jpg in Resources */ = {isa = PBXBuildFile; fileRef = 9D75C17F6275C6CF3FF23D00 /* tower.jpg */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		04DE116BE5C3042F7B7FF6B3 /* jade.cube */ = {isa = PBXFileReference; path = jade.cube; sourceTree = "<group>"; };
 		243DC8DE7E626BE78FB900FE /* EditParameters.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditParameters.swift; sourceTree = "<group>"; };
+		27CEF912510028489020A687 /* bridge.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = bridge.jpg; sourceTree = "<group>"; };
 		2851220BBF8F2567967F67DE /* DCRDemoApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DCRDemoApp.swift; sourceTree = "<group>"; };
 		2CA09F80074291B25FF03E35 /* PerformanceMetrics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerformanceMetrics.swift; sourceTree = "<group>"; };
 		4C8A0BAD3E740D4F2E06C412 /* MetalImagePreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalImagePreview.swift; sourceTree = "<group>"; };
@@ -37,11 +47,17 @@
 		8937C7442A7C91D712CFD5B1 /* CameraController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraController.swift; sourceTree = "<group>"; };
 		9A4E625691E9F025936F2461 /* CameraView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraView.swift; sourceTree = "<group>"; };
 		9AA71D118E8F4A6B8F24E29D /* RootTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootTabView.swift; sourceTree = "<group>"; };
+		9D75C17F6275C6CF3FF23D00 /* tower.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = tower.jpg; sourceTree = "<group>"; };
 		A1EDF6E4CCFAF6D0BB5BCFFF /* FilterChainBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilterChainBuilder.swift; sourceTree = "<group>"; };
 		A1FE0909F10511BD15366121 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		C9385A8F07CC3AD760FF6676 /* frost.cube */ = {isa = PBXFileReference; path = frost.cube; sourceTree = "<group>"; };
+		DE15EED6FD28F7007E960590 /* amber.cube */ = {isa = PBXFileReference; path = amber.cube; sourceTree = "<group>"; };
 		E44627CC30DF49297F1E3344 /* MetalCameraPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalCameraPreview.swift; sourceTree = "<group>"; };
+		E547584B16D7873986311A67 /* castle_night.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = castle_night.jpg; sourceTree = "<group>"; };
+		E7B2929550F8AB0A6BF49C50 /* honey.cube */ = {isa = PBXFileReference; path = honey.cube; sourceTree = "<group>"; };
 		E9CBD04E0680A3E8CAD86A13 /* LUTRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LUTRegistry.swift; sourceTree = "<group>"; };
 		EBEAAE20F60E447FCA764490 /* PhotoEditView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoEditView.swift; sourceTree = "<group>"; };
+		EE22E6493E17FB621A6D092E /* portrait.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = portrait.jpg; sourceTree = "<group>"; };
 		F7A4E2EAD3BD9C063BE2F6BA /* DCRenderKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = DCRenderKit; path = ../..; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
@@ -72,6 +88,7 @@
 				2851220BBF8F2567967F67DE /* DCRDemoApp.swift */,
 				691CD798ADEF3671C5E78F53 /* Camera */,
 				63EE101842BF3429C448A11A /* Editing */,
+				9FF23153199C4F318EE6DD02 /* Resources */,
 				E6FD170A48DAE041DA48B655 /* Shared */,
 				73076C9B6D307BAE3210F795 /* Views */,
 			);
@@ -116,6 +133,15 @@
 			path = Views;
 			sourceTree = "<group>";
 		};
+		9FF23153199C4F318EE6DD02 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				EFE2C210F33B122285572C19 /* LUTs */,
+				EBC9CAA602813355F4D9CD91 /* SampleImages */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
 		BE52D1F9D7064E5997DBEF1A = {
 			isa = PBXGroup;
 			children = (
@@ -134,6 +160,28 @@
 				2CA09F80074291B25FF03E35 /* PerformanceMetrics.swift */,
 			);
 			path = Shared;
+			sourceTree = "<group>";
+		};
+		EBC9CAA602813355F4D9CD91 /* SampleImages */ = {
+			isa = PBXGroup;
+			children = (
+				27CEF912510028489020A687 /* bridge.jpg */,
+				E547584B16D7873986311A67 /* castle_night.jpg */,
+				EE22E6493E17FB621A6D092E /* portrait.jpg */,
+				9D75C17F6275C6CF3FF23D00 /* tower.jpg */,
+			);
+			path = SampleImages;
+			sourceTree = "<group>";
+		};
+		EFE2C210F33B122285572C19 /* LUTs */ = {
+			isa = PBXGroup;
+			children = (
+				DE15EED6FD28F7007E960590 /* amber.cube */,
+				C9385A8F07CC3AD760FF6676 /* frost.cube */,
+				E7B2929550F8AB0A6BF49C50 /* honey.cube */,
+				04DE116BE5C3042F7B7FF6B3 /* jade.cube */,
+			);
+			path = LUTs;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -169,6 +217,7 @@
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
 					101177289E6020EE6643C395 = {
+						DevelopmentTeam = TVF664WMUM;
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -201,6 +250,14 @@
 			buildActionMask = 2147483647;
 			files = (
 				AE843FBC28807B5B6E844E28 /* Assets.xcassets in Resources */,
+				BB6F4F4394FA2EDB861FB358 /* amber.cube in Resources */,
+				C43B7E0D44287F8310D92835 /* bridge.jpg in Resources */,
+				CB092E5A72C508ABFBE62983 /* castle_night.jpg in Resources */,
+				6EA1312ADE27C8A100451871 /* frost.cube in Resources */,
+				19BA5FB689105F9311065E72 /* honey.cube in Resources */,
+				1C059038538C5FFFF1F2FA83 /* jade.cube in Resources */,
+				59857B44B703AB59FA46CD2A /* portrait.jpg in Resources */,
+				FE0F376C04B59B60558EE4F2 /* tower.jpg in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -303,6 +360,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = TVF664WMUM;
 				INFOPLIST_FILE = DCRDemo/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
 				PRODUCT_BUNDLE_IDENTIFIER = com.digirender.me;
@@ -316,6 +374,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = TVF664WMUM;
 				INFOPLIST_FILE = DCRDemo/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
 				PRODUCT_BUNDLE_IDENTIFIER = com.digirender.me;

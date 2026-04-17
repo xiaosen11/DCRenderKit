@@ -89,18 +89,10 @@ struct MetalImagePreview: UIViewRepresentable {
             let pipeline = Pipeline(input: .texture(source), steps: chain)
 
             do {
-                let output = try pipeline.encode(into: commandBuffer)
-                guard let blit = commandBuffer.makeBlitCommandEncoder() else { return }
-                let w = min(output.width, drawable.texture.width)
-                let h = min(output.height, drawable.texture.height)
-                blit.copy(
-                    from: output, sourceSlice: 0, sourceLevel: 0,
-                    sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
-                    sourceSize: MTLSize(width: w, height: h, depth: 1),
-                    to: drawable.texture, destinationSlice: 0, destinationLevel: 0,
-                    destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0)
+                try pipeline.encode(
+                    into: commandBuffer,
+                    writingTo: drawable.texture
                 )
-                blit.endEncoding()
 
                 let metricsRef = metrics
                 commandBuffer.addCompletedHandler { buf in

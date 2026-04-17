@@ -66,11 +66,9 @@ final class PhotoEditModel {
     }
 
     private func reloadSourceTexture() {
+        // Resources land at bundle root (xcodegen auto-classifies files
+        // under `sources:` and flattens them into the resources phase).
         guard let url = Bundle.main.url(
-            forResource: selectedImage.fileName,
-            withExtension: "jpg",
-            subdirectory: "SampleImages"
-        ) ?? Bundle.main.url(
             forResource: selectedImage.fileName,
             withExtension: "jpg"
         ),

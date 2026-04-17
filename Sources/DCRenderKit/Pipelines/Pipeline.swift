@@ -157,10 +157,11 @@ public final class Pipeline: @unchecked Sendable {
     /// buffer — eliminating the extra GPU submission that a separate
     /// `outputSync` call would incur.
     ///
-    /// The returned `MTLTexture` is the final output. Its lifetime is
-    /// bound to `commandBuffer`'s completion — the pool reclaims it
-    /// after the caller's completion handler fires, or when the next
-    /// pipeline run happens (whichever is later).
+    /// The returned `MTLTexture` is the final output (in the pipeline's
+    /// `intermediatePixelFormat`, by default `rgba16Float`). If you need
+    /// the result in a specific format / size — typically "write into my
+    /// drawable for presentation" — call `encode(into:writingTo:)` instead,
+    /// which does format conversion and scaling inside the SDK.
     ///
     /// - Parameter commandBuffer: The command buffer to encode into.
     ///   The caller is responsible for `commit()` and presentation.
@@ -196,6 +197,83 @@ public final class Pipeline: @unchecked Sendable {
         }
 
         return finalOutput ?? sourceTexture
+    }
+
+    /// Encode the filter chain into `commandBuffer`, writing the final
+    /// result into `destination`.
+    ///
+    /// This is the presentation-path API. The destination can be **any**
+    /// texture — typically a `CAMetalDrawable.texture` (BGRA8Unorm) for
+    /// on-screen preview, or a caller-allocated video frame buffer. The
+    /// SDK handles:
+    ///
+    /// - **Format conversion**: chain outputs live in
+    ///   `intermediatePixelFormat` (float precision between stages), but
+    ///   the destination can be any pixel format. A fast-path blit is
+    ///   used when source and destination formats + dimensions match;
+    ///   an MPS Lanczos resample is used when they don't.
+    /// - **Size reconciliation**: source image resolution and drawable
+    ///   resolution almost never match. The destination dimensions win
+    ///   — the chain output is scaled to fill.
+    ///
+    /// Why this lives in the SDK: every real-time consumer needs this
+    /// exact bridge, and getting it wrong is easy (`blit.copy` asserts
+    /// across incompatible formats). Centralizing the logic here means
+    /// consumers don't re-implement the fallback tree.
+    ///
+    /// - Parameters:
+    ///   - commandBuffer: The command buffer to encode into. Caller
+    ///     commits and presents.
+    ///   - destination: Target texture. Must have `.shaderWrite` usage
+    ///     when formats or sizes differ from the chain output.
+    /// - Throws: Texture resolution / PSO / encoder errors.
+    public func encode(
+        into commandBuffer: MTLCommandBuffer,
+        writingTo destination: MTLTexture
+    ) throws {
+        let chainOutput = try encode(into: commandBuffer)
+        try Self.present(
+            source: chainOutput,
+            to: destination,
+            commandBuffer: commandBuffer
+        )
+    }
+
+    /// Copy / convert `source` into `destination`, preferring the
+    /// cheapest path (blit for matching format+size, MPS Lanczos for
+    /// everything else). Exposed as static so consumers who manage their
+    /// own chain composition can still use the bridge.
+    internal static func present(
+        source: MTLTexture,
+        to destination: MTLTexture,
+        commandBuffer: MTLCommandBuffer
+    ) throws {
+        let sameFormat = source.pixelFormat == destination.pixelFormat
+        let sameSize = source.width == destination.width
+            && source.height == destination.height
+
+        if sameFormat && sameSize {
+            // Fast path: direct blit between identical textures.
+            guard let blit = commandBuffer.makeBlitCommandEncoder() else {
+                throw PipelineError.device(.commandEncoderCreationFailed(kind: .blit))
+            }
+            blit.copy(
+                from: source, sourceSlice: 0, sourceLevel: 0,
+                sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+                sourceSize: MTLSize(width: source.width, height: source.height, depth: 1),
+                to: destination, destinationSlice: 0, destinationLevel: 0,
+                destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0)
+            )
+            blit.endEncoding()
+        } else {
+            // Format and/or size mismatch. MPS Lanczos handles both
+            // in a single hardware kernel.
+            try MPSDispatcher.lanczosResample(
+                source: source,
+                destination: destination,
+                commandBuffer: commandBuffer
+            )
+        }
     }
 
     // MARK: - Internal: encoding helper

@@ -194,6 +194,123 @@ final class PipelineTests: XCTestCase {
         }
     }
 
+    // MARK: - encode(into:writingTo:) presentation bridge
+
+    func testEncodeWritingToSameFormatSameSize() throws {
+        // Chain with one filter produces a bgra8Unorm source-fmt output
+        // via intermediate conversion. Caller provides a destination of
+        // matching format+size — should exercise the blit fast path.
+        let source = try makePipelineTexture(width: 16, height: 16, red: 0.3)
+        let desc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .rgba16Float, width: 16, height: 16, mipmapped: false
+        )
+        desc.usage = [.shaderRead, .shaderWrite]
+        desc.storageMode = .shared
+        let destination = try XCTUnwrap(device.metalDevice.makeTexture(descriptor: desc))
+
+        let pipeline = makePipeline(
+            input: .texture(source),
+            steps: [.single(SimpleScaleFilter(factor: 1.0))]
+        )
+        let cb = try XCTUnwrap(device.metalDevice.makeCommandQueue()?.makeCommandBuffer())
+        try pipeline.encode(into: cb, writingTo: destination)
+        cb.commit()
+        cb.waitUntilCompleted()
+        XCTAssertNil(cb.error)
+    }
+
+    func testEncodeWritingToDifferentFormat() throws {
+        // Chain produces rgba16Float output; destination is bgra8Unorm.
+        // Exercises the MPS Lanczos conversion path.
+        let source = try makePipelineTexture(width: 16, height: 16, red: 0.5)
+        let desc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .bgra8Unorm, width: 16, height: 16, mipmapped: false
+        )
+        desc.usage = [.shaderRead, .shaderWrite]
+        desc.storageMode = .shared
+        let destination = try XCTUnwrap(device.metalDevice.makeTexture(descriptor: desc))
+
+        let pipeline = makePipeline(
+            input: .texture(source),
+            steps: [.single(SimpleScaleFilter(factor: 1.5))]
+        )
+        let cb = try XCTUnwrap(device.metalDevice.makeCommandQueue()?.makeCommandBuffer())
+        try pipeline.encode(into: cb, writingTo: destination)
+        cb.commit()
+        cb.waitUntilCompleted()
+        XCTAssertNil(cb.error)
+
+        // Read back a pixel to confirm the conversion produced reasonable data.
+        var raw = [UInt8](repeating: 0, count: 16 * 16 * 4)
+        raw.withUnsafeMutableBytes { bytes in
+            destination.getBytes(
+                bytes.baseAddress!,
+                bytesPerRow: 16 * 4,
+                from: MTLRegionMake2D(0, 0, 16, 16),
+                mipmapLevel: 0
+            )
+        }
+        // BGRA byte order: R at offset 2. scale=1.5, source R=0.5 → 0.75 → ~191.
+        let r = raw[(8 * 16 + 8) * 4 + 2]
+        XCTAssertGreaterThan(r, 180)
+        XCTAssertLessThan(r, 200)
+    }
+
+    func testEncodeWritingToDifferentSize() throws {
+        // Chain output is 16×16; destination is 32×24. Exercises the
+        // Lanczos scale path.
+        let source = try makePipelineTexture(width: 16, height: 16, red: 0.4)
+        let desc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .rgba16Float, width: 32, height: 24, mipmapped: false
+        )
+        desc.usage = [.shaderRead, .shaderWrite]
+        desc.storageMode = .shared
+        let destination = try XCTUnwrap(device.metalDevice.makeTexture(descriptor: desc))
+
+        let pipeline = makePipeline(
+            input: .texture(source),
+            steps: [.single(SimpleScaleFilter(factor: 1.0))]
+        )
+        let cb = try XCTUnwrap(device.metalDevice.makeCommandQueue()?.makeCommandBuffer())
+        try pipeline.encode(into: cb, writingTo: destination)
+        cb.commit()
+        cb.waitUntilCompleted()
+        XCTAssertNil(cb.error)
+    }
+
+    func testEncodeWritingToEmptyChain() throws {
+        // No filters — encode(writingTo:) must still produce the source
+        // content in the destination, going through the format bridge.
+        let source = try makePipelineTexture(width: 16, height: 16, red: 0.6)
+        let desc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .bgra8Unorm, width: 16, height: 16, mipmapped: false
+        )
+        desc.usage = [.shaderRead, .shaderWrite]
+        desc.storageMode = .shared
+        let destination = try XCTUnwrap(device.metalDevice.makeTexture(descriptor: desc))
+
+        let pipeline = makePipeline(input: .texture(source), steps: [])
+        let cb = try XCTUnwrap(device.metalDevice.makeCommandQueue()?.makeCommandBuffer())
+        try pipeline.encode(into: cb, writingTo: destination)
+        cb.commit()
+        cb.waitUntilCompleted()
+        XCTAssertNil(cb.error)
+
+        var raw = [UInt8](repeating: 0, count: 16 * 16 * 4)
+        raw.withUnsafeMutableBytes { bytes in
+            destination.getBytes(
+                bytes.baseAddress!,
+                bytesPerRow: 16 * 4,
+                from: MTLRegionMake2D(0, 0, 16, 16),
+                mipmapLevel: 0
+            )
+        }
+        // Source R=0.6 → BGRA8U R ≈ 153.
+        let r = raw[(8 * 16 + 8) * 4 + 2]
+        XCTAssertGreaterThan(r, 140)
+        XCTAssertLessThan(r, 165)
+    }
+
     // MARK: - FilterGraphOptimizer passthrough
 
     func testOptimizerPassthroughBehavior() {

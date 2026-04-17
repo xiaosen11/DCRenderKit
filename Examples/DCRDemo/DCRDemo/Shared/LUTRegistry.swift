@@ -42,10 +42,6 @@ final class LUTRegistry {
 
         guard let url = Bundle.main.url(
             forResource: preset.rawValue,
-            withExtension: "cube",
-            subdirectory: "LUTs"
-        ) ?? Bundle.main.url(
-            forResource: preset.rawValue,
             withExtension: "cube"
         ) else {
             return nil
