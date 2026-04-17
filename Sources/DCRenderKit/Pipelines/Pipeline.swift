@@ -376,10 +376,22 @@ public final class Pipeline: @unchecked Sendable {
         sourceTexture: MTLTexture,
         commandBuffer: MTLCommandBuffer
     ) throws -> MTLTexture {
-        let passes = filter.passes(input: TextureInfo(texture: sourceTexture))
+        // Feed the filter a TextureInfo whose pixelFormat reflects the
+        // intermediate precision the filter's passes will actually run in,
+        // not the source texture's on-disk/on-wire format. Same rationale
+        // applies to the TextureInfo threaded through MultiPassExecutor
+        // below — source.pixelFormat (e.g. bgra8Unorm for camera frames)
+        // must not leak into intermediate allocations.
+        let input = TextureInfo(
+            width: sourceTexture.width,
+            height: sourceTexture.height,
+            pixelFormat: intermediatePixelFormat
+        )
+        let passes = filter.passes(input: input)
         return try MultiPassExecutor.execute(
             passes: passes,
             source: sourceTexture,
+            intermediatePixelFormat: intermediatePixelFormat,
             commandBuffer: commandBuffer,
             psoCache: psoCache,
             uniformPool: uniformPool,

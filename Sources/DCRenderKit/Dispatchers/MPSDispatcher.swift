@@ -115,9 +115,13 @@ public struct MPSDispatcher {
     ///   - source: Input texture.
     ///   - device: Metal device.
     ///   - commandBuffer: Buffer to encode into.
-    /// - Returns: A single-pixel (1x1) destination texture containing the
-    ///   mean value. Caller must wait for `commandBuffer` completion before
-    ///   reading back.
+    /// - Returns: A single-pixel (1×1) `.rgba16Float` destination texture
+    ///   containing the mean value. The output format is fixed regardless
+    ///   of `source.pixelFormat` — inheriting an 8-bit source format would
+    ///   re-quantize the reduction to 1/255 steps, which is visible as
+    ///   frame-to-frame jitter in adaptive filters (ContrastFilter, Clarity
+    ///   residual terms). Caller must wait for `commandBuffer` completion
+    ///   before reading back.
     public static func encodeMeanReduction(
         source: MTLTexture,
         device: Device = .shared,
@@ -126,9 +130,11 @@ public struct MPSDispatcher {
         #if canImport(MetalPerformanceShaders)
         let mean = MPSImageStatisticsMean(device: device.metalDevice)
 
-        // Output is a 1×1 texture matching the input format.
+        // Output is a 1×1 float texture. MPSImageStatisticsMean reduces in
+        // float regardless of input format; materializing the 1×1 at
+        // rgba16Float preserves that precision for CPU-side readback.
         let destDesc = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: source.pixelFormat,
+            pixelFormat: .rgba16Float,
             width: 1, height: 1, mipmapped: false
         )
         destDesc.usage = [.shaderRead, .shaderWrite]

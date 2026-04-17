@@ -58,6 +58,7 @@ final class MultiPassExecutorTests: XCTestCase {
         let result = try MultiPassExecutor.execute(
             passes: [],
             source: source,
+            intermediatePixelFormat: .rgba16Float,
             commandBuffer: buffer,
             psoCache: psoCache,
             uniformPool: uniformPool,
@@ -78,6 +79,7 @@ final class MultiPassExecutorTests: XCTestCase {
         let output = try MultiPassExecutor.execute(
             passes: passes,
             source: source,
+            intermediatePixelFormat: .rgba16Float,
             commandBuffer: buffer,
             psoCache: psoCache,
             uniformPool: uniformPool,
@@ -113,6 +115,7 @@ final class MultiPassExecutorTests: XCTestCase {
         let output = try MultiPassExecutor.execute(
             passes: passes,
             source: source,
+            intermediatePixelFormat: .rgba16Float,
             commandBuffer: buffer,
             psoCache: psoCache,
             uniformPool: uniformPool,
@@ -158,6 +161,7 @@ final class MultiPassExecutorTests: XCTestCase {
         let output = try MultiPassExecutor.execute(
             passes: passes,
             source: source,
+            intermediatePixelFormat: .rgba16Float,
             commandBuffer: buffer,
             psoCache: psoCache,
             uniformPool: uniformPool,
@@ -190,6 +194,7 @@ final class MultiPassExecutorTests: XCTestCase {
             _ = try MultiPassExecutor.execute(
                 passes: passes,
                 source: source,
+                intermediatePixelFormat: .rgba16Float,
                 commandBuffer: buffer,
                 psoCache: psoCache,
                 uniformPool: uniformPool,
@@ -224,6 +229,7 @@ final class MultiPassExecutorTests: XCTestCase {
             _ = try MultiPassExecutor.execute(
                 passes: passes,
                 source: source,
+                intermediatePixelFormat: .rgba16Float,
                 commandBuffer: buffer,
                 psoCache: psoCache,
                 uniformPool: uniformPool,
@@ -259,6 +265,7 @@ final class MultiPassExecutorTests: XCTestCase {
             _ = try MultiPassExecutor.execute(
                 passes: passes,
                 source: source,
+                intermediatePixelFormat: .rgba16Float,
                 commandBuffer: buffer,
                 psoCache: psoCache,
                 uniformPool: uniformPool,

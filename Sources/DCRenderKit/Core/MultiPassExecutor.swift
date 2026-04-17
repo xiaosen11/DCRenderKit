@@ -52,6 +52,13 @@ public struct MultiPassExecutor {
     ///     short-circuit to returning `source` directly (identity).
     ///   - source: The filter's input texture (referenced as `.source` in
     ///     pass inputs).
+    ///   - intermediatePixelFormat: Pixel format used to allocate every
+    ///     intermediate texture that backs a pass output. The source
+    ///     texture's own `pixelFormat` is **not** used for this — a camera
+    ///     feed in `bgra8Unorm` still produces `rgba16Float` intermediates
+    ///     when the pipeline asks for float precision. Required to prevent
+    ///     8-bit quantization from silently truncating bloom accumulation,
+    ///     HighlightShadow ratios > 1.0, or Clarity's 1/255-step residuals.
     ///   - commandBuffer: Buffer to encode all dispatches into.
     ///   - psoCache: PSO cache (default shared).
     ///   - uniformPool: Uniform buffer pool (default shared).
@@ -67,6 +74,7 @@ public struct MultiPassExecutor {
     public static func execute(
         passes: [Pass],
         source: MTLTexture,
+        intermediatePixelFormat: MTLPixelFormat,
         commandBuffer: MTLCommandBuffer,
         psoCache: PipelineStateCache = .shared,
         uniformPool: UniformBufferPool = .shared,
@@ -84,9 +92,17 @@ public struct MultiPassExecutor {
         let lastUse = computeLastUseSteps(passes: passes)
 
         // 3. Resolve each pass's output info (needed when later passes
-        //    reference earlier ones via `.matching`)
+        //    reference earlier ones via `.matching`).
+        //    The sourceInfo carries the INTERMEDIATE format, not
+        //    `source.pixelFormat` — `TextureSpec.resolve` propagates this
+        //    format into every pass output, which is the contract the
+        //    Pipeline's `intermediatePixelFormat` promises.
         var resolvedInfos: [String: TextureInfo] = [:]
-        let sourceInfo = TextureInfo(texture: source)
+        let sourceInfo = TextureInfo(
+            width: source.width,
+            height: source.height,
+            pixelFormat: intermediatePixelFormat
+        )
 
         // 4. Execute in declaration order
         var produced: [String: MTLTexture] = [:]

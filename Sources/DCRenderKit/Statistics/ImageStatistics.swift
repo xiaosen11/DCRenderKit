@@ -98,70 +98,35 @@ public enum ImageStatistics {
 
     // MARK: - Private
 
-    /// Read a 1×1 RGBA texture and project it to Rec.709 luma.
+    /// Read a 1×1 `.rgba16Float` texture and project it to Rec.709 luma.
     ///
-    /// Handles the two common pixel formats that flow through DCRenderKit:
-    /// `.rgba16Float` (typical intermediate + MPS output for float sources)
-    /// and `.bgra8Unorm` (8-bit display-ready buffers). Unsupported formats
-    /// return 0.5 as a safe midpoint so downstream adaptive filters don't
-    /// crash on an exotic input — but consumers should use one of the two
-    /// supported formats for correct results.
+    /// Only `.rgba16Float` is expected here — `MPSDispatcher.encodeMeanReduction`
+    /// produces that format unconditionally. Other formats fall back to a
+    /// 0.5 midpoint with a warning so adaptive filters degrade gracefully
+    /// if a caller constructs a mean texture outside the dispatcher.
     private static func readLumaFromMean(texture: MTLTexture) -> Float {
-        switch texture.pixelFormat {
-        case .rgba16Float:
-            var raw = [UInt16](repeating: 0, count: 4)
-            raw.withUnsafeMutableBytes { bytes in
-                texture.getBytes(
-                    bytes.baseAddress!,
-                    bytesPerRow: 8,
-                    from: MTLRegionMake2D(0, 0, 1, 1),
-                    mipmapLevel: 0
-                )
-            }
-            let r = Float(Float16(bitPattern: raw[0]))
-            let g = Float(Float16(bitPattern: raw[1]))
-            let b = Float(Float16(bitPattern: raw[2]))
-            return 0.2126 * r + 0.7152 * g + 0.0722 * b
-
-        case .bgra8Unorm, .bgra8Unorm_srgb:
-            var raw = [UInt8](repeating: 0, count: 4)
-            raw.withUnsafeMutableBytes { bytes in
-                texture.getBytes(
-                    bytes.baseAddress!,
-                    bytesPerRow: 4,
-                    from: MTLRegionMake2D(0, 0, 1, 1),
-                    mipmapLevel: 0
-                )
-            }
-            // BGRA byte order.
-            let b = Float(raw[0]) / 255.0
-            let g = Float(raw[1]) / 255.0
-            let r = Float(raw[2]) / 255.0
-            return 0.2126 * r + 0.7152 * g + 0.0722 * b
-
-        case .rgba8Unorm, .rgba8Unorm_srgb:
-            var raw = [UInt8](repeating: 0, count: 4)
-            raw.withUnsafeMutableBytes { bytes in
-                texture.getBytes(
-                    bytes.baseAddress!,
-                    bytesPerRow: 4,
-                    from: MTLRegionMake2D(0, 0, 1, 1),
-                    mipmapLevel: 0
-                )
-            }
-            let r = Float(raw[0]) / 255.0
-            let g = Float(raw[1]) / 255.0
-            let b = Float(raw[2]) / 255.0
-            return 0.2126 * r + 0.7152 * g + 0.0722 * b
-
-        default:
+        guard texture.pixelFormat == .rgba16Float else {
             DCRLogging.logger.warning(
-                "lumaMean readback fell back on midpoint 0.5 — unsupported format",
+                "lumaMean readback fell back on midpoint 0.5 — expected rgba16Float from encodeMeanReduction",
                 category: "ImageStatistics",
                 attributes: ["format": "\(texture.pixelFormat.rawValue)"]
             )
             return 0.5
         }
+
+        var raw = [UInt16](repeating: 0, count: 4)
+        raw.withUnsafeMutableBytes { bytes in
+            texture.getBytes(
+                bytes.baseAddress!,
+                bytesPerRow: 8,
+                from: MTLRegionMake2D(0, 0, 1, 1),
+                mipmapLevel: 0
+            )
+        }
+        let r = Float(Float16(bitPattern: raw[0]))
+        let g = Float(Float16(bitPattern: raw[1]))
+        let b = Float(Float16(bitPattern: raw[2]))
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
     }
 }
 
