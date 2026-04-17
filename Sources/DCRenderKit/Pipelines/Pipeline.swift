@@ -74,6 +74,18 @@ public final class Pipeline: @unchecked Sendable {
     /// verified the resulting banding is acceptable for your content.
     public let intermediatePixelFormat: MTLPixelFormat
 
+    /// Color space the intermediate textures carry.
+    ///
+    /// Stored for consumer introspection (e.g. the demo reads
+    /// `pipeline.colorSpace.recommendedDrawablePixelFormat` to pick its
+    /// MTKView format). Filters read ``DCRenderKit.defaultColorSpace``
+    /// directly at uniform-build time; this per-instance value is *not*
+    /// currently threaded through the filter dispatch path. A future
+    /// refactor may promote per-Pipeline override; until then, expect
+    /// `pipeline.colorSpace == DCRenderKit.defaultColorSpace` to hold
+    /// for the SDK's own filters.
+    public let colorSpace: DCRColorSpace
+
     // MARK: - Dependencies (injectable for tests)
 
     internal let device: Device
@@ -89,12 +101,14 @@ public final class Pipeline: @unchecked Sendable {
     /// Create a pipeline bound to the default (shared) resource instances.
     public init(
         input: PipelineInput,
-        steps: [AnyFilter] = []
+        steps: [AnyFilter] = [],
+        colorSpace: DCRColorSpace = DCRenderKit.defaultColorSpace
     ) {
         self.source = input
         self.steps = steps
         self.optimizer = FilterGraphOptimizer()
         self.intermediatePixelFormat = .rgba16Float
+        self.colorSpace = colorSpace
         self.device = .shared
         self.textureLoader = .shared
         self.psoCache = .shared
@@ -111,6 +125,7 @@ public final class Pipeline: @unchecked Sendable {
         steps: [AnyFilter],
         optimizer: FilterGraphOptimizer = FilterGraphOptimizer(),
         intermediatePixelFormat: MTLPixelFormat = .rgba16Float,
+        colorSpace: DCRColorSpace = DCRenderKit.defaultColorSpace,
         device: Device,
         textureLoader: TextureLoader,
         psoCache: PipelineStateCache,
@@ -123,6 +138,7 @@ public final class Pipeline: @unchecked Sendable {
         self.steps = steps
         self.optimizer = optimizer
         self.intermediatePixelFormat = intermediatePixelFormat
+        self.colorSpace = colorSpace
         self.device = device
         self.textureLoader = textureLoader
         self.psoCache = psoCache

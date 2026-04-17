@@ -81,12 +81,17 @@ public final class TextureLoader: @unchecked Sendable {
     public func makeTexture(
         from cgImage: CGImage,
         usage: MTLTextureUsage = [.shaderRead],
-        storageMode: MTLStorageMode = .private
+        storageMode: MTLStorageMode = .private,
+        colorSpace: DCRColorSpace = DCRenderKit.defaultColorSpace
     ) throws -> MTLTexture {
+        // `.SRGB: true` asks MTKTextureLoader to mark the resulting texture
+        // as sRGB-encoded on disk, so shader reads auto-linearize via the
+        // hardware sampler. `.SRGB: false` keeps raw values — the right
+        // default for Harbeth/DigiCam-parity perceptual mode.
         let options: [MTKTextureLoader.Option: Any] = [
             .textureUsage: NSNumber(value: usage.rawValue),
             .textureStorageMode: NSNumber(value: storageMode.rawValue),
-            .SRGB: false,  // DCRenderKit works in linear space; keep pixels linear.
+            .SRGB: colorSpace.loaderShouldLinearize,
             .generateMipmaps: false,
         ]
         do {
@@ -106,25 +111,31 @@ public final class TextureLoader: @unchecked Sendable {
     public func makeTexture(
         from image: UIImage,
         usage: MTLTextureUsage = [.shaderRead],
-        storageMode: MTLStorageMode = .private
+        storageMode: MTLStorageMode = .private,
+        colorSpace: DCRColorSpace = DCRenderKit.defaultColorSpace
     ) throws -> MTLTexture {
         guard let cgImage = image.cgImage else {
             throw PipelineError.texture(.imageDecodeFailed(format: "UIImage (no backing CGImage)"))
         }
-        return try makeTexture(from: cgImage, usage: usage, storageMode: storageMode)
+        return try makeTexture(
+            from: cgImage, usage: usage, storageMode: storageMode, colorSpace: colorSpace
+        )
     }
     #elseif canImport(AppKit)
     /// Create a `MTLTexture` from an `NSImage`.
     public func makeTexture(
         from image: NSImage,
         usage: MTLTextureUsage = [.shaderRead],
-        storageMode: MTLStorageMode = .private
+        storageMode: MTLStorageMode = .private,
+        colorSpace: DCRColorSpace = DCRenderKit.defaultColorSpace
     ) throws -> MTLTexture {
         var rect = CGRect(origin: .zero, size: image.size)
         guard let cgImage = image.cgImage(forProposedRect: &rect, context: nil, hints: nil) else {
             throw PipelineError.texture(.imageDecodeFailed(format: "NSImage (no backing CGImage)"))
         }
-        return try makeTexture(from: cgImage, usage: usage, storageMode: storageMode)
+        return try makeTexture(
+            from: cgImage, usage: usage, storageMode: storageMode, colorSpace: colorSpace
+        )
     }
     #endif
 

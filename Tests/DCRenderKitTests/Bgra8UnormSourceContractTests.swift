@@ -68,16 +68,19 @@ final class Bgra8UnormSourceContractTests: XCTestCase {
         let source = try makeBgra8UnormUniform(r: 0.3, g: 0.3, b: 0.3, width: 16, height: 16)
         XCTAssertEqual(source.pixelFormat, .bgra8Unorm)
 
+        // Explicit `.perceptual` so this contract test's numerical
+        // derivation (ported from testExposurePositiveFullSliderOnShadow)
+        // stays valid regardless of the SDK default.
         let output = try runPipeline(
             source: source,
-            steps: [.single(ExposureFilter(exposure: 100))]
+            steps: [.single(ExposureFilter(exposure: 100, colorSpace: .perceptual))]
         )
         XCTAssertEqual(
             output.pixelFormat, .rgba16Float,
             "Single-pass output must be rgba16Float regardless of source format"
         )
 
-        // Matches testExposurePositiveFullSliderOnShadow's derivation (≈0.629).
+        // Perceptual-branch derivation: output ≈ 0.629.
         let p = try readRgbaFloat(output)[8][8]
         XCTAssertEqual(p.r, 0.629, accuracy: 0.02)
     }

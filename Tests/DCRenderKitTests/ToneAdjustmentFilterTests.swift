@@ -81,16 +81,20 @@ final class ToneAdjustmentFilterTests: XCTestCase {
     }
 
     func testExposurePositiveFullSliderOnMidtoneMatchesReinhard() throws {
-        // Derivation for slider=+100, c=0.5:
-        //   exposure = 0.7
-        //   gain = 2^(0.7 * 4.25) = 2^2.975 ≈ 7.86
+        // Derivation is for the perceptual-space shader branch:
+        //   exposure = 0.7, gain = 2^(0.7 * 4.25) = 2^2.975 ≈ 7.86
         //   white² = (7.86 * 0.95)² ≈ 55.76
-        //   linear = 0.5^2.2 ≈ 0.2176
+        //   linear = 0.5^2.2 ≈ 0.2176         ← pow(,2.2) INSIDE shader
         //   gained = 0.2176 * 7.86 ≈ 1.710
         //   mapped = 1.710 * (1 + 1.710/55.76) / (1 + 1.710) ≈ 0.650
-        //   out = 0.650^(1/2.2) ≈ 0.822
+        //   out = 0.650^(1/2.2) ≈ 0.822       ← pow(,1/2.2) INSIDE shader
+        // Explicitly selecting `.perceptual` because this derivation is
+        // only valid for that branch; see `Exposure.linear` tests below
+        // for the linear-branch variant.
         let source = try makeToneSource(red: 0.5, green: 0.5, blue: 0.5)
-        let output = try runSingle(source, filter: ExposureFilter(exposure: 100))
+        let output = try runSingle(
+            source, filter: ExposureFilter(exposure: 100, colorSpace: .perceptual)
+        )
         let p = try readToneTexture(output)[4][4]
         XCTAssertEqual(p.r, 0.822, accuracy: 0.02)
         XCTAssertEqual(p.g, 0.822, accuracy: 0.02)
@@ -98,28 +102,109 @@ final class ToneAdjustmentFilterTests: XCTestCase {
     }
 
     func testExposurePositiveHalfSliderOnMidtone() throws {
-        // Derivation for slider=+50, c=0.5:
-        //   exposure = 0.35, gain = 2^1.4875 ≈ 2.804
-        //   white² = (2.804 * 0.95)² ≈ 7.094
-        //   linear = 0.2176, gained ≈ 0.610
-        //   mapped = 0.610 * 1.086 / 1.610 ≈ 0.412
+        // Perceptual-branch derivation for slider=+50, c=0.5:
+        //   exposure = 0.35, gain ≈ 2.804
+        //   white² ≈ 7.094, linear = 0.2176, gained ≈ 0.610
+        //   mapped ≈ 0.610 * 1.086 / 1.610 ≈ 0.412
         //   out = 0.412^0.4545 ≈ 0.668
         let source = try makeToneSource(red: 0.5, green: 0.5, blue: 0.5)
-        let output = try runSingle(source, filter: ExposureFilter(exposure: 50))
+        let output = try runSingle(
+            source, filter: ExposureFilter(exposure: 50, colorSpace: .perceptual)
+        )
         let p = try readToneTexture(output)[4][4]
         XCTAssertEqual(p.r, 0.668, accuracy: 0.02)
     }
 
     func testExposurePositiveFullSliderOnShadow() throws {
-        // Derivation for slider=+100, c=0.3:
-        //   gain = 7.86 (same), white² = 55.76
+        // Perceptual-branch derivation for slider=+100, c=0.3:
+        //   gain = 7.86, white² = 55.76
         //   linear = 0.3^2.2 ≈ 0.0707, gained ≈ 0.556
         //   mapped ≈ 0.556 * 1.010 / 1.556 ≈ 0.361
         //   out = 0.361^0.4545 ≈ 0.629
         let source = try makeToneSource(red: 0.3, green: 0.3, blue: 0.3)
-        let output = try runSingle(source, filter: ExposureFilter(exposure: 100))
+        let output = try runSingle(
+            source, filter: ExposureFilter(exposure: 100, colorSpace: .perceptual)
+        )
         let p = try readToneTexture(output)[4][4]
         XCTAssertEqual(p.r, 0.629, accuracy: 0.02)
+    }
+
+    // MARK: Exposure — linear-space branch
+    //
+    // Linear branch skips the internal pow(,2.2) / pow(,1/2.2) conversions
+    // and runs Reinhard on the input values directly. Input values are
+    // whatever the texture carries — in these tests Float16 values written
+    // to rgba16Float intermediates, treated by the shader as "already linear".
+
+    func testExposureLinearSpaceBranchBrighterThanPerceptualForSameSlider() throws {
+        // For the same (slider, input) pair the linear branch produces a
+        // brighter output than the perceptual branch, because it treats
+        // the gamma-encoded 0.5 as if it were already 0.5-linear (which
+        // is a much brighter physical value than pow(0.5, 2.2) ≈ 0.2176).
+        //
+        // Derivation for slider=+100, c=0.5, linear branch:
+        //   gain = 7.86, white² = 55.76
+        //   gained = 0.5 * 7.86 = 3.93
+        //   mapped = 3.93 * (1 + 3.93/55.76) / (1 + 3.93)
+        //          = 3.93 * 1.0705 / 4.93 ≈ 0.853
+        //   out = 0.853 (no pow back)
+        let source = try makeToneSource(red: 0.5, green: 0.5, blue: 0.5)
+        let output = try runSingle(
+            source, filter: ExposureFilter(exposure: 100, colorSpace: .linear)
+        )
+        let p = try readToneTexture(output)[4][4]
+        XCTAssertEqual(p.r, 0.853, accuracy: 0.02)
+        XCTAssertGreaterThan(
+            p.r, 0.822 + 0.01,
+            "Linear branch must brighten more than perceptual branch at slider=+100"
+        )
+    }
+
+    func testExposureLinearSpaceBranchIdentityAtZero() throws {
+        // Dead-zone short-circuit must hold in linear mode too.
+        let source = try makeToneSource(red: 0.42, green: 0.55, blue: 0.18)
+        let output = try runSingle(
+            source, filter: ExposureFilter(exposure: 0, colorSpace: .linear)
+        )
+        let p = try readToneTexture(output)[4][4]
+        XCTAssertEqual(p.r, 0.42, accuracy: 0.01)
+        XCTAssertEqual(p.g, 0.55, accuracy: 0.01)
+        XCTAssertEqual(p.b, 0.18, accuracy: 0.01)
+    }
+
+    func testExposureLinearVsPerceptualDifferForPositiveSlider() throws {
+        // Branch divergence proof: same filter, different colorSpace,
+        // different pixel output. Guards against a future refactor that
+        // accidentally collapses both branches into one.
+        let source = try makeToneSource(red: 0.5, green: 0.5, blue: 0.5)
+        let perceptualOut = try runSingle(
+            source, filter: ExposureFilter(exposure: 100, colorSpace: .perceptual)
+        )
+        let linearOut = try runSingle(
+            source, filter: ExposureFilter(exposure: 100, colorSpace: .linear)
+        )
+        let pp = try readToneTexture(perceptualOut)[4][4]
+        let pl = try readToneTexture(linearOut)[4][4]
+        XCTAssertGreaterThan(
+            abs(pp.r - pl.r), 0.02,
+            "Perceptual vs linear must produce visibly different output"
+        )
+    }
+
+    func testExposureLinearAndPerceptualAgreeOnNegativeBranch() throws {
+        // Negative branch has no color-space conversion inside the shader
+        // (compound `A·x^γ + B·x` is applied to input as-is), so the two
+        // modes must produce identical output.
+        let source = try makeToneSource(red: 0.5, green: 0.5, blue: 0.5)
+        let perceptualOut = try runSingle(
+            source, filter: ExposureFilter(exposure: -100, colorSpace: .perceptual)
+        )
+        let linearOut = try runSingle(
+            source, filter: ExposureFilter(exposure: -100, colorSpace: .linear)
+        )
+        let pp = try readToneTexture(perceptualOut)[4][4]
+        let pl = try readToneTexture(linearOut)[4][4]
+        XCTAssertEqual(pp.r, pl.r, accuracy: 0.005)
     }
 
     func testExposureNegativeFullSliderOnMidHigh() throws {

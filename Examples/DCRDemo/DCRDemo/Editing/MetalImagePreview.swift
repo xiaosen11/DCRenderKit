@@ -27,7 +27,10 @@ struct MetalImagePreview: UIViewRepresentable {
 
     func makeUIView(context: Context) -> MTKView {
         let view = MTKView(frame: .zero, device: device)
-        view.colorPixelFormat = .bgra8Unorm
+        // Derives from `DCRenderKit.defaultColorSpace`:
+        //   .perceptual → .bgra8Unorm  (bytes flow unchanged, DigiCam parity)
+        //   .linear     → .bgra8Unorm_srgb (GPU gamma-encodes on write)
+        view.colorPixelFormat = DCRenderKit.defaultColorSpace.recommendedDrawablePixelFormat
         view.framebufferOnly = false
         view.delegate = context.coordinator
         // Paused render. A redraw fires only when:

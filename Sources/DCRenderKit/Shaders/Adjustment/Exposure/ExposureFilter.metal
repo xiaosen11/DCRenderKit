@@ -18,10 +18,53 @@ using namespace metal;
 //   A = 0.270, gamma = 3.49, B = 0.130 at slider = -1.
 //
 // Identity at exposure = 0 is exact (both branches gated by dead-zone).
+//
+// ## Color-space branching
+//
+// The positive branch runs Reinhard in linear-light space, which is the
+// mathematically correct domain for radiometric tone-mapping. How it
+// gets there depends on whether the SDK is configured as perceptual
+// or linear:
+//
+//   u.isLinearSpace == 0 (perceptual mode):
+//     The input texture stores sRGB-gamma encoded floats. The shader
+//     explicitly linearizes with `pow(c, 2.2)`, tonemaps, then
+//     re-encodes with `pow(c, 1/2.2)`. Output is gamma-encoded,
+//     matching intermediate/drawable conventions for this mode.
+//
+//   u.isLinearSpace == 1 (linear mode):
+//     The input texture is already linear (either loaded with
+//     `.SRGB: true` so the GPU sampler auto-linearizes on read, or
+//     produced by upstream filters that also operate on linear
+//     values). The shader skips the explicit linearize/de-linearize
+//     and tonemaps in-place. Output stays linear; the drawable
+//     (`.bgra8Unorm_srgb`) will handle gamma encoding on final write.
+//
+// The negative branch's compound curve `A·x^γ + B·x` was fit against
+// Lightroom exports in display-space (perceptual) and is applied to
+// whatever numeric distribution the input carries. In `.linear` mode
+// the curve hits a different portion of the effective tonal range —
+// the "feel" drifts vs. the DigiCam baseline, but the output stays
+// finite and in-gamut. Refit is a future-work item tracked in the
+// findings-and-plan doc.
 
 struct ExposureUniforms {
-    float exposure;  // -1.0 ... +1.0
+    float exposure;       // -1.0 ... +1.0
+    uint  isLinearSpace;  // 1 if the input is linear-light; 0 if gamma-encoded.
 };
+
+/// Approximate sRGB → linear. Cheap power-2.2 model; good enough for
+/// the product fit that targets Lightroom-exported JPEGs. For strict
+/// sRGB conformance the GPU's hardware sampler does a piecewise curve
+/// — we use that path in `.linear` mode instead of doing it here.
+inline float dcr_perceptualToLinearApprox(float c) {
+    return pow(max(c, 0.0f), 2.2f);
+}
+
+/// Inverse of `dcr_perceptualToLinearApprox`. Same approximation.
+inline float dcr_linearToPerceptualApprox(float c) {
+    return pow(max(c, 0.0f), 1.0f / 2.2f);
+}
 
 kernel void DCRExposureFilter(
     texture2d<half, access::write> output [[texture(0)]],
@@ -38,24 +81,30 @@ kernel void DCRExposureFilter(
 
     // Product compression: slider ±1 maps to 70% of raw fit magnitude.
     const float exposure = clamp(u.exposure, -1.0f, 1.0f) * 0.7f;
+    const bool isLinear = (u.isLinearSpace != 0u);
 
     if (exposure > 0.001f) {
-        // Positive: linear-space Extended Reinhard.
+        // Positive: Extended Reinhard in linear-light space.
         const float EV_RANGE = 4.25f;
         const float gain = pow(2.0f, exposure * EV_RANGE);
         const float white = gain * 0.95f;
         const float white2 = white * white;
 
         for (int ch = 0; ch < 3; ch++) {
-            float linear = pow(max(float(color[ch]), 0.0f), 2.2f);
+            float c = float(color[ch]);
+            float linear = isLinear ? max(c, 0.0f)
+                                    : dcr_perceptualToLinearApprox(c);
             float gained = linear * gain;
             float mapped = gained * (1.0f + gained / white2) / (1.0f + gained);
-            color[ch] = half(pow(clamp(mapped, 0.0f, 1.0f), 1.0f / 2.2f));
+            float clamped = clamp(mapped, 0.0f, 1.0f);
+            color[ch] = half(isLinear ? clamped
+                                      : dcr_linearToPerceptualApprox(clamped));
         }
     } else if (exposure < -0.001f) {
         // Negative: display-space compound curve.
         //   f(x) = A * pow(x, gamma) + B * x
         // Interpolated so identity at exposure = 0 (A=0, gamma=1, B=1).
+        // Applied to the input as-is regardless of color space.
         const float absExp = fabs(exposure);
         const float A = 0.270f * absExp;
         const float gamma = 1.0f + absExp * 2.49f;
