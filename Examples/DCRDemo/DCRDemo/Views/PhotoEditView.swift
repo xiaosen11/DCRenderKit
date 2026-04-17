@@ -19,7 +19,14 @@ struct PhotoEditView: View {
     let device: MTLDevice
 
     var body: some View {
-        VStack(spacing: 0) {
+        // Reading the parameter fingerprint here registers SwiftUI's
+        // Observation for every slider + LUT preset. Without this,
+        // the paused MTKView in `previewRegion` never re-draws when
+        // individual sliders move (body only re-runs when a property
+        // it reads actually changes).
+        let _ = params.fingerprint
+
+        return VStack(spacing: 0) {
             samplePickerBar
                 .padding(.vertical, 8)
                 .background(Color.black.opacity(0.7))

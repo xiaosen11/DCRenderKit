@@ -78,6 +78,31 @@ final class EditParameters {
     var lutIntensity: Float = 100        //  0 ... 100
     var lutPreset: LUTPreset = .none
 
+    /// A single hashable value that changes whenever *any* slider or
+    /// the LUT preset changes. Reading this from a SwiftUI `body`
+    /// registers `@Observable` observation for the full parameter set
+    /// in one line — essential for paused `MTKView` previews whose
+    /// redraw is gated on body re-evaluation rather than continuous
+    /// display-link ticks.
+    var fingerprint: Int {
+        var hasher = Hasher()
+        hasher.combine(exposure); hasher.combine(contrast)
+        hasher.combine(highlights); hasher.combine(shadows)
+        hasher.combine(whites); hasher.combine(blacks)
+        hasher.combine(temperature); hasher.combine(tint)
+        hasher.combine(vibrance); hasher.combine(saturation)
+        hasher.combine(clarity); hasher.combine(sharpening)
+        hasher.combine(filmGrain); hasher.combine(filmGrainColor)
+        hasher.combine(ccdStrength); hasher.combine(ccdDigitalNoise)
+        hasher.combine(ccdChromaticAberration); hasher.combine(ccdSharpening)
+        hasher.combine(ccdSaturation)
+        hasher.combine(softGlowStrength); hasher.combine(softGlowThreshold)
+        hasher.combine(softGlowBloomRadius)
+        hasher.combine(portraitBlurStrength)
+        hasher.combine(lutIntensity); hasher.combine(lutPreset)
+        return hasher.finalize()
+    }
+
     /// Reset every parameter to its DigiCam default.
     func reset() {
         exposure = 0; contrast = 0; highlights = 0; shadows = 0

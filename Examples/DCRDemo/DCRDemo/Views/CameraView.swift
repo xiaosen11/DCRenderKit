@@ -4,7 +4,9 @@
 //
 //  Camera preview page. 3:4 MTKView on top, slider panel on bottom,
 //  performance HUD overlaid in the top-leading corner. Handles the
-//  permission prompt on first launch.
+//  permission prompt on first launch and pauses capture when the tab
+//  isn't visible (TabView keeps child views alive, so onDisappear
+//  alone doesn't free the camera session).
 //
 
 import SwiftUI
@@ -18,11 +20,13 @@ struct CameraView: View {
     let metrics: PerformanceMetrics
     let device: MTLDevice
 
+    /// Passed down from `RootTabView`; `true` only when the camera
+    /// tab is the selected tab. Drives start / stop of the capture
+    /// session so we don't burn GPU + battery on the background tab.
+    let isActive: Bool
+
     @State private var authorizationStatus: AVAuthorizationStatus =
         CameraController.currentAuthorizationStatus()
-    @State private var isRunning = false
-
-    // CameraController lifecycle tied to this view's presence.
     @State private var cameraController: CameraController?
 
     var body: some View {
@@ -36,6 +40,14 @@ struct CameraView: View {
         .background(Color.black)
         .task {
             await ensureAuthorizationAndStart()
+        }
+        .onChange(of: isActive) { _, nowActive in
+            if nowActive {
+                cameraController?.start()
+                metrics.reset()
+            } else {
+                cameraController?.stop()
+            }
         }
         .onDisappear {
             cameraController?.stop()
@@ -102,15 +114,13 @@ struct CameraView: View {
         authorizationStatus = CameraController.currentAuthorizationStatus()
         guard granted else { return }
         if cameraController == nil {
-            let ctrl = CameraController(device: device)
-            ctrl.onRunningStateChange = { [weak ctrl = ctrl] running in
-                _ = ctrl  // keep-alive capture
-                DispatchQueue.main.async {
-                    isRunning = running
-                }
-            }
-            cameraController = ctrl
+            cameraController = CameraController(device: device)
         }
-        cameraController?.start()
+        // Only start if this tab is actually visible — otherwise the
+        // onChange handler will start it later when the user navigates
+        // to the camera tab.
+        if isActive {
+            cameraController?.start()
+        }
     }
 }
