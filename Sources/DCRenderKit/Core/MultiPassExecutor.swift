@@ -107,6 +107,10 @@ public struct MultiPassExecutor {
         // 4. Execute in declaration order
         var produced: [String: MTLTexture] = [:]
         var finalOutput: MTLTexture?
+        // Intermediates collected here are returned to the pool only
+        // after the command buffer completes on the GPU — see
+        // `scheduleDeferredEnqueue`.
+        var pendingEnqueue: [MTLTexture] = []
 
         for (stepIndex, pass) in passes.enumerated() {
             // Resolve output dimensions.
@@ -170,12 +174,14 @@ public struct MultiPassExecutor {
 
             // Release intermediate textures whose last use is this step.
             // Never release the final output or the source (source is
-            // caller-owned).
+            // caller-owned). "Release" here means: defer until the CB
+            // completes on the GPU (see scheduleDeferredEnqueue); this
+            // prevents cross-CB reuse of an in-flight texture.
             for (name, lastStep) in lastUse where lastStep == stepIndex {
                 guard let texture = produced[name] else { continue }
                 // Don't release the final output.
                 if texture === finalOutput { continue }
-                texturePool.enqueue(texture)
+                pendingEnqueue.append(texture)
                 produced.removeValue(forKey: name)
             }
         }
@@ -187,6 +193,13 @@ public struct MultiPassExecutor {
                 reason: "No pass with isFinal=true was marked"
             ))
         }
+
+        scheduleDeferredEnqueue(
+            textures: pendingEnqueue,
+            pool: texturePool,
+            commandBuffer: commandBuffer
+        )
+
         return output
     }
 

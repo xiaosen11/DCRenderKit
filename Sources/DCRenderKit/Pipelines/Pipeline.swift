@@ -177,6 +177,7 @@ public final class Pipeline: @unchecked Sendable {
 
         var currentInput = sourceTexture
         var finalOutput: MTLTexture?
+        var pendingEnqueue: [MTLTexture] = []
 
         for (index, step) in optimizedSteps.enumerated() {
             let isLastStep = (index == optimizedSteps.count - 1)
@@ -187,7 +188,7 @@ public final class Pipeline: @unchecked Sendable {
             )
 
             if currentInput !== sourceTexture, currentInput !== output {
-                texturePool.enqueue(currentInput)
+                pendingEnqueue.append(currentInput)
             }
 
             currentInput = output
@@ -195,6 +196,12 @@ public final class Pipeline: @unchecked Sendable {
                 finalOutput = output
             }
         }
+
+        scheduleDeferredEnqueue(
+            textures: pendingEnqueue,
+            pool: texturePool,
+            commandBuffer: commandBuffer
+        )
 
         return finalOutput ?? sourceTexture
     }
@@ -269,6 +276,7 @@ public final class Pipeline: @unchecked Sendable {
         // 5. Execute steps, chaining outputs as inputs.
         var currentInput = sourceTexture
         var finalOutput: MTLTexture?
+        var pendingEnqueue: [MTLTexture] = []
 
         for (index, step) in optimizedSteps.enumerated() {
             let isLastStep = (index == optimizedSteps.count - 1)
@@ -278,10 +286,11 @@ public final class Pipeline: @unchecked Sendable {
                 commandBuffer: commandBuffer
             )
 
-            // Intermediate inputs can be returned to the pool once consumed,
-            // except the original source (caller-owned) and the final output.
+            // Intermediate inputs can be returned to the pool once the CB
+            // has finished executing on the GPU, but NOT earlier — see
+            // `scheduleDeferredEnqueue` for the rationale.
             if currentInput !== sourceTexture, currentInput !== output {
-                texturePool.enqueue(currentInput)
+                pendingEnqueue.append(currentInput)
             }
 
             currentInput = output
@@ -289,6 +298,12 @@ public final class Pipeline: @unchecked Sendable {
                 finalOutput = output
             }
         }
+
+        scheduleDeferredEnqueue(
+            textures: pendingEnqueue,
+            pool: texturePool,
+            commandBuffer: commandBuffer
+        )
 
         return (commandBuffer, finalOutput ?? sourceTexture)
     }
@@ -397,5 +412,64 @@ public final class Pipeline: @unchecked Sendable {
             uniformPool: uniformPool,
             texturePool: texturePool
         )
+    }
+}
+
+// MARK: - Internal: CB-safe deferred enqueue
+
+/// Schedule `textures` to be returned to `pool` only after
+/// `commandBuffer` finishes executing on the GPU.
+///
+/// ## Why not enqueue immediately
+///
+/// A Metal command buffer encodes dispatches that read and write textures,
+/// but the reads / writes happen *on the GPU* long after encoding returns
+/// to the CPU. If we enqueue an intermediate texture as soon as a step's
+/// encoding finishes, another pipeline running concurrently (different
+/// queue, separate CB) could `dequeue` that same `MTLTexture` and start
+/// writing to it — while the first CB is still reading from it on the GPU.
+/// Metal's automatic hazard tracking protects reads / writes within a
+/// single command buffer but not across command buffers; this is the
+/// hazard the deferral closes.
+///
+/// Within the same command buffer the old eager-enqueue pattern was
+/// actually safe (Metal's intra-CB hazard tracking inserts the needed
+/// barriers), and the ping-pong pattern saved two texture allocations.
+/// The deferred version trades those two saved allocations for cross-CB
+/// correctness — the pool regains the intermediates as a batch at CB
+/// completion, keeping them available for the *next* frame's dequeue.
+internal func scheduleDeferredEnqueue(
+    textures: [MTLTexture],
+    pool: TexturePool,
+    commandBuffer: MTLCommandBuffer
+) {
+    guard !textures.isEmpty else { return }
+    // Box to satisfy `@Sendable` closure capture. `MTLTexture` is not
+    // Sendable in Swift 6, but we only access it from the completion
+    // callback (serial after GPU completion) and only hand it to
+    // `pool.enqueue`, which is thread-safe via NSLock.
+    let box = DeferredEnqueueBox(textures: textures, pool: pool)
+    commandBuffer.addCompletedHandler { _ in
+        box.flush()
+    }
+}
+
+/// Captures a batch of textures + pool reference for handoff inside a
+/// `@Sendable` completion handler. `@unchecked` because MTLTexture is not
+/// Sendable and TexturePool's `enqueue` is internally locked — see
+/// `scheduleDeferredEnqueue` doc for safety rationale.
+private final class DeferredEnqueueBox: @unchecked Sendable {
+    private let textures: [MTLTexture]
+    private let pool: TexturePool
+
+    init(textures: [MTLTexture], pool: TexturePool) {
+        self.textures = textures
+        self.pool = pool
+    }
+
+    func flush() {
+        for texture in textures {
+            pool.enqueue(texture)
+        }
     }
 }
