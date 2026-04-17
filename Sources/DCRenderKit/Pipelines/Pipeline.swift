@@ -41,10 +41,13 @@ import Metal
 ///
 /// ## Thread safety
 ///
-/// A single `Pipeline` instance is not safe to call concurrently from
-/// multiple threads (its internal texture allocations would race).
-/// Multiple `Pipeline` instances can run concurrently — they share the
-/// global pools but those are internally thread-safe.
+/// A `Pipeline` instance is immutable once constructed. Its `source`,
+/// `steps`, `optimizer`, and `intermediatePixelFormat` are `let`, and all
+/// shared resources (PSO cache, uniform / texture / command-buffer pools)
+/// are internally thread-safe. Multiple threads can therefore safely call
+/// `encode(into:)` / `outputSync()` / `output()` on the same instance
+/// concurrently, and multiple `Pipeline` instances can run concurrently
+/// without coordination.
 public final class Pipeline: @unchecked Sendable {
 
     // MARK: - Input
@@ -52,14 +55,15 @@ public final class Pipeline: @unchecked Sendable {
     /// The source of pixels to feed into the filter chain.
     public let source: PipelineInput
 
-    /// The filter chain, in execution order.
-    public var steps: [AnyFilter]
+    /// The filter chain, in execution order. Fixed at construction; build
+    /// a new `Pipeline` to change it.
+    public let steps: [AnyFilter]
 
     // MARK: - Configuration
 
     /// Optimization strategy applied to `steps` before execution.
     /// Defaults to the standard optimizer (passthrough in Phase 1).
-    public var optimizer: FilterGraphOptimizer
+    public let optimizer: FilterGraphOptimizer
 
     /// Pixel format of intermediate textures between filters.
     ///
@@ -68,7 +72,7 @@ public final class Pipeline: @unchecked Sendable {
     /// accumulates visible banding in long chains. Set this to
     /// `.bgra8Unorm` only if memory pressure demands it and you've
     /// verified the resulting banding is acceptable for your content.
-    public var intermediatePixelFormat: MTLPixelFormat
+    public let intermediatePixelFormat: MTLPixelFormat
 
     // MARK: - Dependencies (injectable for tests)
 
