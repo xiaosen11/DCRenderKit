@@ -22,12 +22,7 @@ struct PhotoEditView: View {
     let device: MTLDevice
 
     var body: some View {
-        // Parameter set follows the selected image. Reading its
-        // fingerprint here registers SwiftUI's Observation for every
-        // slider + LUT preset so the paused MTKView redraws whenever
-        // any parameter on the CURRENT image changes.
         let params = editModel.currentParams
-        let _ = params.fingerprint
 
         return VStack(spacing: 0) {
             samplePickerBar
@@ -75,6 +70,7 @@ struct PhotoEditView: View {
 
     @ViewBuilder
     private func previewRegion(params: EditParameters) -> some View {
+
         ZStack(alignment: .topLeading) {
             MetalImagePreview(
                 params: params,

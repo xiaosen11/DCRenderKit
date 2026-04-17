@@ -59,18 +59,17 @@ final class PhotoEditModel {
     /// Per-image parameter sets. Each `SampleImage` keeps its own slider
     /// state so switching between images preserves whatever look the
     /// user was last tuning on that photo — matches how real editing
-    /// apps feel. Lazy-initialized on first access via `currentParams`.
-    private var paramsByImage: [String: EditParameters] = [:]
+    /// apps feel. Eagerly initialized so that `currentParams` is a pure
+    /// read; lazy init would have mutated this dictionary inside a
+    /// SwiftUI body evaluation, which confuses Observation and breaks
+    /// live slider response.
+    private let paramsByImage: [String: EditParameters]
 
     /// The `EditParameters` instance bound to the currently-selected
-    /// image. Allocates a fresh set on first access for each image.
+    /// image. Guaranteed non-nil because `paramsByImage` was populated
+    /// for every `SampleImage` at init time.
     var currentParams: EditParameters {
-        if let existing = paramsByImage[selectedImage.id] {
-            return existing
-        }
-        let fresh = EditParameters()
-        paramsByImage[selectedImage.id] = fresh
-        return fresh
+        paramsByImage[selectedImage.id] ?? EditParameters()
     }
 
     private let device: MTLDevice
@@ -79,6 +78,11 @@ final class PhotoEditModel {
     init(device: MTLDevice) {
         self.device = device
         self.textureLoader = TextureLoader(device: Device.shared)
+        var initial: [String: EditParameters] = [:]
+        for image in SampleImage.all {
+            initial[image.id] = EditParameters()
+        }
+        self.paramsByImage = initial
         reloadSourceTexture()
     }
 

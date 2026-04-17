@@ -27,17 +27,30 @@ struct MetalImagePreview: UIViewRepresentable {
         view.colorPixelFormat = .bgra8Unorm
         view.framebufferOnly = false
         view.delegate = context.coordinator
-        view.isPaused = true
-        view.enableSetNeedsDisplay = true
+        // Drive the preview at 30 fps continuously. Paused
+        // (setNeedsDisplay-triggered) rendering is theoretically
+        // cheaper but requires SwiftUI Observation to propagate
+        // through the UIViewRepresentable boundary, which turned out
+        // to be fragile across different view hierarchies. A constant
+        // 30 fps loop reads params on every frame and always reflects
+        // the latest slider value — slightly higher GPU idle cost
+        // (~1–2 ms/frame doing nothing) in exchange for bulletproof
+        // live response.
+        view.isPaused = false
+        view.enableSetNeedsDisplay = false
+        view.preferredFramesPerSecond = 30
         view.autoResizeDrawable = true
         context.coordinator.view = view
         return view
     }
 
     func updateUIView(_ uiView: MTKView, context: Context) {
+        // Coordinator reads the latest params / sourceTexture on every
+        // frame via captured references, so updateUIView's job is
+        // simply to keep those references current whenever the parent
+        // body hands us new values (e.g. after a sample-image switch).
         context.coordinator.params = params
         context.coordinator.sourceTexture = sourceTexture
-        uiView.setNeedsDisplay()
     }
 
     // MARK: - Coordinator
