@@ -13,23 +13,35 @@ import Metal
 
 /// Ring-allocated pool of `MTLBuffer` instances for filter uniforms.
 ///
-/// ## Why this exists
+/// ## When is this used?
 ///
-/// Harbeth's design calls `MTLCommandEncoder.setBytes(_:length:index:)` on
-/// every filter dispatch, which allocates a transient buffer behind the
-/// scenes. For a 30fps pipeline with 10 filters this is 300 allocations per
-/// second — measurable CPU overhead and GC pressure.
+/// In the current pipeline, **only for uniforms larger than 4 KB**.
+/// `ComputeDispatcher` and `RenderDispatcher` prefer Metal's built-in
+/// `setBytes` / `setVertexBytes` / `setFragmentBytes` for small payloads
+/// because those APIs manage per-dispatch transient storage internally,
+/// so multiple dispatches in one command buffer never contend over the
+/// same backing buffer. The pool is only invoked when `byteCount > 4096`
+/// (Metal's `setBytes` limit), which is rare for filter uniforms.
 ///
-/// `UniformBufferPool` pre-allocates a fixed set of buffers and rotates
-/// through them. Each frame's uniforms are written into the next buffer in
-/// the ring; by the time we wrap around to that buffer again (after
-/// `capacity` frames), the GPU is guaranteed to be done with it.
+/// ## Why the ring exists at all
+///
+/// For the large-uniform case (> 4 KB), we still want to amortize the
+/// `makeBuffer(length:)` cost across frames. The ring gives us that:
+/// each frame's uniforms are written into the next buffer; wrapping
+/// around after `capacity` frames is safe as long as the GPU has
+/// finished the corresponding frame.
+///
+/// **Do NOT** issue more than `capacity` large-uniform dispatches within
+/// a single command buffer — that would re-introduce the overwrite
+/// hazard that the small-uniform setBytes path was added to prevent.
+/// The pool's `allocateOneOff` fallback will trigger in that scenario
+/// if the ring is empty, but the correct long-term fix is to grow the
+/// ring dynamically; this is tracked for Phase 2.
 ///
 /// ## Triple buffering
 ///
 /// Default capacity is 3 (triple buffering), matching typical Metal
-/// double/triple-buffer conventions. This eliminates CPU-GPU contention
-/// without wasting memory.
+/// double/triple-buffer conventions for the large-uniform case.
 public final class UniformBufferPool: @unchecked Sendable {
 
     // MARK: - Shared instance

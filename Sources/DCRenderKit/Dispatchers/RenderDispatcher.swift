@@ -213,9 +213,9 @@ public struct RenderDispatcher {
             offset: draw.vertexBufferOffset,
             index: 0
         )
-        if let vBinding = try uniformPool.nextBuffer(for: draw.vertexUniforms) {
-            encoder.setVertexBuffer(vBinding.buffer, offset: vBinding.offset, index: 1)
-        }
+        try bindVertexUniforms(
+            draw.vertexUniforms, encoder: encoder, pool: uniformPool
+        )
 
         // Fragment stage — textures
         for (index, texture) in draw.fragmentTextures.enumerated() {
@@ -229,9 +229,9 @@ public struct RenderDispatcher {
         }
 
         // Fragment stage — uniforms
-        if let fBinding = try uniformPool.nextBuffer(for: draw.fragmentUniforms) {
-            encoder.setFragmentBuffer(fBinding.buffer, offset: fBinding.offset, index: 0)
-        }
+        try bindFragmentUniforms(
+            draw.fragmentUniforms, encoder: encoder, pool: uniformPool
+        )
 
         // Draw
         encoder.drawPrimitives(
@@ -239,6 +239,59 @@ public struct RenderDispatcher {
             vertexStart: 0,
             vertexCount: draw.vertexCount
         )
+    }
+
+    // MARK: - Private uniform binding helpers
+
+    /// Bind vertex-stage uniforms, preferring `setVertexBytes` for small
+    /// payloads so multiple draws in one command buffer don't contend
+    /// over `UniformBufferPool`'s ring. Same rationale as
+    /// `ComputeDispatcher`'s uniform binding.
+    private static func bindVertexUniforms(
+        _ uniforms: FilterUniforms,
+        encoder: MTLRenderCommandEncoder,
+        pool: UniformBufferPool
+    ) throws {
+        guard uniforms.byteCount > 0 else { return }
+        if uniforms.byteCount <= 4096 {
+            var scratch = [UInt8](repeating: 0, count: uniforms.byteCount)
+            scratch.withUnsafeMutableBytes { raw in
+                uniforms.copyBytes(raw.baseAddress!)
+            }
+            scratch.withUnsafeBytes { raw in
+                encoder.setVertexBytes(
+                    raw.baseAddress!,
+                    length: uniforms.byteCount,
+                    index: 1
+                )
+            }
+        } else if let binding = try pool.nextBuffer(for: uniforms) {
+            encoder.setVertexBuffer(binding.buffer, offset: binding.offset, index: 1)
+        }
+    }
+
+    /// Bind fragment-stage uniforms with the same small/large split.
+    private static func bindFragmentUniforms(
+        _ uniforms: FilterUniforms,
+        encoder: MTLRenderCommandEncoder,
+        pool: UniformBufferPool
+    ) throws {
+        guard uniforms.byteCount > 0 else { return }
+        if uniforms.byteCount <= 4096 {
+            var scratch = [UInt8](repeating: 0, count: uniforms.byteCount)
+            scratch.withUnsafeMutableBytes { raw in
+                uniforms.copyBytes(raw.baseAddress!)
+            }
+            scratch.withUnsafeBytes { raw in
+                encoder.setFragmentBytes(
+                    raw.baseAddress!,
+                    length: uniforms.byteCount,
+                    index: 0
+                )
+            }
+        } else if let binding = try pool.nextBuffer(for: uniforms) {
+            encoder.setFragmentBuffer(binding.buffer, offset: binding.offset, index: 0)
+        }
     }
 }
 

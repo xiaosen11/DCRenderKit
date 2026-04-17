@@ -100,9 +100,37 @@ public struct ComputeDispatcher {
             encoder.setTexture(texture, index: 2 + offset)
         }
 
-        // 5. Bind uniforms at buffer(0) if non-empty
-        if let binding = try uniformPool.nextBuffer(for: uniforms) {
-            encoder.setBuffer(binding.buffer, offset: binding.offset, index: 0)
+        // 5. Bind uniforms at buffer(0) if non-empty.
+        //
+        // For small uniforms (the typical filter case — a handful of
+        // Floats), use `setBytes` which lets Metal manage transient
+        // storage internally. This bypasses the per-frame UniformBufferPool
+        // ring and sidesteps a critical bug: when a single command buffer
+        // encodes more dispatches than the pool's capacity, the ring wraps
+        // and a later dispatch overwrites an earlier dispatch's uniforms
+        // that the GPU has not yet consumed — silently corrupting outputs.
+        // `setBytes` is bounded to 4 KB on Metal, which covers every
+        // filter we ship (all uniforms are under 64 bytes).
+        //
+        // For the rare large-uniform case (> 4 KB), fall back to the pool,
+        // which is still fine because oversize uniforms hit the pool's
+        // `allocateOneOff` path and get a dedicated buffer.
+        if uniforms.byteCount > 0 {
+            if uniforms.byteCount <= 4096 {
+                var scratch = [UInt8](repeating: 0, count: uniforms.byteCount)
+                scratch.withUnsafeMutableBytes { raw in
+                    uniforms.copyBytes(raw.baseAddress!)
+                }
+                scratch.withUnsafeBytes { raw in
+                    encoder.setBytes(
+                        raw.baseAddress!,
+                        length: uniforms.byteCount,
+                        index: 0
+                    )
+                }
+            } else if let binding = try uniformPool.nextBuffer(for: uniforms) {
+                encoder.setBuffer(binding.buffer, offset: binding.offset, index: 0)
+            }
         }
 
         // 6. Dispatch with device-appropriate threadgroup sizing
