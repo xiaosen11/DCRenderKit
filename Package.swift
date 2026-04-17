@@ -1,13 +1,12 @@
-// swift-tools-version: 5.9
-// The swift-tools-version declares the minimum version of Swift required to build this package.
+// swift-tools-version: 6.0
 
 import PackageDescription
 
 let package = Package(
     name: "DCRenderKit",
     platforms: [
-        .iOS(.v15),
-        .macOS(.v12),
+        .iOS(.v18),
+        .macOS(.v15),
     ],
     products: [
         .library(
@@ -17,7 +16,8 @@ let package = Package(
     ],
     dependencies: [
         // Zero external dependencies by design.
-        // DCRenderKit only depends on system frameworks (Metal, MetalKit, CoreImage optional, Vision optional).
+        // DCRenderKit only depends on system frameworks (Metal, MetalKit,
+        // CoreImage optional, Vision optional, MetalPerformanceShaders optional).
     ],
     targets: [
         .target(
@@ -27,16 +27,24 @@ let package = Package(
             resources: [
                 // All Metal shaders live under Shaders/; SPM compiles them
                 // into the default metallib bundled with the target. Swift
-                // filter structs live under Filters/ and must stay out of
-                // this rule (otherwise SPM reclassifies .swift files as
-                // resources and silently skips compiling them).
+                // filter structs live under Filters/ and stay out of this
+                // rule (otherwise SPM reclassifies .swift files as resources
+                // and silently skips compiling them).
                 .process("Shaders"),
+            ],
+            swiftSettings: [
+                // Full Swift 6 strict concurrency. Every captured value must
+                // be Sendable (or @unchecked with justification).
+                .swiftLanguageMode(.v6),
             ]
         ),
         .testTarget(
             name: "DCRenderKitTests",
             dependencies: ["DCRenderKit"],
-            path: "Tests/DCRenderKitTests"
+            path: "Tests/DCRenderKitTests",
+            swiftSettings: [
+                .swiftLanguageMode(.v6),
+            ]
         ),
     ]
 )

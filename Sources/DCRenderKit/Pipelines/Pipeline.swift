@@ -146,6 +146,58 @@ public final class Pipeline: @unchecked Sendable {
         return finalTexture
     }
 
+    /// Encode the filter chain into an externally-managed command buffer.
+    ///
+    /// Unlike `outputSync()` / `output()`, this variant does **not**
+    /// allocate, commit, or wait on the command buffer — the caller
+    /// retains full control. This is the integration point for real-time
+    /// renderers (MTKView.draw, video frame pipelines) that want to
+    /// batch the filter chain's dispatches together with the caller's
+    /// own blit / present / additional encoders into a single command
+    /// buffer — eliminating the extra GPU submission that a separate
+    /// `outputSync` call would incur.
+    ///
+    /// The returned `MTLTexture` is the final output. Its lifetime is
+    /// bound to `commandBuffer`'s completion — the pool reclaims it
+    /// after the caller's completion handler fires, or when the next
+    /// pipeline run happens (whichever is later).
+    ///
+    /// - Parameter commandBuffer: The command buffer to encode into.
+    ///   The caller is responsible for `commit()` and presentation.
+    /// - Returns: The final output texture produced by the chain.
+    /// - Throws: Texture resolution, PSO, or encoder errors.
+    public func encode(into commandBuffer: MTLCommandBuffer) throws -> MTLTexture {
+        let sourceTexture = try source.resolve(using: textureLoader)
+        let optimizedSteps = optimizer.optimize(steps)
+
+        guard !optimizedSteps.isEmpty else {
+            return sourceTexture
+        }
+
+        var currentInput = sourceTexture
+        var finalOutput: MTLTexture?
+
+        for (index, step) in optimizedSteps.enumerated() {
+            let isLastStep = (index == optimizedSteps.count - 1)
+            let output = try executeStep(
+                step,
+                sourceTexture: currentInput,
+                commandBuffer: commandBuffer
+            )
+
+            if currentInput !== sourceTexture, currentInput !== output {
+                texturePool.enqueue(currentInput)
+            }
+
+            currentInput = output
+            if isLastStep {
+                finalOutput = output
+            }
+        }
+
+        return finalOutput ?? sourceTexture
+    }
+
     // MARK: - Internal: encoding helper
 
     /// Encode the entire filter chain into a fresh command buffer and

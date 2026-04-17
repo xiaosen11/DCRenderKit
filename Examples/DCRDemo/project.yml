@@ -1,0 +1,62 @@
+name: DCRDemo
+
+options:
+  bundleIdPrefix: com.digirender
+  deploymentTarget:
+    iOS: "18.0"
+  createIntermediateGroups: true
+  minimumXcodeGenVersion: "2.40.0"
+  generateEmptyDirectories: true
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    IPHONEOS_DEPLOYMENT_TARGET: "18.0"
+    TARGETED_DEVICE_FAMILY: "1"
+    ENABLE_PREVIEWS: "YES"
+    CODE_SIGN_STYLE: Automatic
+
+packages:
+  DCRenderKit:
+    path: ../..
+
+targets:
+  DCRDemo:
+    type: application
+    platform: iOS
+    sources:
+      - path: DCRDemo
+        excludes:
+          - "Resources/**"
+          - "Info.plist"
+    resources:
+      - path: DCRDemo/Resources/SampleImages
+        type: folder
+      - path: DCRDemo/Resources/LUTs
+        type: folder
+      - DCRDemo/Assets.xcassets
+    info:
+      path: DCRDemo/Info.plist
+      properties:
+        CFBundleDisplayName: DCRDemo
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        UILaunchScreen:
+          UIImageRespectsSafeAreaInsets: true
+        UIRequiredDeviceCapabilities:
+          - armv7
+          - metal
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UIViewControllerBasedStatusBarAppearance: true
+        NSCameraUsageDescription: "DCRDemo 需要访问相机以演示 DCRenderKit 的实时滤镜链。"
+        NSPhotoLibraryAddUsageDescription: "DCRDemo 需要写入相册以演示照片编辑导出。"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.digirender.me
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/Frameworks"
+    dependencies:
+      - package: DCRenderKit
+        product: DCRenderKit
