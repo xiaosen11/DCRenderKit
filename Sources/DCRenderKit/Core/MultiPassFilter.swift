@@ -157,6 +157,11 @@ public struct Pass: Sendable {
     // MARK: - Factory helpers
 
     /// Create a compute pass.
+    ///
+    /// Multi-pass DAG executors only support compute passes. The render
+    /// backend is reserved for single-pass filters (stickers, distortion)
+    /// where the vertex/fragment pair plus vertex buffer forms its own
+    /// complete pipeline, not a stage in a DAG.
     public static func compute(
         name: String,
         kernel: String,
@@ -175,27 +180,8 @@ public struct Pass: Sendable {
         )
     }
 
-    /// Create a render pass (vertex + fragment).
-    public static func render(
-        name: String,
-        vertex: String,
-        fragment: String,
-        inputs: [PassInput],
-        output: TextureSpec,
-        uniforms: FilterUniforms = .empty,
-        isFinal: Bool = false
-    ) -> Pass {
-        Pass(
-            name: name,
-            modifier: .render(vertex: vertex, fragment: fragment),
-            inputs: inputs,
-            output: output,
-            uniforms: uniforms,
-            isFinal: isFinal
-        )
-    }
-
     /// Convenience for declaring the final pass of a graph (isFinal=true).
+    /// The final pass's output becomes the filter's output.
     public static func final(
         name: String = "final",
         kernel: String,
