@@ -6,6 +6,10 @@
 //  showing the 24-slider-driven chain, slider panel at bottom, and an
 //  "export to Photos" button with timing readout.
 //
+//  Parameters are per-image: each sample image keeps its own slider
+//  state via `PhotoEditModel.currentParams`, so switching between
+//  photos swaps the entire look.
+//
 
 import SwiftUI
 import Metal
@@ -13,17 +17,16 @@ import DCRenderKit
 
 struct PhotoEditView: View {
 
-    @Bindable var params: EditParameters
     @Bindable var editModel: PhotoEditModel
     let metrics: PerformanceMetrics
     let device: MTLDevice
 
     var body: some View {
-        // Reading the parameter fingerprint here registers SwiftUI's
-        // Observation for every slider + LUT preset. Without this,
-        // the paused MTKView in `previewRegion` never re-draws when
-        // individual sliders move (body only re-runs when a property
-        // it reads actually changes).
+        // Parameter set follows the selected image. Reading its
+        // fingerprint here registers SwiftUI's Observation for every
+        // slider + LUT preset so the paused MTKView redraws whenever
+        // any parameter on the CURRENT image changes.
+        let params = editModel.currentParams
         let _ = params.fingerprint
 
         return VStack(spacing: 0) {
@@ -31,7 +34,7 @@ struct PhotoEditView: View {
                 .padding(.vertical, 8)
                 .background(Color.black.opacity(0.7))
 
-            previewRegion
+            previewRegion(params: params)
                 .aspectRatio(3.0 / 4.0, contentMode: .fit)
                 .background(Color.black)
 
@@ -71,7 +74,7 @@ struct PhotoEditView: View {
     }
 
     @ViewBuilder
-    private var previewRegion: some View {
+    private func previewRegion(params: EditParameters) -> some View {
         ZStack(alignment: .topLeading) {
             MetalImagePreview(
                 params: params,
@@ -110,7 +113,7 @@ struct PhotoEditView: View {
 
     private var exportButton: some View {
         Button {
-            Task { await editModel.export(params: params) }
+            Task { await editModel.export() }
         } label: {
             HStack(spacing: 6) {
                 if case .exporting = editModel.exportState {

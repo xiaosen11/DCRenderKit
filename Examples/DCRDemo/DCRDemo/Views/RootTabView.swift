@@ -15,7 +15,10 @@ struct RootTabView: View {
 
     enum TabTag: Hashable { case camera, photo }
 
-    @State private var params = EditParameters()
+    /// Camera preview has its own parameter set. Edit params for a
+    /// sample image live on the `PhotoEditModel` (keyed by image),
+    /// so camera tuning is independent from any photo's tuning.
+    @State private var cameraParams = EditParameters()
     @State private var cameraMetrics = PerformanceMetrics()
     @State private var photoMetrics = PerformanceMetrics()
     @State private var editModel: PhotoEditModel
@@ -32,7 +35,7 @@ struct RootTabView: View {
         TabView(selection: $selectedTab) {
             Tab("相机", systemImage: "camera.fill", value: TabTag.camera) {
                 CameraView(
-                    params: params,
+                    params: cameraParams,
                     metrics: cameraMetrics,
                     device: device,
                     isActive: selectedTab == .camera
@@ -40,7 +43,6 @@ struct RootTabView: View {
             }
             Tab("照片", systemImage: "photo.fill", value: TabTag.photo) {
                 PhotoEditView(
-                    params: params,
                     editModel: editModel,
                     metrics: photoMetrics,
                     device: device

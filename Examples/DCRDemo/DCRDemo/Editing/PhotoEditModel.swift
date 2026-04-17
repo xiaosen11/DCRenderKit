@@ -56,6 +56,23 @@ final class PhotoEditModel {
     /// Most recent export duration in milliseconds. Displayed on the UI.
     private(set) var lastExportMs: Double = 0
 
+    /// Per-image parameter sets. Each `SampleImage` keeps its own slider
+    /// state so switching between images preserves whatever look the
+    /// user was last tuning on that photo — matches how real editing
+    /// apps feel. Lazy-initialized on first access via `currentParams`.
+    private var paramsByImage: [String: EditParameters] = [:]
+
+    /// The `EditParameters` instance bound to the currently-selected
+    /// image. Allocates a fresh set on first access for each image.
+    var currentParams: EditParameters {
+        if let existing = paramsByImage[selectedImage.id] {
+            return existing
+        }
+        let fresh = EditParameters()
+        paramsByImage[selectedImage.id] = fresh
+        return fresh
+    }
+
     private let device: MTLDevice
     private let textureLoader: TextureLoader
 
@@ -86,9 +103,10 @@ final class PhotoEditModel {
     // MARK: - Export
 
     /// Run the current filter chain against the source texture at
-    /// full resolution and save the result to Photos. Updates
-    /// `exportState` and `lastExportMs` across the operation.
-    func export(params: EditParameters) async {
+    /// full resolution and save the result to Photos. Uses the
+    /// selected image's own parameter set — exporting one image
+    /// doesn't require passing its parameters in.
+    func export() async {
         guard case .idle = exportState else { return }
         guard let source = sourceTexture else { return }
 
@@ -97,7 +115,7 @@ final class PhotoEditModel {
         let start = CACurrentMediaTime()
         do {
             let chain = FilterChainBuilder.build(
-                from: params,
+                from: currentParams,
                 lumaMean: 0.5,
                 pixelsPerPoint: Float(source.width) / 390.0  // approximate for export context
             )
