@@ -5,9 +5,13 @@ Package.resolved
 
 # Xcode
 *.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcshareddata/
 *.xcworkspace/xcuserdata/
 *.xcworkspace/contents.xcworkspacedata
 DerivedData/
+UserInterfaceState.xcuserstate
+xcschememanagement.plist
 *.xcscmblueprint
 *.xccheckout
 *.moved-aside
