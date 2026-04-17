@@ -273,6 +273,45 @@ final class MultiPassFilterTests: XCTestCase {
         XCTAssertLessThanOrEqual(center.r, 1.0 + 1e-3)
     }
 
+    func testClarityProducesBitIdenticalOutputAcrossIdenticalRuns() throws {
+        // The on-device symptom before P0: Clarity's output flickered
+        // frame-to-frame even when inputs were identical. Root cause: the
+        // guided-filter a/b coefficients flowed through bgra8Unorm
+        // intermediates, quantized to 1/255 steps, then produced different
+        // residuals each time due to subtle MPS reduction noise being
+        // amplified across the quantization.
+        //
+        // With the fix, two runs of the same filter on the same source
+        // must produce bit-identical output.
+        let source = try makeRampMultipassSource()
+
+        let pipeline1 = makePipeline(
+            input: .texture(source),
+            steps: [.multi(ClarityFilter(intensity: 40))]
+        )
+        let output1 = try pipeline1.outputSync()
+        let pixels1 = try readMultipassTexture(output1)
+
+        // Build a second pipeline (separate pool state) and run again.
+        let pipeline2 = makePipeline(
+            input: .texture(source),
+            steps: [.multi(ClarityFilter(intensity: 40))]
+        )
+        let output2 = try pipeline2.outputSync()
+        let pixels2 = try readMultipassTexture(output2)
+
+        for y in 0..<pixels1.count {
+            for x in 0..<pixels1[y].count {
+                XCTAssertEqual(
+                    pixels1[y][x].r, pixels2[y][x].r, accuracy: 1e-4,
+                    "Clarity must be bit-identical across runs; diff at (\(x),\(y))"
+                )
+                XCTAssertEqual(pixels1[y][x].g, pixels2[y][x].g, accuracy: 1e-4)
+                XCTAssertEqual(pixels1[y][x].b, pixels2[y][x].b, accuracy: 1e-4)
+            }
+        }
+    }
+
     func testSoftGlowOutputIsNotSaturatedAt1OnBgra8UnormSource() throws {
         // The on-device symptom: SoftGlow produced a uniformly over-exposed
         // image with no layered gradient. Root cause: bloom pyramid

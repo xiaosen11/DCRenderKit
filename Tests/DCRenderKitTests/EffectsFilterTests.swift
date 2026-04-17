@@ -46,6 +46,17 @@ final class EffectsFilterTests: XCTestCase {
     }
 
     // MARK: - Sharpen
+    //
+    // SharpenFilter.metal shader contract:
+    //   sharpened = center · (1 + 4·u.amount) - (L + R + T + B) · u.amount
+    // SharpenFilter.swift contract:
+    //   u.amount = (sliderAmount / 100) · 1.6        ← product compression
+    //   So slider=100 → shader amount = 1.6 (the perceptual "strong" peak).
+    //
+    // Properties exploited:
+    //   - Laplacian on constant f(x,y) = k   → Δf = 0 → sharpen = identity
+    //   - Laplacian on linear   f(x,y) = ax+b → Δf = 0 → sharpen = identity (interior)
+    //   - Laplacian on step                   → ±overshoot computable precisely
 
     func testSharpenIdentityAtZero() throws {
         let source = try makeEffectSource(red: 0.4, green: 0.4, blue: 0.4)
@@ -54,19 +65,55 @@ final class EffectsFilterTests: XCTestCase {
         XCTAssertEqual(p.r, 0.4, accuracy: 0.01)
     }
 
-    func testSharpenExtremeClampsAndStayFinite() throws {
-        // A ramp where the center pixel differs sharply from neighbors —
-        // forces Laplacian kernel to produce overshoot that must be clamped.
-        let source = try makeRampSource()
+    func testSharpenOnUniformPatchIsIdentityAtMaxSlider() throws {
+        // Laplacian of a constant function is zero — uniform input must pass
+        // through unchanged even at the strongest slider setting (100).
+        // If the kernel weights are wrong (e.g. center mul is `4s` instead
+        // of `1 + 4s`), this test fails catastrophically.
+        let source = try makeEffectSource(red: 0.4, green: 0.4, blue: 0.4, width: 16, height: 16)
+        let output = try runSingle(source, filter: SharpenFilter(amount: 100, step: 1))
+        let p = try readEffectTexture(output)[8][8]
+        XCTAssertEqual(
+            p.r, 0.4, accuracy: 0.02,
+            "Uniform patch under sharpen must be identity at slider=100; got r=\(p.r)"
+        )
+    }
+
+    func testSharpenOnLinearRampIsIdentityAtInteriorAtMaxSlider() throws {
+        // Laplacian of a linear gradient is zero. Interior pixels must pass
+        // through unchanged even at the strongest slider. Boundary pixels
+        // (x=0 and x=15) sample clamped neighbors that break linearity — so
+        // we only check interior x∈[2,13].
+        let source = try makeRampSource()  // horizontal 0→1 ramp, 16×16
         let output = try runSingle(source, filter: SharpenFilter(amount: 100, step: 1))
         let pixels = try readEffectTexture(output)
-        for row in pixels {
-            for p in row {
-                XCTAssertTrue(p.r.isFinite)
-                XCTAssertGreaterThanOrEqual(p.r, -1e-3)
-                XCTAssertLessThanOrEqual(p.r, 1.0 + 1e-3)
-            }
+        for x in 2...13 {
+            let expected = Float(x) / 15.0
+            XCTAssertEqual(
+                pixels[8][x].r, expected, accuracy: 0.03,
+                "Linear ramp interior x=\(x) must sharpen to identity at slider=100; got r=\(pixels[8][x].r) expected=\(expected)"
+            )
         }
+    }
+
+    func testSharpenOnStepEdgeOvershootsPredictably() throws {
+        // Derivation for slider=100 → u.amount = (100/100)·1.6 = 1.6:
+        //   centerMul = 1 + 4·1.6 = 7.4
+        // Step source: columns 0…7 = 0.4, columns 8…15 = 0.6.
+        // At column 7 (last dark column):
+        //   center=0.4, left=0.4, right=0.6, top=0.4, bot=0.4
+        //   Σneighbors = 0.4 + 0.6 + 0.4 + 0.4 = 1.8
+        //   y = 0.4·7.4 − 1.8·1.6 = 2.96 − 2.88 = 0.08
+        // At column 8 (first bright column):
+        //   center=0.6, left=0.4, right=0.6, top=0.6, bot=0.6
+        //   Σneighbors = 0.4 + 0.6 + 0.6 + 0.6 = 2.2
+        //   y = 0.6·7.4 − 2.2·1.6 = 4.44 − 3.52 = 0.92
+        let source = try makeStepEdgeSource(darkValue: 0.4, brightValue: 0.6, width: 16, height: 16)
+        let output = try runSingle(source, filter: SharpenFilter(amount: 100, step: 1))
+        let pixels = try readEffectTexture(output)
+
+        XCTAssertEqual(pixels[8][7].r, 0.08, accuracy: 0.03, "Dark side of edge must undershoot to 0.08")
+        XCTAssertEqual(pixels[8][8].r, 0.92, accuracy: 0.03, "Bright side of edge must overshoot to 0.92")
     }
 
     // MARK: - FilmGrain
@@ -333,6 +380,50 @@ private func makeEffectSource(
         pixels[i * 4 + 1] = hg
         pixels[i * 4 + 2] = hb
         pixels[i * 4 + 3] = ha
+    }
+    pixels.withUnsafeBytes { bytes in
+        tex.replace(
+            region: MTLRegionMake2D(0, 0, width, height),
+            mipmapLevel: 0,
+            withBytes: bytes.baseAddress!,
+            bytesPerRow: width * 8
+        )
+    }
+    return tex
+}
+
+/// A step-edge source: left half = `darkValue`, right half = `brightValue`.
+/// Edge is between column (width/2 - 1) and column (width/2). Useful for
+/// verifying neighbor-sampling filters' overshoot / undershoot math.
+private func makeStepEdgeSource(
+    darkValue: Float, brightValue: Float,
+    width: Int, height: Int
+) throws -> MTLTexture {
+    guard let device = Device.tryShared?.metalDevice else {
+        throw XCTSkip("Metal device required")
+    }
+    let desc = MTLTextureDescriptor.texture2DDescriptor(
+        pixelFormat: .rgba16Float,
+        width: width, height: height, mipmapped: false
+    )
+    desc.usage = [.shaderRead, .shaderWrite]
+    desc.storageMode = .shared
+    let tex = try XCTUnwrap(device.makeTexture(descriptor: desc))
+
+    var pixels = [UInt16](repeating: 0, count: width * height * 4)
+    let hDark = Float16(darkValue).bitPattern
+    let hBright = Float16(brightValue).bitPattern
+    let ha = Float16(1.0).bitPattern
+    let midCol = width / 2
+    for y in 0..<height {
+        for x in 0..<width {
+            let h = x < midCol ? hDark : hBright
+            let off = (y * width + x) * 4
+            pixels[off + 0] = h
+            pixels[off + 1] = h
+            pixels[off + 2] = h
+            pixels[off + 3] = ha
+        }
     }
     pixels.withUnsafeBytes { bytes in
         tex.replace(
