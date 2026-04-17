@@ -33,7 +33,7 @@ import Foundation
 /// single-pass filters or restrict multi-pass filters to the single-pass
 /// execution contract. An `enum` keeps each contract clean and lets the
 /// `Pipeline` dispatch on case pattern matching.
-public enum AnyFilter: @unchecked Sendable {
+public enum AnyFilter: Sendable {
 
     /// A single-pass filter (one compute kernel dispatch).
     case single(any FilterProtocol)
