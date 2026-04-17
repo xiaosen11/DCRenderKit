@@ -1,0 +1,56 @@
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# Xcode
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+*.xcworkspace/contents.xcworkspacedata
+DerivedData/
+*.xcscmblueprint
+*.xccheckout
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+
+# CocoaPods (not used but ignored for safety)
+Pods/
+*.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist
+
+# Carthage (not used)
+Carthage/Build/
+Carthage/Checkouts/
+
+# fastlane (not used)
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output
+
+# IDE
+.idea/
+.vscode/
+*.sublime-*
+
+# Documentation build
+docs/.docc-build/
+*.docC/.build/
+
+# Environment
+.env
+.env.local
+
+# Temporary
+*.tmp
+*.log
+*.pid

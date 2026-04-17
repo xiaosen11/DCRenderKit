@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build & Test (${{ matrix.platform }})
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [iOS, macOS]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_15.4.app
+
+      - name: Show environment
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Resolve dependencies
+        run: swift package resolve
+
+      - name: Build (macOS)
+        if: matrix.platform == 'macOS'
+        run: swift build -v
+
+      - name: Test (macOS)
+        if: matrix.platform == 'macOS'
+        run: swift test -v
+
+      - name: Build (iOS Simulator)
+        if: matrix.platform == 'iOS'
+        run: |
+          xcodebuild build \
+            -scheme DCRenderKit \
+            -destination 'platform=iOS Simulator,name=iPhone 15,OS=latest' \
+            -skipPackagePluginValidation
+
+      - name: Test (iOS Simulator)
+        if: matrix.platform == 'iOS'
+        run: |
+          xcodebuild test \
+            -scheme DCRenderKit \
+            -destination 'platform=iOS Simulator,name=iPhone 15,OS=latest' \
+            -skipPackagePluginValidation
+
+  lint:
+    name: Lint
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check for TODOs
+        run: |
+          if grep -rn "TODO\|FIXME\|HACK" Sources/ Tests/ 2>/dev/null; then
+            echo "::error::Found TODO/FIXME/HACK in source code. These must be resolved before merge."
+            exit 1
+          fi
