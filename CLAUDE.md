@@ -6,6 +6,7 @@ DCRenderKit — 商用级 Metal 图像处理 SDK（iOS 15+/macOS 12+）。独立
 
 这是一个**开源 SDK**，不是 App。最终形态必须满足：
 
+
 1. 可作为独立 SPM package 被任何 iOS/macOS 项目集成
 2. 零外部依赖（只依赖系统 framework：Metal/MetalKit/CoreImage 可选/Vision 可选）
 3. Public API 一旦冻结即有 SemVer 契约，不允许"先暴露再改"
@@ -25,9 +26,15 @@ DCRenderKit — 商用级 Metal 图像处理 SDK（iOS 15+/macOS 12+）。独立
 
 ## 交互规范
 
-- **必须使用简体中文**回复、commit message、PR 描述
-- 代码注释和 SwiftDoc 用**英文**（面向国际社区）
-- 错误信息 / 文档正文 / README 可中英双语
+- **回复用简体中文**（面向项目内部协作）
+- **所有对外产出用英文**（面向国际开源社区）：
+  - Commit message
+  - PR title + description
+  - Issue title + description
+  - Code comments + SwiftDoc
+  - README / CONTRIBUTING / CODE_OF_CONDUCT
+  - Release notes / CHANGELOG
+- 错误信息可英文为主，必要时附中文（如 DCRLogger 的日志消息）
 
 ## 🔴 商用级质量红线（硬性要求）
 
@@ -142,24 +149,33 @@ if (gid.x >= output.get_width() || gid.y >= output.get_height()) return;
 
 ## Git 规范
 
-Commit message 格式：
+Commit message 格式（**英文，conventional commits**）：
 ```
-<type>(<scope>): <中文描述>
+<type>(<scope>): <short description in English>
+
+[optional body explaining what and why]
+
+[optional footer: breaking changes, issue refs]
 ```
 
 类型：`feat` / `fix` / `docs` / `refactor` / `test` / `chore` / `perf` / `style`
-Scope 示例：`core` / `dispatcher` / `filter` / `pipeline` / `ci`
+Scope 示例：`core` / `dispatcher` / `filter` / `pipeline` / `ci` / `resources`
 
 示例：
 ```
-feat(dispatcher): 新增 ComputeDispatcher 支持 typed uniform buffer
+feat(dispatcher): add ComputeDispatcher with typed uniform buffers
 
-- PSO 缓存集成
-- threadgroup 大小自适应
-- typed buffer 零分配绑定
+- PSO cache integration via PipelineStateCache
+- Adaptive threadgroup sizing using threadExecutionWidth
+- Zero-allocation typed buffer binding via UniformBufferPool
+
+Closes #42
 
 Co-Authored-By: Claude <noreply@anthropic.com>
 ```
+
+**commit message 一律用英文**（开源社区友好 + 跨时区协作 + SemVer changelog 直接复用）。
+中文讨论留在 Issues / PR comments / 内部文档里。
 
 分支策略：
 - `main` → 稳定分支（只接受 merge，不直接 push）
