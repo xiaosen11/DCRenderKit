@@ -19,6 +19,11 @@ struct MetalImagePreview: UIViewRepresentable {
     @Bindable var params: EditParameters
     let metrics: PerformanceMetrics
     let sourceTexture: MTLTexture?
+    /// Vision-generated subject mask for `PortraitBlurFilter`. `nil`
+    /// means either "mask generation still in flight" or "no subject
+    /// detected"; in both cases `FilterChainBuilder` excludes
+    /// PortraitBlur from the chain.
+    let portraitMask: MTLTexture?
     let device: MTLDevice
 
     func makeCoordinator() -> Coordinator {
@@ -45,7 +50,11 @@ struct MetalImagePreview: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: MTKView, context: Context) {
-        context.coordinator.bind(params: params, sourceTexture: sourceTexture)
+        context.coordinator.bind(
+            params: params,
+            sourceTexture: sourceTexture,
+            portraitMask: portraitMask
+        )
     }
 
     static func dismantleUIView(_ uiView: MTKView, coordinator: Coordinator) {
@@ -62,6 +71,7 @@ struct MetalImagePreview: UIViewRepresentable {
 
         private var params: EditParameters?
         private var sourceTexture: MTLTexture?
+        private var portraitMask: MTLTexture?
         private let commandQueue: MTLCommandQueue
 
         /// Set to `true` when the coordinator has been dismantled; stops
@@ -81,9 +91,14 @@ struct MetalImagePreview: UIViewRepresentable {
         /// triggers an immediate redraw, and re-arms the observation
         /// callback against the new `params` identity.
         @MainActor
-        func bind(params: EditParameters, sourceTexture: MTLTexture?) {
+        func bind(
+            params: EditParameters,
+            sourceTexture: MTLTexture?,
+            portraitMask: MTLTexture?
+        ) {
             self.params = params
             self.sourceTexture = sourceTexture
+            self.portraitMask = portraitMask
             view?.setNeedsDisplay()
             registerObservation()
         }
@@ -145,7 +160,8 @@ struct MetalImagePreview: UIViewRepresentable {
             let chain = FilterChainBuilder.build(
                 from: params,
                 lumaMean: 0.5,
-                pixelsPerPoint: pixelsPerPoint
+                pixelsPerPoint: pixelsPerPoint,
+                portraitMask: portraitMask
             )
             metrics.chainLength = chain.count
 

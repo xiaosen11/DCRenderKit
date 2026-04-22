@@ -16,8 +16,16 @@ import Metal
 
 /// Per-frame payload. The texture is valid only until the next frame
 /// replaces it; consumers must render before the next delivery.
+///
+/// `pixelBuffer` is the same CoreVideo buffer the texture was created
+/// from, retained so out-of-band consumers (Vision portrait-mask
+/// generation, per-frame statistics) can use it after the frame
+/// callback returns. The Metal texture path does not read from the
+/// pixel buffer — CVMetalTextureCache gave us a GPU-side view — so
+/// keeping the CV ref alive does not race with rendering.
 struct CameraFrame: @unchecked Sendable {
     let texture: MTLTexture
+    let pixelBuffer: CVPixelBuffer
     let presentationTime: CMTime
 }
 
@@ -206,6 +214,10 @@ extension CameraController: AVCaptureVideoDataOutputSampleBufferDelegate {
         else { return }
 
         let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-        onFrame?(CameraFrame(texture: texture, presentationTime: pts))
+        onFrame?(CameraFrame(
+            texture: texture,
+            pixelBuffer: pixelBuffer,
+            presentationTime: pts
+        ))
     }
 }

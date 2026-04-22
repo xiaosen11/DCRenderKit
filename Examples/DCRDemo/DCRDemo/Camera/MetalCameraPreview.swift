@@ -12,6 +12,7 @@
 import SwiftUI
 import MetalKit
 import Observation
+import QuartzCore
 import DCRenderKit
 
 struct MetalCameraPreview: UIViewRepresentable {
@@ -76,6 +77,12 @@ struct MetalCameraPreview: UIViewRepresentable {
         private let frameLock = NSLock()
         private var latestFrame: CameraFrame?
 
+        /// Throttled Vision mask cache for `PortraitBlurFilter`. Runs
+        /// Vision on a background queue at ~500 ms cadence regardless
+        /// of camera FPS, so portrait blur can track a moving subject
+        /// without dragging preview frame delivery below 30 fps.
+        private let maskCache = CameraPortraitMaskCache()
+
         private var cancelled = false
 
         init(
@@ -96,12 +103,20 @@ struct MetalCameraPreview: UIViewRepresentable {
             }
         }
 
-        /// Camera-queue callback. Lock-synchronized write, then hop
-        /// to main and ask MTKView to redraw.
+        /// Camera-queue callback. Lock-synchronized write, opportunistic
+        /// background mask refresh, then hop to main and ask MTKView to
+        /// redraw.
         private func storeFrame(_ frame: CameraFrame) {
             frameLock.lock()
             latestFrame = frame
             frameLock.unlock()
+
+            // Offer this frame's pixel buffer to the mask cache. Most
+            // calls are rejected (throttle), which is cheap; the
+            // accepted one kicks off a detached Vision run that
+            // updates `maskCache.currentMask` whenever it finishes.
+            maskCache.updateIfStale(from: frame.pixelBuffer)
+
             DispatchQueue.main.async { [weak self] in
                 self?.view?.setNeedsDisplay()
             }
@@ -151,7 +166,8 @@ struct MetalCameraPreview: UIViewRepresentable {
             let chain = FilterChainBuilder.build(
                 from: params,
                 lumaMean: 0.5,
-                pixelsPerPoint: Float(view.window?.screen.scale ?? 3.0)
+                pixelsPerPoint: Float(view.window?.screen.scale ?? 3.0),
+                portraitMask: maskCache.currentMask
             )
             metrics.chainLength = chain.count
 
@@ -179,4 +195,87 @@ struct MetalCameraPreview: UIViewRepresentable {
             }
         }
     }
+}
+
+// MARK: - CameraPortraitMaskCache
+
+/// Background-refreshed Vision portrait-mask cache for the camera
+/// preview. Vision's `VNGenerateForegroundInstanceMaskRequest` typically
+/// runs in 200–500 ms per 1080p frame — far too slow to run on every
+/// camera frame at 30 fps. We throttle to at most one concurrent Vision
+/// pass and ignore requests that arrive within `refreshInterval` of the
+/// last one starting, which keeps preview rendering decoupled from the
+/// mask update cadence.
+///
+/// The mask always reflects *some* recent frame: on a static scene it
+/// settles almost immediately; on a fast-changing scene it lags by
+/// ~500 ms, which is an acceptable physical limit for a consumer demo.
+/// When the cache has never produced a mask (first half-second of
+/// preview, or Vision found no subject), `currentMask` is `nil` and
+/// `FilterChainBuilder` excludes `PortraitBlurFilter` from the chain.
+///
+/// `@unchecked Sendable` because the internal mutable state is guarded
+/// by an explicit lock — Swift 6 strict concurrency cannot verify this
+/// invariant statically but the contract holds.
+final class CameraPortraitMaskCache: @unchecked Sendable {
+
+    /// Minimum time between Vision run *starts*. Not "between
+    /// completions" — we start the clock on dispatch so the next
+    /// throttle window opens on a predictable cadence instead of
+    /// sliding with Vision run time.
+    static let refreshInterval: TimeInterval = 0.5
+
+    private let lock = NSLock()
+    private var latestMask: MTLTexture?
+    private var lastGenerationStart: TimeInterval = -.infinity
+    private var isGenerating = false
+
+    /// Last-known Vision mask. `nil` until the first successful
+    /// generation lands, and whenever the most recent Vision run found
+    /// no foreground subject.
+    var currentMask: MTLTexture? {
+        lock.lock()
+        defer { lock.unlock() }
+        return latestMask
+    }
+
+    /// Offer a pixel buffer as the source for the next Vision run.
+    /// Returns immediately; the caller is never blocked by Vision
+    /// work. If the throttle window is still open or a previous run
+    /// hasn't completed, the frame is simply dropped.
+    func updateIfStale(from pixelBuffer: CVPixelBuffer) {
+        lock.lock()
+        let now = CACurrentMediaTime()
+        let shouldRun = !isGenerating
+            && (now - lastGenerationStart) >= Self.refreshInterval
+        if shouldRun {
+            lastGenerationStart = now
+            isGenerating = true
+        }
+        lock.unlock()
+
+        guard shouldRun else { return }
+
+        let pixelBufferBox = CameraMaskPixelBufferBox(buffer: pixelBuffer)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            let mask = PortraitBlurMaskGenerator.generate(
+                from: pixelBufferBox.buffer
+            )
+            self.lock.lock()
+            if let mask {
+                self.latestMask = mask
+            }
+            self.isGenerating = false
+            self.lock.unlock()
+        }
+    }
+}
+
+/// `@unchecked Sendable` wrapper so a `CVPixelBuffer` can be handed
+/// into a background DispatchQueue closure under Swift 6 strict
+/// concurrency. Core Video buffers are reference-counted CF objects
+/// and safe to retain across threads; Vision only reads from them.
+private struct CameraMaskPixelBufferBox: @unchecked Sendable {
+    let buffer: CVPixelBuffer
 }

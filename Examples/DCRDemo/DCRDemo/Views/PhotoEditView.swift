@@ -76,6 +76,7 @@ struct PhotoEditView: View {
                 params: params,
                 metrics: metrics,
                 sourceTexture: editModel.sourceTexture,
+                portraitMask: editModel.portraitMask,
                 device: device
             )
 

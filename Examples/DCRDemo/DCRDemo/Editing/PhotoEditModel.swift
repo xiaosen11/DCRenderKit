@@ -34,6 +34,21 @@ enum ExportState: Sendable, Equatable {
     case failed(message: String)
 }
 
+/// `@unchecked Sendable` box so an `CGImage` can cross actor boundaries
+/// into a detached Vision task. `CGImage` is thread-safe for read-only
+/// use; we never mutate the image after it's loaded from the bundle.
+private struct PortraitEditImageBox: @unchecked Sendable {
+    let image: CGImage
+}
+
+/// `@unchecked Sendable` box so a Vision-generated `MTLTexture?` can
+/// cross the actor boundary back to MainActor for publication.
+/// `MTLTexture` is thread-safe for read after creation, and we treat
+/// the mask as immutable (Vision builds a fresh texture each run).
+private struct PortraitEditMaskBox: @unchecked Sendable {
+    let mask: MTLTexture?
+}
+
 @Observable
 @MainActor
 final class PhotoEditModel {
@@ -49,6 +64,23 @@ final class PhotoEditModel {
 
     /// Loaded source texture. Nil before the first successful load.
     private(set) var sourceTexture: MTLTexture?
+
+    /// Vision-generated foreground-subject mask for the current source.
+    /// Regenerated asynchronously on every sample-image switch so that
+    /// `PortraitBlurFilter` can activate the moment the user touches
+    /// its slider. Tracked by `@Observable` so SwiftUI previews pick
+    /// up nil → available transitions.
+    ///
+    /// `nil` means either "generation still in flight" (first ~0.5–1s
+    /// after an image switch, Vision is CPU-heavy) OR "Vision detected
+    /// no foreground subject". `FilterChainBuilder` treats both the
+    /// same — PortraitBlur is excluded from the chain.
+    private(set) var portraitMask: MTLTexture?
+
+    /// In-flight mask-generation handle. Cancelled on sample-image
+    /// switch so a slow Vision run on image A cannot clobber image B's
+    /// mask after the user has moved on.
+    private var maskTask: Task<Void, Never>?
 
     /// Export progress / result.
     private(set) var exportState: ExportState = .idle
@@ -87,6 +119,14 @@ final class PhotoEditModel {
     }
 
     private func reloadSourceTexture() {
+        // Cancel any in-flight mask generation for a previous image
+        // switch so a slow Vision run cannot clobber the current
+        // image's mask after the user has moved on. Set to nil first
+        // so that UI observers see "no mask yet" immediately.
+        maskTask?.cancel()
+        maskTask = nil
+        portraitMask = nil
+
         // Resources land at bundle root (xcodegen auto-classifies files
         // under `sources:` and flattens them into the resources phase).
         guard let url = Bundle.main.url(
@@ -102,6 +142,32 @@ final class PhotoEditModel {
         }
 
         sourceTexture = try? textureLoader.makeTexture(from: cgImage)
+
+        // Kick off Vision mask generation for the new source. Detached
+        // so the CPU-heavy Vision pass doesn't block the MainActor
+        // while the user is dragging sliders immediately after a
+        // sample-image switch. Result is hopped back via an isolated
+        // helper — calling a MainActor method directly avoids the
+        // `sending 'self' risks causing data races` error that Swift 6
+        // strict concurrency raises when `self` is captured through a
+        // detached closure into a nested MainActor.run.
+        let imageBox = PortraitEditImageBox(image: cgImage)
+        maskTask = Task.detached { [weak self] in
+            let mask = PortraitBlurMaskGenerator.generate(
+                from: imageBox.image
+            )
+            let maskBox = PortraitEditMaskBox(mask: mask)
+            guard !Task.isCancelled else { return }
+            await self?.applyPortraitMask(maskBox.mask)
+        }
+    }
+
+    /// MainActor-isolated setter so the detached Vision task can
+    /// publish its result without needing to thread `self` through a
+    /// nested `MainActor.run` closure.
+    @MainActor
+    private func applyPortraitMask(_ mask: MTLTexture?) {
+        portraitMask = mask
     }
 
     // MARK: - Export
@@ -121,7 +187,8 @@ final class PhotoEditModel {
             let chain = FilterChainBuilder.build(
                 from: currentParams,
                 lumaMean: 0.5,
-                pixelsPerPoint: Float(source.width) / 390.0  // approximate for export context
+                pixelsPerPoint: Float(source.width) / 390.0,  // approximate for export context
+                portraitMask: portraitMask
             )
             let pipeline = Pipeline(input: .texture(source), steps: chain)
             let output = try await pipeline.output()
