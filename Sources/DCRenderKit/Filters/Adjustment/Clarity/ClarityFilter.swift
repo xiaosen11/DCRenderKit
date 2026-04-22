@@ -46,8 +46,20 @@ public struct ClarityFilter: MultiPassFilter {
     /// detail, negative smooths toward the base.
     public var intensity: Float
 
-    public init(intensity: Float = 0) {
+    /// Color space the input texture is in. Drives the final-pass wrap:
+    /// `detail = original - base` is space-dependent, and the product-
+    /// compression constants (×1.5 positive, ×0.7 negative) were fit
+    /// for gamma-space detail. In `.linear` mode the shader un-linearizes
+    /// both signals, computes detail in gamma space, applies the fit,
+    /// then re-linearizes.
+    public var colorSpace: DCRColorSpace
+
+    public init(
+        intensity: Float = 0,
+        colorSpace: DCRColorSpace = DCRenderKit.defaultColorSpace
+    ) {
         self.intensity = intensity
+        self.colorSpace = colorSpace
     }
 
     public func passes(input: TextureInfo) -> [Pass] {
@@ -60,6 +72,8 @@ public struct ClarityFilter: MultiPassFilter {
         let p: Float = 0.019
         let radiusX = max((Float(quarterW) * p).rounded(), 1.0)
         let radiusY = max((Float(quarterH) * p).rounded(), 1.0)
+
+        let isLinear: UInt32 = colorSpace == .linear ? 1 : 0
 
         return [
             .compute(
@@ -100,7 +114,8 @@ public struct ClarityFilter: MultiPassFilter {
                 inputs: [.source, .named("base")],
                 output: .sameAsSource,
                 uniforms: FilterUniforms(ClarityUniforms(
-                    intensity: normalized * 0.75   // product compression
+                    intensity: normalized * 0.75,   // product compression
+                    isLinearSpace: isLinear
                 ))
             ),
         ]
@@ -111,4 +126,6 @@ public struct ClarityFilter: MultiPassFilter {
 struct ClarityUniforms {
     /// Clarity slider in `-1 ... +1`, product-compressed by 0.75.
     var intensity: Float
+    /// 1 = linear input; 0 = gamma-encoded.
+    var isLinearSpace: UInt32
 }

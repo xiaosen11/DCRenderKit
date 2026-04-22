@@ -76,10 +76,28 @@ kernel void DCRClarityComputeBase(
 //   — blends toward the smooth edge-preserving base. ×0.7 keeps the
 //   extreme from fully flattening into the base (preserves some
 //   detail at slider = -100).
+//
+// ## Color-space branching
+//
+// Local contrast is a perceptual quantity; the `detail` signal
+// (original − base) was tuned so that the product compression (×1.5 /
+// ×0.7) produces perceptually-linear slider response. In `.linear` mode
+// the raw subtraction happens on linear-light values, where `detail`
+// skews larger in highlights and smaller in shadows — slider response
+// gets non-uniform across tonal zones. Fix: wrap subtract + add in
+// gamma space.
 
 struct ClarityUniforms {
-    float intensity;   // -1.0 ... +1.0, already product-compressed
+    float intensity;      // -1.0 ... +1.0, already product-compressed
+    uint  isLinearSpace;  // 1 = linear input; 0 = gamma-encoded.
 };
+
+inline float dcr_clarityLinearToGamma(float c) {
+    return pow(max(c, 0.0f), 1.0f / 2.2f);
+}
+inline float dcr_clarityGammaToLinear(float c) {
+    return pow(max(c, 0.0f), 2.2f);
+}
 
 kernel void DCRClarityApply(
     texture2d<half, access::write> output [[texture(0)]],
@@ -99,15 +117,37 @@ kernel void DCRClarityApply(
     }
 
     const half4 baseColor = base.read(gid);
-    half3 detail = orig.rgb - baseColor.rgb;
+    const bool isLinear = (u.isLinearSpace != 0u);
 
-    half3 result;
-    if (intensity >= 0.0f) {
-        result = orig.rgb + detail * half(intensity * 1.5f);
-    } else {
-        result = mix(orig.rgb, baseColor.rgb, half(-intensity * 0.7f));
+    // Bring both signals to gamma space so `detail` is computed in the
+    // domain where the product-compression constants were fit.
+    float3 origRGB = float3(orig.rgb);
+    float3 baseRGB = float3(baseColor.rgb);
+    if (isLinear) {
+        origRGB.r = dcr_clarityLinearToGamma(origRGB.r);
+        origRGB.g = dcr_clarityLinearToGamma(origRGB.g);
+        origRGB.b = dcr_clarityLinearToGamma(origRGB.b);
+        baseRGB.r = dcr_clarityLinearToGamma(baseRGB.r);
+        baseRGB.g = dcr_clarityLinearToGamma(baseRGB.g);
+        baseRGB.b = dcr_clarityLinearToGamma(baseRGB.b);
     }
 
-    result = clamp(result, half3(0.0h), half3(1.0h));
-    output.write(half4(result, orig.a), gid);
+    float3 detail = origRGB - baseRGB;
+
+    float3 result;
+    if (intensity >= 0.0f) {
+        result = origRGB + detail * (intensity * 1.5f);
+    } else {
+        result = mix(origRGB, baseRGB, -intensity * 0.7f);
+    }
+
+    result = clamp(result, 0.0f, 1.0f);
+
+    if (isLinear) {
+        result.r = dcr_clarityGammaToLinear(result.r);
+        result.g = dcr_clarityGammaToLinear(result.g);
+        result.b = dcr_clarityGammaToLinear(result.b);
+    }
+
+    output.write(half4(half3(result), orig.a), gid);
 }

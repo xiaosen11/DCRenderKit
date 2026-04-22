@@ -204,6 +204,122 @@ final class MultiPassFilterTests: XCTestCase {
         XCTAssertTrue(output === source)
     }
 
+    // MARK: - Color-space parity (F3 fix)
+    //
+    // HighlightShadow's smoothstep windows [0.25, 0.85] / [0.15, 0.75]
+    // were gamma-space anchors. In `.linear` default mode the guided-
+    // filter baseLuma comes out linear-light, so the windows hit the
+    // wrong tonal zones — gamma-0.4 midtones became linear-0.133, below
+    // the 0.25 highlight-window floor → no highlight response. This was
+    // user-reported F3 "对高光暗部不够敏感, 缺层次感".
+
+    func testHighlightShadowLinearModeRespondsToMidtoneHighlights() throws {
+        // A linear-space source at 0.133 simulates a gamma-0.4 midtone
+        // loaded via sRGB-aware MTKTextureLoader. Under the pre-fix code
+        // this input (0.133 linear) falls below the 0.25 highlight-window
+        // floor and produces NO highlight effect. With the gamma-wrap fix,
+        // the window sees pow(0.133, 1/2.2) ≈ 0.4 → slider activates.
+        //
+        // Derivation (post-fix):
+        //   baseLumaForWindows = pow(0.133, 1/2.2) ≈ 0.4
+        //   t_h = (0.4 - 0.25) / 0.6 = 0.25
+        //   h_weight = 0.25² · (3 - 0.5) = 0.156
+        //   ratio = 1 + 1·0.156·0.35 ≈ 1.055
+        //   result_gamma = 0.4 · 1.055 ≈ 0.422 (sat comp ~no-op on uniform)
+        //   result_linear = pow(0.422, 2.2) ≈ 0.150
+        // Pre-fix: result_linear stays ≈ 0.133 (ratio=1 because h_weight=0).
+        let source = try makeMultipassSource(
+            red: 0.133, green: 0.133, blue: 0.133, width: 32, height: 32
+        )
+        let pipeline = makePipeline(
+            input: .texture(source),
+            steps: [.multi(HighlightShadowFilter(highlights: 100, shadows: 0, colorSpace: .linear))]
+        )
+        let output = try pipeline.outputSync()
+        let center = try readMultipassTexture(output)[16][16]
+        XCTAssertEqual(
+            center.r, 0.150, accuracy: 0.01,
+            "HS(+100,0) linear on 0.133 must match derivation ≈ 0.150; got \(center.r)"
+        )
+        XCTAssertGreaterThan(
+            center.r, 0.140,
+            "Must be visibly brighter than input 0.133 (directional proof of fix)"
+        )
+    }
+
+    func testClarityLinearMatchesPerceptualViaGammaWrap() throws {
+        // Clarity's `detail = original − base` and the product-compression
+        // gain (×1.5 / ×0.7) were fit for gamma-space detail. In .linear
+        // mode without the wrap, detail magnitude skews toward highlights;
+        // with the wrap, both modes produce visually equivalent output.
+        let gammaX: Float = 0.5
+        let linearX = powf(gammaX, 2.2)
+        let sourceGamma = try makeRampMultipassSource()  // uses 0..1 gamma ramp
+        let sourceLinear = try makeLinearizedRampMultipassSource()
+
+        let pp = makePipeline(
+            input: .texture(sourceGamma),
+            steps: [.multi(ClarityFilter(intensity: 60, colorSpace: .perceptual))]
+        )
+        let lp = makePipeline(
+            input: .texture(sourceLinear),
+            steps: [.multi(ClarityFilter(intensity: 60, colorSpace: .linear))]
+        )
+        let ppOut = try pp.outputSync()
+        let lpOut = try lp.outputSync()
+
+        let pixelsP = try readMultipassTexture(ppOut)
+        let pixelsL = try readMultipassTexture(lpOut)
+
+        // Check several interior pixels; Clarity has edge-aware effect so
+        // compare at ramp midpoints to stay in the smooth regime.
+        for x in 10...50 {
+            let yp = pixelsP[32][x].r
+            let yl = pixelsL[32][x].r
+            let ylAsGamma = powf(max(yl, 0), 1.0 / 2.2)
+            XCTAssertEqual(
+                ylAsGamma, yp, accuracy: 0.05,
+                "Clarity parity at x=\(x): linear→gamma=\(ylAsGamma) vs perceptual=\(yp)"
+            )
+        }
+        _ = (gammaX, linearX)  // derivation anchor kept for readability
+    }
+
+    func testHighlightShadowLinearMatchesPerceptualViaGammaWrap() throws {
+        // End-to-end parity: HS on gamma-0.5 midtone in .perceptual must
+        // produce the same visible output as HS on linear-0.217 midtone
+        // in .linear, once the latter is re-gammad for display. Tolerance
+        // 0.04 absorbs the pow-2.2 approximation + guided-filter noise.
+        let gammaX: Float = 0.5
+        let linearX = powf(gammaX, 2.2)
+        let sourceGamma = try makeMultipassSource(
+            red: gammaX, green: gammaX, blue: gammaX, width: 32, height: 32
+        )
+        let sourceLinear = try makeMultipassSource(
+            red: linearX, green: linearX, blue: linearX, width: 32, height: 32
+        )
+
+        let perceptualPipeline = makePipeline(
+            input: .texture(sourceGamma),
+            steps: [.multi(HighlightShadowFilter(highlights: 80, shadows: -40, colorSpace: .perceptual))]
+        )
+        let linearPipeline = makePipeline(
+            input: .texture(sourceLinear),
+            steps: [.multi(HighlightShadowFilter(highlights: 80, shadows: -40, colorSpace: .linear))]
+        )
+        let perceptualOut = try perceptualPipeline.outputSync()
+        let linearOut = try linearPipeline.outputSync()
+
+        let pp = try readMultipassTexture(perceptualOut)[16][16]
+        let pl = try readMultipassTexture(linearOut)[16][16]
+        let plAsGamma = powf(max(pl.r, 0), 1.0 / 2.2)
+
+        XCTAssertEqual(
+            plAsGamma, pp.r, accuracy: 0.04,
+            "HS linear → re-gamma must match perceptual; got \(plAsGamma) vs \(pp.r)"
+        )
+    }
+
     // MARK: - Fuse groups
 
     func testMultiPassFiltersDeclareNoFuseGroup() {
@@ -503,6 +619,17 @@ private extension Float {
 /// A 64×64 horizontal luma ramp — exercises edge-preserving filters at
 /// interior transitions.
 private func makeRampMultipassSource() throws -> MTLTexture {
+    return try makeRampMultipassSource(linearize: false)
+}
+
+/// Same ramp but with each value pre-linearized (`v^2.2`). Used by
+/// `.linear` color-space parity tests: the linearized ramp simulates
+/// what an sRGB-aware loader would produce from a gamma ramp image.
+private func makeLinearizedRampMultipassSource() throws -> MTLTexture {
+    return try makeRampMultipassSource(linearize: true)
+}
+
+private func makeRampMultipassSource(linearize: Bool) throws -> MTLTexture {
     guard let device = Device.tryShared?.metalDevice else {
         throw XCTSkip("Metal device required")
     }
@@ -520,7 +647,8 @@ private func makeRampMultipassSource() throws -> MTLTexture {
     let ha = Float16(1.0).bitPattern
     for y in 0..<height {
         for x in 0..<width {
-            let v = Float(x) / Float(width - 1)
+            let vGamma = Float(x) / Float(width - 1)
+            let v = linearize ? powf(vGamma, 2.2) : vGamma
             let h = Float16(v).bitPattern
             let off = (y * width + x) * 4
             pixels[off + 0] = h

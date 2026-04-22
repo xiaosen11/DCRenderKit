@@ -54,9 +54,22 @@ public struct HighlightShadowFilter: MultiPassFilter {
     /// negative deepens shadows.
     public var shadows: Float
 
-    public init(highlights: Float = 0, shadows: Float = 0) {
+    /// Color space the input texture is in. Drives both shader branches:
+    /// the smoothstep windows against `baseLuma` and the `ratio` multiply
+    /// + saturation-compensation step are all calibrated in gamma space.
+    /// In `.linear` mode the shader wraps both with un-linearize /
+    /// re-linearize so midtones get the expected highlight / shadow
+    /// response (the direct fix for F3's "对高光暗部不够敏感, 缺层次感").
+    public var colorSpace: DCRColorSpace
+
+    public init(
+        highlights: Float = 0,
+        shadows: Float = 0,
+        colorSpace: DCRColorSpace = DCRenderKit.defaultColorSpace
+    ) {
         self.highlights = highlights
         self.shadows = shadows
+        self.colorSpace = colorSpace
     }
 
     public func passes(input: TextureInfo) -> [Pass] {
@@ -74,6 +87,8 @@ public struct HighlightShadowFilter: MultiPassFilter {
         let p: Float = 0.012
         let radiusX = max((Float(quarterW) * p).rounded(), 1.0)
         let radiusY = max((Float(quarterH) * p).rounded(), 1.0)
+
+        let isLinear: UInt32 = colorSpace == .linear ? 1 : 0
 
         return [
             .compute(
@@ -110,13 +125,17 @@ public struct HighlightShadowFilter: MultiPassFilter {
                 output: .sameAsSource,
                 uniforms: FilterUniforms(HighlightShadowRatioUniforms(
                     highlights: h,
-                    shadows: s
+                    shadows: s,
+                    isLinearSpace: isLinear
                 ))
             ),
             .final(
                 kernel: "DCRHighlightShadowApply",
                 inputs: [.source, .named("ratio")],
-                output: .sameAsSource
+                output: .sameAsSource,
+                uniforms: FilterUniforms(HighlightShadowApplyUniforms(
+                    isLinearSpace: isLinear
+                ))
             ),
         ]
     }
@@ -140,4 +159,14 @@ struct HighlightShadowRatioUniforms {
     var highlights: Float
     /// Shadow slider normalized to `-1 ... +1`.
     var shadows: Float
+    /// 1 = linear input (un-linearize baseLuma for smoothstep windows);
+    /// 0 = gamma input (native domain of window anchors).
+    var isLinearSpace: UInt32
+}
+
+struct HighlightShadowApplyUniforms {
+    /// Carries the same `isLinearSpace` flag as the ratio uniforms so
+    /// the apply pass can wrap the ratio multiply + saturation
+    /// compensation in gamma space.
+    var isLinearSpace: UInt32
 }
