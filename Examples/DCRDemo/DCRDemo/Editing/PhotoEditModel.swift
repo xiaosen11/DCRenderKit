@@ -216,9 +216,44 @@ final class PhotoEditModel {
                 userInfo: [NSLocalizedDescriptionKey: "Photos permission denied"]
             )
         }
-        let image = UIImage(cgImage: cgImage)
+
+        // Encode on the calling actor so the cross-actor hand-off only
+        // carries a Sendable `Data` — `UIImage` is non-Sendable and would
+        // otherwise leak MainActor isolation into the PhotoLibrary queue.
+        let uiImage = UIImage(cgImage: cgImage)
+        guard let jpegData = uiImage.jpegData(compressionQuality: 0.95) else {
+            throw NSError(
+                domain: "DCRDemo.Export", code: 4,
+                userInfo: [NSLocalizedDescriptionKey: "JPEG encode failed"]
+            )
+        }
+
+        try await Self.persistJPEGToPhotos(jpegData: jpegData)
+    }
+
+    /// Persist a JPEG payload to the user's Photos library.
+    ///
+    /// `nonisolated` + `static` is load-bearing: `PhotoEditModel` is
+    /// `@MainActor`-isolated, and a `performChanges` closure defined as
+    /// an instance/static method on a MainActor type inherits MainActor
+    /// isolation. PhotoLibrary then dispatches that closure onto its
+    /// internal serial queue (`com.apple.PhotoLibrary.changes`) and
+    /// trips a `dispatch_assert_queue` check inside
+    /// `_performCancellableChanges`, crashing with `EXC_BREAKPOINT` on
+    /// `_dispatch_assert_queue_fail`. Severing MainActor inheritance
+    /// with `nonisolated` lets the closure run in the non-isolated
+    /// concurrent domain that PhotoLibrary expects.
+    ///
+    /// We also use `addResource(with:data:options:)` rather than
+    /// `creationRequestForAsset(from: UIImage)` so the closure captures
+    /// only the trivially-`Sendable` `Data` — no `UIImage` crosses the
+    /// actor boundary.
+    private nonisolated static func persistJPEGToPhotos(
+        jpegData: Data
+    ) async throws {
         try await PHPhotoLibrary.shared().performChanges {
-            PHAssetCreationRequest.creationRequestForAsset(from: image)
+            let request = PHAssetCreationRequest.forAsset()
+            request.addResource(with: .photo, data: jpegData, options: nil)
         }
     }
 }
