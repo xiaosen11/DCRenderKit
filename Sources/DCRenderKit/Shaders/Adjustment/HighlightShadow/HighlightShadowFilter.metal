@@ -8,11 +8,17 @@ using namespace metal;
 
 constant float3 kDCRHighlightShadowLumaRec709 = float3(0.2126f, 0.7152f, 0.0722f);
 
+// IEC 61966-2-1 piecewise sRGB curves (§8.1 A.1). See ContrastFilter.metal
+// for rationale — this is the per-filter copy of the same formulas.
 inline float dcr_hsLinearToGamma(float c) {
-    return pow(max(c, 0.0f), 1.0f / 2.2f);
+    float cc = max(c, 0.0f);
+    return cc <= 0.0031308f ? 12.92f * cc
+                             : 1.055f * pow(cc, 1.0f / 2.4f) - 0.055f;
 }
 inline float dcr_hsGammaToLinear(float c) {
-    return pow(max(c, 0.0f), 2.2f);
+    float cc = max(c, 0.0f);
+    return cc <= 0.04045f ? cc / 12.92f
+                          : pow((cc + 0.055f) / 1.055f, 2.4f);
 }
 
 // ── DCRGuidedApplyRatio ──

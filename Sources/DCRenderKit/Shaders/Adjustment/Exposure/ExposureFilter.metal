@@ -53,17 +53,22 @@ struct ExposureUniforms {
     uint  isLinearSpace;  // 1 if the input is linear-light; 0 if gamma-encoded.
 };
 
-/// Approximate sRGB → linear. Cheap power-2.2 model; good enough for
-/// the product fit that targets gamma-space JPEG reference exports. For
-/// strict sRGB conformance the GPU's hardware sampler does a piecewise
-/// curve — we use that path in `.linear` mode instead of doing it here.
+/// sRGB → linear using the exact IEC 61966-2-1 piecewise transfer
+/// function (§8.1 A.1). Matches `MTKTextureLoader .SRGB:true` hardware
+/// decode so the software-side wrap in perceptual mode is consistent
+/// with what the linear-mode GPU sampler produces. Legacy "Approx" name
+/// retained for call-site compatibility; it is no longer an approximation.
 inline float dcr_perceptualToLinearApprox(float c) {
-    return pow(max(c, 0.0f), 2.2f);
+    float cc = max(c, 0.0f);
+    return cc <= 0.04045f ? cc / 12.92f
+                          : pow((cc + 0.055f) / 1.055f, 2.4f);
 }
 
-/// Inverse of `dcr_perceptualToLinearApprox`. Same approximation.
+/// Inverse of `dcr_perceptualToLinearApprox` — linear → sRGB encode.
 inline float dcr_linearToPerceptualApprox(float c) {
-    return pow(max(c, 0.0f), 1.0f / 2.2f);
+    float cc = max(c, 0.0f);
+    return cc <= 0.0031308f ? 12.92f * cc
+                             : 1.055f * pow(cc, 1.0f / 2.4f) - 0.055f;
 }
 
 kernel void DCRExposureFilter(

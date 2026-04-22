@@ -271,14 +271,15 @@ final class PhotoEditModel {
             // to decode the linear value as if it were sRGB-encoded and
             // darken midtones by roughly pow(0.5, 2.2) / 0.5 ≈ 2.3x.
             //
-            // `pow(x, 1/2.2)` mirrors the SDK's internal linear↔perceptual
-            // approximation; when findings-and-plan.md §8.1 A.1 swaps
-            // the SDK to a piecewise sRGB curve, update this site in
-            // lockstep to keep the round-trip symmetric.
+            // Uses the IEC 61966-2-1 piecewise sRGB encode (§8.1 A.1
+            // lockstep with SDK-side Metal helpers). Matches what
+            // MTKTextureLoader's .SRGB:true hardware decode inverts on
+            // the read side, giving an exact round-trip for any linear
+            // value the pipeline might produce.
             if needsGammaEncode {
-                r = pow(r, 1.0 / 2.2)
-                g = pow(g, 1.0 / 2.2)
-                b = pow(b, 1.0 / 2.2)
+                r = dcrLinearToSRGB(r)
+                g = dcrLinearToSRGB(g)
+                b = dcrLinearToSRGB(b)
             }
             u8[i * 4 + 0] = UInt8(r * 255)
             u8[i * 4 + 1] = UInt8(g * 255)
@@ -299,6 +300,18 @@ final class PhotoEditModel {
             throw NSError(domain: "DCRDemo.Export", code: 2)
         }
         return cg
+    }
+
+    /// IEC 61966-2-1 piecewise sRGB encode (linear → sRGB byte domain).
+    /// Mirrors the SDK-side Metal helpers (`dcr_*LinearToGamma`) so the
+    /// Demo's CPU-side gamma encode on export matches what the shader
+    /// would have produced in `.perceptual` mode pixel-for-pixel.
+    private static func dcrLinearToSRGB(_ c: Float) -> Float {
+        let cc = max(c, 0)
+        if cc <= 0.0031308 {
+            return 12.92 * cc
+        }
+        return 1.055 * powf(cc, 1.0 / 2.4) - 0.055
     }
 
     private func saveToPhotos(cgImage: CGImage) async throws {

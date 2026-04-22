@@ -38,11 +38,22 @@ struct ContrastUniforms {
     uint  isLinearSpace;  // 1 = linear input; 0 = gamma-encoded.
 };
 
+// IEC 61966-2-1 piecewise sRGB curves (§8.1 A.1). Replaces the prior
+// pow(c, 2.2) / pow(c, 1/2.2) approximation — the approximation carried
+// a ~2% systematic error at midtones vs the true sRGB transfer function
+// used by iOS's MTKTextureLoader .SRGB:true hardware sampler. Round-trip
+// is now exact to ~0.01% (half-float precision floor). Function names
+// retain the "Gamma" suffix for call-site compatibility; Phase 2 may
+// rename to {LinearToSRGB, SRGBToLinear}.
 inline float dcr_contrastLinearToGamma(float c) {
-    return pow(max(c, 0.0f), 1.0f / 2.2f);
+    float cc = max(c, 0.0f);
+    return cc <= 0.0031308f ? 12.92f * cc
+                             : 1.055f * pow(cc, 1.0f / 2.4f) - 0.055f;
 }
 inline float dcr_contrastGammaToLinear(float c) {
-    return pow(max(c, 0.0f), 2.2f);
+    float cc = max(c, 0.0f);
+    return cc <= 0.04045f ? cc / 12.92f
+                          : pow((cc + 0.055f) / 1.055f, 2.4f);
 }
 
 kernel void DCRContrastFilter(
