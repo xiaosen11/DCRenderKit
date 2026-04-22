@@ -208,6 +208,7 @@ final class EffectsFilterTests: XCTestCase {
             cubeData: Self.identityLUTData(dimension: 3),
             dimension: 3,
             intensity: 1.0,
+            colorSpace: .perceptual,
             device: device
         )
 
@@ -221,6 +222,70 @@ final class EffectsFilterTests: XCTestCase {
         XCTAssertEqual(p.b, 0.7, accuracy: 0.02)
     }
 
+    func testLUT3DIdentityLUTLinearModePreservesColorViaWrap() throws {
+        // In .linear mode, an identity LUT must still pass the color
+        // through unchanged. The shader un-linearizes input to gamma,
+        // looks up identity cube (gamma→gamma), re-linearizes output,
+        // and mixes at intensity=1.0. For identity cube, the round-trip
+        // should yield the original linear value within pow-approximation
+        // noise (≈ 2% for mid-values, larger at the tails).
+        let lut = try LUT3DFilter(
+            cubeData: Self.identityLUTData(dimension: 17),
+            dimension: 17,
+            intensity: 1.0,
+            colorSpace: .linear,
+            device: device
+        )
+
+        let source = try makeEffectSource(red: 0.4, green: 0.4, blue: 0.4, width: 16, height: 16)
+        let output = try runSingle(source, filter: lut)
+        let p = try readEffectTexture(output)[8][8]
+        XCTAssertEqual(p.r, 0.4, accuracy: 0.03)
+        XCTAssertEqual(p.g, 0.4, accuracy: 0.03)
+        XCTAssertEqual(p.b, 0.4, accuracy: 0.03)
+    }
+
+    func testLUT3DLinearModeMatchesPerceptualOnSolidColorCube() throws {
+        // Parity: a solid-color cube (everything → red) should produce the
+        // same final color regardless of color-space mode, because the
+        // cube output is gamma-space; linear mode linearizes it back to
+        // the linear equivalent red before mixing. A 0.5 gamma source in
+        // gamma mode and the linearized-equivalent 0.5^2.2 ≈ 0.217 source
+        // in linear mode must produce visually identical output once both
+        // are viewed in the same space.
+        let redGamma = try LUT3DFilter(
+            cubeData: Self.solidColorLUTData(dimension: 3, r: 1.0, g: 0.0, b: 0.0),
+            dimension: 3,
+            intensity: 1.0,
+            colorSpace: .perceptual,
+            device: device
+        )
+        let redLinear = try LUT3DFilter(
+            cubeData: Self.solidColorLUTData(dimension: 3, r: 1.0, g: 0.0, b: 0.0),
+            dimension: 3,
+            intensity: 1.0,
+            colorSpace: .linear,
+            device: device
+        )
+
+        let sourceGamma = try makeEffectSource(red: 0.5, green: 0.5, blue: 0.5)
+        let sourceLinear = try makeEffectSource(
+            red: powf(0.5, 2.2), green: powf(0.5, 2.2), blue: powf(0.5, 2.2)
+        )
+
+        let gOut = try runSingle(sourceGamma, filter: redGamma)
+        let lOut = try runSingle(sourceLinear, filter: redLinear)
+        let pg = try readEffectTexture(gOut)[4][4]
+        let pl = try readEffectTexture(lOut)[4][4]
+
+        // Perceptual path: intensity=1 → lutColor = (1,0,0); output = (1,0,0).
+        XCTAssertEqual(pg.r, 1.0, accuracy: 0.03)
+        XCTAssertEqual(pg.g, 0.0, accuracy: 0.03)
+        // Linear path: lutColor = (1,0,0) gamma → (1,0,0) linear → output = (1,0,0).
+        XCTAssertEqual(pl.r, 1.0, accuracy: 0.03)
+        XCTAssertEqual(pl.g, 0.0, accuracy: 0.03)
+    }
+
     func testLUT3DIntensityZeroBypassesLUT() throws {
         // Even a "destructive" LUT (everything → red) produces identity at
         // intensity=0, because the shader does mix(src, lut, 0) = src.
@@ -228,6 +293,7 @@ final class EffectsFilterTests: XCTestCase {
             cubeData: Self.solidColorLUTData(dimension: 3, r: 1, g: 0, b: 0),
             dimension: 3,
             intensity: 0.0,
+            colorSpace: .perceptual,
             device: device
         )
 

@@ -54,8 +54,34 @@ inline half3 dcr_triangularDither(uint2 pos, half3 color) {
 }
 
 struct LUT3DUniforms {
-    float intensity;   // 0 ... 1
+    float intensity;      // 0 ... 1
+    uint  isLinearSpace;  // 1 = linear input; 0 = gamma-encoded.
 };
+
+inline float dcr_lut3dLinearToGamma(float c) {
+    return pow(max(c, 0.0f), 1.0f / 2.2f);
+}
+inline float dcr_lut3dGammaToLinear(float c) {
+    return pow(max(c, 0.0f), 2.2f);
+}
+
+// ## Color-space branching
+//
+// `.cube` files — the universal film-emulation exchange format — are
+// defined as functions of **gamma-encoded** input RGB. The cube values
+// themselves are the gamma-encoded outputs the colorist intended. The
+// whole mapping lives entirely in display (perceptual) space.
+//
+// In `.linear` mode our inputs are linear-light floats. Looking them up
+// in a gamma-space cube reads from an arbitrary, nonsense table location.
+// The fix is the same gamma-wrap pattern used by the fitted tone filters:
+// un-linearize → run the cube sample → re-linearize the output → mix.
+//
+// The `mix(src, lut, intensity)` still operates on the original input
+// space (linear in `.linear` mode, gamma in `.perceptual` mode), which is
+// the correct domain for the intensity blend. In `.linear` mode we
+// re-linearize `lutColor` before mixing so both ends of the mix live in
+// the same space.
 
 kernel void DCRLUT3DFilter(
     texture2d<half, access::write> output [[texture(0)]],
@@ -69,9 +95,26 @@ kernel void DCRLUT3DFilter(
     }
 
     const half4 inColor = input.read(gid);
-    const float3 rgb = clamp(float3(inColor.rgb), 0.0f, 1.0f);
+    const bool isLinear = (u.isLinearSpace != 0u);
 
-    const float4 lutColor = dcr_sampleLUT3D(lut, rgb);
+    // Coords used to index the cube must be in gamma space (the cube's
+    // native domain). In linear mode we un-linearize first.
+    float3 rgbForLUT = clamp(float3(inColor.rgb), 0.0f, 1.0f);
+    if (isLinear) {
+        rgbForLUT.r = dcr_lut3dLinearToGamma(rgbForLUT.r);
+        rgbForLUT.g = dcr_lut3dLinearToGamma(rgbForLUT.g);
+        rgbForLUT.b = dcr_lut3dLinearToGamma(rgbForLUT.b);
+    }
+
+    float4 lutColor = dcr_sampleLUT3D(lut, rgbForLUT);
+
+    // The LUT output is in gamma space. In linear mode we re-linearize
+    // before mixing with the linear input.
+    if (isLinear) {
+        lutColor.r = dcr_lut3dGammaToLinear(lutColor.r);
+        lutColor.g = dcr_lut3dGammaToLinear(lutColor.g);
+        lutColor.b = dcr_lut3dGammaToLinear(lutColor.b);
+    }
 
     const float mixFactor = clamp(u.intensity, 0.0f, 1.0f);
     const half3 result = mix(inColor.rgb, half3(lutColor.rgb), half(mixFactor));

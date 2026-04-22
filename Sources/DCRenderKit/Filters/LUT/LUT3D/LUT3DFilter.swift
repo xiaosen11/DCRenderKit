@@ -55,6 +55,13 @@ public struct LUT3DFilter: FilterProtocol, @unchecked Sendable {
     /// Blend between source colour (`0`) and fully-LUT colour (`1`).
     public var intensity: Float
 
+    /// Color space the pipeline is operating in. `.cube` files are defined
+    /// in gamma (display) space — in `.linear` mode the shader un-linearizes
+    /// the input before indexing the cube and re-linearizes the output
+    /// before the intensity mix, so the cube's intended mapping is
+    /// preserved regardless of pipeline color space.
+    public var colorSpace: DCRColorSpace
+
     private let lutTexture: MTLTexture
 
     // MARK: - Init
@@ -63,6 +70,7 @@ public struct LUT3DFilter: FilterProtocol, @unchecked Sendable {
     public init(
         cubeURL: URL,
         intensity: Float = 1.0,
+        colorSpace: DCRColorSpace = DCRenderKit.defaultColorSpace,
         device: Device = .shared
     ) throws {
         guard let parsed = CubeFileParser.parse(url: cubeURL) else {
@@ -74,6 +82,7 @@ public struct LUT3DFilter: FilterProtocol, @unchecked Sendable {
             cubeData: parsed.data,
             dimension: parsed.dimension,
             intensity: intensity,
+            colorSpace: colorSpace,
             device: device
         )
     }
@@ -86,9 +95,11 @@ public struct LUT3DFilter: FilterProtocol, @unchecked Sendable {
         cubeData: Data,
         dimension: Int,
         intensity: Float = 1.0,
+        colorSpace: DCRColorSpace = DCRenderKit.defaultColorSpace,
         device: Device = .shared
     ) throws {
         self.intensity = intensity
+        self.colorSpace = colorSpace
         self.lutTexture = try Self.make3DTexture(
             data: cubeData,
             dimension: dimension,
@@ -103,7 +114,10 @@ public struct LUT3DFilter: FilterProtocol, @unchecked Sendable {
     }
 
     public var uniforms: FilterUniforms {
-        FilterUniforms(LUT3DUniforms(intensity: intensity))
+        FilterUniforms(LUT3DUniforms(
+            intensity: intensity,
+            isLinearSpace: colorSpace == .linear ? 1 : 0
+        ))
     }
 
     public var additionalInputs: [MTLTexture] {
@@ -165,4 +179,6 @@ public struct LUT3DFilter: FilterProtocol, @unchecked Sendable {
 struct LUT3DUniforms {
     /// `0 ... 1` blend between source and LUT-transformed colour.
     var intensity: Float
+    /// 1 = linear input; 0 = gamma-encoded.
+    var isLinearSpace: UInt32
 }
