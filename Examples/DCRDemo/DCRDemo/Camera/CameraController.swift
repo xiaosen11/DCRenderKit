@@ -11,6 +11,7 @@
 
 import AVFoundation
 import CoreVideo
+import DCRenderKit
 import Metal
 
 /// Per-frame payload. The texture is valid only until the next frame
@@ -179,10 +180,24 @@ extension CameraController: AVCaptureVideoDataOutputSampleBufferDelegate {
         let width = CVPixelBufferGetWidth(pixelBuffer)
         let height = CVPixelBufferGetHeight(pixelBuffer)
 
+        // Pick the right sRGB-ness to match `DCRenderKit.defaultColorSpace`:
+        //   .linear     → .bgra8Unorm_srgb, GPU sampler auto-linearizes
+        //                 on shader read (matching the CGImage path via
+        //                 MTKTextureLoader's `.SRGB: true` option).
+        //   .perceptual → .bgra8Unorm, raw byte pass-through.
+        // Without this, the camera path in .linear mode would feed
+        // gamma-encoded bytes to filters that expect linear input — the
+        // direct cause of the "camera preview vs photo edit inconsistent"
+        // symptom we saw on device.
+        let pixelFormat: MTLPixelFormat =
+            DCRenderKit.defaultColorSpace.loaderShouldLinearize
+            ? .bgra8Unorm_srgb
+            : .bgra8Unorm
+
         var cvTexture: CVMetalTexture?
         let status = CVMetalTextureCacheCreateTextureFromImage(
             nil, cache, pixelBuffer, nil,
-            .bgra8Unorm, width, height, 0,
+            pixelFormat, width, height, 0,
             &cvTexture
         )
         guard status == kCVReturnSuccess,

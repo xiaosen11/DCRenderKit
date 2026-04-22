@@ -405,7 +405,7 @@ final class TextureLoaderTests: XCTestCase {
 
     // MARK: - CVPixelBuffer
 
-    func testCVPixelBufferBGRALoad() throws {
+    func testCVPixelBufferBGRALoadPerceptualStaysBgra8Unorm() throws {
         var pixelBuffer: CVPixelBuffer?
         let attrs: [String: Any] = [
             kCVPixelBufferMetalCompatibilityKey as String: true,
@@ -420,10 +420,159 @@ final class TextureLoaderTests: XCTestCase {
         XCTAssertEqual(status, kCVReturnSuccess)
         let pb = try XCTUnwrap(pixelBuffer)
 
-        let texture = try loader.makeTexture(from: pb)
+        let texture = try loader.makeTexture(from: pb, colorSpace: .perceptual)
         XCTAssertEqual(texture.width, 8)
         XCTAssertEqual(texture.height, 8)
-        XCTAssertEqual(texture.pixelFormat, .bgra8Unorm)
+        XCTAssertEqual(
+            texture.pixelFormat, .bgra8Unorm,
+            "Perceptual mode must yield .bgra8Unorm (raw byte pass-through)"
+        )
+    }
+
+    func testCVPixelBufferBGRALoadLinearYieldsBgra8UnormSRGB() throws {
+        // Regression for F1 (camera vs photo preview inconsistency):
+        // in `.linear` mode the CVPixelBuffer path must mark the texture
+        // as sRGB-encoded so the shader sampler auto-linearizes on read,
+        // matching the CGImage path's `.SRGB: true` behaviour.
+        var pixelBuffer: CVPixelBuffer?
+        let attrs: [String: Any] = [
+            kCVPixelBufferMetalCompatibilityKey as String: true,
+        ]
+        let status = CVPixelBufferCreate(
+            kCFAllocatorDefault,
+            8, 8,
+            kCVPixelFormatType_32BGRA,
+            attrs as CFDictionary,
+            &pixelBuffer
+        )
+        XCTAssertEqual(status, kCVReturnSuccess)
+        let pb = try XCTUnwrap(pixelBuffer)
+
+        let texture = try loader.makeTexture(from: pb, colorSpace: .linear)
+        XCTAssertEqual(
+            texture.pixelFormat, .bgra8Unorm_srgb,
+            "Linear mode must yield .bgra8Unorm_srgb so GPU sampler linearizes on read"
+        )
+    }
+
+    func testCVPixelBufferLinearAndPerceptualDifferOnShaderRead() throws {
+        // Functional (end-to-end) regression for F1. Fill a CVPixelBuffer
+        // with raw gray bytes (128 = gamma-0.5). Load via both color
+        // spaces, run through a Pipeline identity step (ExposureFilter at
+        // slider=0 is a dead-zone short-circuit that writes source pixel
+        // values through), then compare the rgba16Float intermediate
+        // output:
+        //   - `.perceptual`: source is .bgra8Unorm, sampler returns bytes
+        //     as [0..1] floats → output ≈ 128/255 ≈ 0.502
+        //   - `.linear`: source is .bgra8Unorm_srgb, sampler applies sRGB
+        //     → linear on read → output ≈ srgbToLinear(0.502) ≈ 0.215
+        // If the two paths produce the same value, F1 has regressed.
+        let width = 4, height = 4
+        let pb = try makeFilledBGRAPixelBuffer(width: width, height: height, gray: 128)
+
+        let perceptualTex = try loader.makeTexture(from: pb, colorSpace: .perceptual)
+        let linearTex     = try loader.makeTexture(from: pb, colorSpace: .linear)
+
+        // Identity pipeline (ExposureFilter at 0 short-circuits).
+        let perceptualOut = try runIdentityPipeline(source: perceptualTex)
+        let linearOut     = try runIdentityPipeline(source: linearTex)
+
+        let pp = try readRgba16First(perceptualOut)
+        let pl = try readRgba16First(linearOut)
+
+        XCTAssertEqual(
+            pp.r, 0.502, accuracy: 0.01,
+            "Perceptual: raw byte 128 should pass through as ~0.502 (unorm)"
+        )
+        XCTAssertEqual(
+            pl.r, 0.215, accuracy: 0.02,
+            "Linear: byte 128 is gamma-0.5, sRGB-linearized ≈ 0.215"
+        )
+        XCTAssertGreaterThan(
+            abs(pp.r - pl.r), 0.2,
+            "Linear and perceptual CVPixelBuffer paths must produce visibly different shader-side values"
+        )
+    }
+
+    private func makeFilledBGRAPixelBuffer(
+        width: Int, height: Int, gray: UInt8
+    ) throws -> CVPixelBuffer {
+        var pb: CVPixelBuffer?
+        let attrs: [String: Any] = [
+            kCVPixelBufferMetalCompatibilityKey as String: true,
+            kCVPixelBufferIOSurfacePropertiesKey as String: [:] as CFDictionary,
+        ]
+        let status = CVPixelBufferCreate(
+            kCFAllocatorDefault, width, height,
+            kCVPixelFormatType_32BGRA,
+            attrs as CFDictionary, &pb
+        )
+        XCTAssertEqual(status, kCVReturnSuccess)
+        let buffer = try XCTUnwrap(pb)
+
+        CVPixelBufferLockBaseAddress(buffer, [])
+        let bytesPerRow = CVPixelBufferGetBytesPerRow(buffer)
+        let base = CVPixelBufferGetBaseAddress(buffer)
+        let ptr = try XCTUnwrap(base).assumingMemoryBound(to: UInt8.self)
+        for y in 0..<height {
+            for x in 0..<width {
+                let offset = y * bytesPerRow + x * 4
+                ptr[offset + 0] = gray   // B
+                ptr[offset + 1] = gray   // G
+                ptr[offset + 2] = gray   // R
+                ptr[offset + 3] = 255    // A
+            }
+        }
+        CVPixelBufferUnlockBaseAddress(buffer, [])
+        return buffer
+    }
+
+    private func runIdentityPipeline(source: MTLTexture) throws -> MTLTexture {
+        guard let d = Device.tryShared else { throw XCTSkip("Metal device required") }
+        let pipeline = Pipeline(
+            input: .texture(source),
+            steps: [.single(ExposureFilter(exposure: 0))],
+            optimizer: FilterGraphOptimizer(),
+            intermediatePixelFormat: .rgba16Float,
+            device: d,
+            textureLoader: loader,
+            psoCache: PipelineStateCache(device: d),
+            uniformPool: UniformBufferPool(device: d, capacity: 2, bufferSize: 256),
+            samplerCache: SamplerCache(device: d),
+            texturePool: TexturePool(device: d, maxBytes: 8 * 1024 * 1024),
+            commandBufferPool: CommandBufferPool(device: d, maxInFlight: 2)
+        )
+        return try pipeline.outputSync()
+    }
+
+    private func readRgba16First(_ texture: MTLTexture) throws -> (r: Float, g: Float, b: Float) {
+        guard let d = Device.tryShared?.metalDevice else { throw XCTSkip("Metal device required") }
+        let desc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: texture.pixelFormat,
+            width: texture.width, height: texture.height, mipmapped: false
+        )
+        desc.usage = [.shaderRead, .shaderWrite]
+        desc.storageMode = .shared
+        let staging = try XCTUnwrap(d.makeTexture(descriptor: desc))
+        let cb = try XCTUnwrap(d.makeCommandQueue()?.makeCommandBuffer())
+        try BlitDispatcher.copy(source: texture, destination: staging, commandBuffer: cb)
+        cb.commit()
+        cb.waitUntilCompleted()
+
+        var raw = [UInt16](repeating: 0, count: 4)
+        raw.withUnsafeMutableBytes { bytes in
+            staging.getBytes(
+                bytes.baseAddress!,
+                bytesPerRow: texture.width * 8,
+                from: MTLRegionMake2D(0, 0, 1, 1),
+                mipmapLevel: 0
+            )
+        }
+        return (
+            r: Float(Float16(bitPattern: raw[0])),
+            g: Float(Float16(bitPattern: raw[1])),
+            b: Float(Float16(bitPattern: raw[2]))
+        )
     }
 
     func testCVPixelBufferUnsupportedFormatThrows() throws {
@@ -443,7 +592,7 @@ final class TextureLoaderTests: XCTestCase {
         let pb = try XCTUnwrap(pixelBuffer)
 
         do {
-            _ = try loader.makeTexture(from: pb)
+            _ = try loader.makeTexture(from: pb, colorSpace: .perceptual)
             XCTFail("Expected throw")
         } catch PipelineError.texture(.pixelFormatUnsupported) {
             // Expected.

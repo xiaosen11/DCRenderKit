@@ -148,12 +148,28 @@ public final class TextureLoader: @unchecked Sendable {
     /// multi-plane (used by camera capture in some formats) will be added
     /// when video-capture workflows need it.
     ///
+    /// ## Color space handling
+    ///
+    /// `colorSpace` drives the resulting texture's pixel format exactly
+    /// like the CGImage path. Camera CVPixelBuffers from AVFoundation
+    /// always contain sRGB-gamma-encoded bytes (32BGRA standard encoding),
+    /// so in `.linear` mode we return a `.bgra8Unorm_srgb`-formatted
+    /// view of the same memory — the GPU sampler then linearizes on read.
+    /// In `.perceptual` mode we return a `.bgra8Unorm` view so the bytes
+    /// flow through unchanged (Harbeth / DigiCam parity).
+    ///
+    /// Before this parameter existed, the camera path silently used
+    /// `.bgra8Unorm` regardless of SDK color space, which in `.linear`
+    /// mode had filters doing linear-space math on gamma-encoded inputs
+    /// — the same filter would produce different results on a CGImage
+    /// vs. a CVPixelBuffer of the same scene.
+    ///
     /// - Parameters:
     ///   - pixelBuffer: The source buffer. Must have
     ///     `kCVPixelFormatType_32BGRA`.
-    ///   - pixelFormat: Metal pixel format to map into; defaults to
-    ///     `.bgra8Unorm`. Consumers needing linear-space work should
-    ///     bundle a separate sRGB→linear conversion step.
+    ///   - colorSpace: SDK color-space mode; selects whether the
+    ///     resulting texture is marked sRGB-encoded (so shader reads
+    ///     auto-linearize) or stays raw.
     /// - Returns: A zero-copy `MTLTexture` backed by the same memory as
     ///   `pixelBuffer`. The texture is valid as long as the pixel buffer
     ///   is retained.
@@ -161,7 +177,7 @@ public final class TextureLoader: @unchecked Sendable {
     ///   Core Video failure; `.pixelFormatUnsupported` for non-BGRA input.
     public func makeTexture(
         from pixelBuffer: CVPixelBuffer,
-        pixelFormat: MTLPixelFormat = .bgra8Unorm
+        colorSpace: DCRColorSpace = DCRenderKit.defaultColorSpace
     ) throws -> MTLTexture {
         let format = CVPixelBufferGetPixelFormatType(pixelBuffer)
         guard format == kCVPixelFormatType_32BGRA else {
@@ -174,6 +190,9 @@ public final class TextureLoader: @unchecked Sendable {
         let cache = try ensureCache()
         let width = CVPixelBufferGetWidth(pixelBuffer)
         let height = CVPixelBufferGetHeight(pixelBuffer)
+
+        let pixelFormat: MTLPixelFormat =
+            colorSpace.loaderShouldLinearize ? .bgra8Unorm_srgb : .bgra8Unorm
 
         var cvMetalTexture: CVMetalTexture?
         let status = CVMetalTextureCacheCreateTextureFromImage(
