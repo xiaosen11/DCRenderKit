@@ -440,7 +440,19 @@ slider 激活）。248 tests 全绿。
 ### 8.1 Autonomous — 我独立可做（~12h）
 
 - [ ] **A.1 pow(,2.2) 换真 sRGB 曲线**（IEC 61966-2-1 分段式）。6-7 个 .metal helper 替换 + parity 测试 tolerance 调整（从 0.05→~0.02）
-- [ ] **A.2 Tier 2 magic number 全部 FIXME 注释** + origin 追溯尝试（HS 窗口端点、× 0.35/× 0.50、EV_RANGE=4.25、`135` 金字塔锚、p=0.012/0.019、× 1.6 锐化等）
+- [ ] **A.2 Tier 2 magic number 全部 FIXME 注释** + origin 追溯尝试。完整清单：
+  - HS: smoothstep 窗口 `[0.25, 0.85]` / `[0.15, 0.75]`
+  - HS: product compression `× 0.35 highlight`、`× 0.50 shadow`
+  - HS / Clarity: guided filter `ε = 0.01 / 0.005`, `p = 0.012 / 0.019`
+  - HS / Clarity: ratio clamp `[0.3, 3.0]`、saturation compensation `clamp(0.8, 1.3)`
+  - Clarity: product compression `× 1.5 positive`、`× 0.7 negative`
+  - SoftGlow: `log2(shortSide / 135)` 金字塔深度锚
+  - SoftGlow: `× 0.35 strength` 压缩
+  - Sharpen: `× 1.6` product compression
+  - WhiteBalance: warm target `(0.93, 0.54, 0.0)`、Kelvin 斜率 `0.0004 / 0.00006`、Q 轴 clamp `× 0.5226 × 0.1`
+  - Exposure: `EV_RANGE = 4.25`、Reinhard white point × `0.95`
+  - FilmGrain: 压缩 `× 0.144`
+  - CCD: 步骤顺序 "CA → saturation → noise → sharpen"、CA `caMaxOffset`、锐化 `× 0.96 (60% of Sharpen)`
 - [ ] **A.3 FilmGrain sin-trick 4K pattern 验证**。构造 4096×4096 uniform patch，dump 输出观察有无网格/条纹。如有 → 换 PCG hash 或 Wyvill hash
 - [ ] **A.4 CCD 步骤顺序文献溯源**（"CA → sat → noise → sharpen" 是否有 sensor 物理依据）。找到 → 加 citation；找不到 → 声明 "artistic choice, not sensor simulation"
 - [ ] **A.5 PortraitBlur 代码审 + F2 根因调查**。读 implementation + shader + mask pipeline。找到失效原因。（与 color space 独立）
@@ -491,10 +503,15 @@ slider 激活）。248 tests 全绿。
 
 ### 8.5 需要用户决策 (B)
 
-- [ ] **B.1 Tier 3 纯拟合替换**是否接受 slider 手感变化？（Contrast 换 log-space、Blacks 换 Filmic toe、Exposure-neg 换 Reinhard-mirror、Vibrance 换 CIELAB）
-- [ ] **B.2 EV_RANGE=4.25** 保留 Harbeth parity 还是对齐 Lightroom 标准？
+- [ ] **B.1 Tier 3 纯拟合替换**是否接受 slider 手感变化？具体替换候选：
+  - **Contrast**: 当前 cubic pivot `y = x + k·x·(1-x)·(x-pivot)` → 候选 log-space 线性（= linear 空间的 power curve 锚 pivot）`y = pivot·(x/pivot)^slope`（DaVinci Resolve primary contrast 数学形式）
+  - **Blacks**: 当前 `y = x·(1 + k·(1-x)^a)` → 候选 Filmic toe function（Blender Filmic / AgX 的 toe 公式）
+  - **Exposure 负向**: 当前复合 `A·x^γ + B·x` → 候选 "负 EV offset + 阴影 toe"（对称于正向 Reinhard 架构）或 inverse Reinhard
+  - **Vibrance**: 当前 `max - avg` 色度代理 `× -3.0` → 候选 CIELAB C* = √(a²+b²) 作为饱和度代理（CIE 1976 标准）
+- [ ] **B.2 EV_RANGE=4.25** 保留 Harbeth parity 还是对齐 Lightroom 标准（Lightroom 典型 ±5 EV）？
 - [ ] **B.3 Saturation/Vibrance 在 linear 下的微偏**是否接受？
 - [ ] **B.4 真 sRGB 曲线引入后，既有 parity 测试 tolerance 从 0.05 调到 0.02** 可接受？
+- [ ] **B.5 Harbeth port 后的算法"业界通用"声明可信度**：若 §8.4 发现 2+ 个是过去 Claude 合成的 pseudo-consensus，是否全量重新调研 7 个？
 
 ### 8.6 需要用户数据 (C)
 
@@ -514,6 +531,56 @@ slider 激活）。248 tests 全绿。
 - **规则**：`.claude/rules/testing.md`（测试严谨性）+ `.claude/rules/engineering-judgment.md`（方法论，新加）
 - **本 plan**：本文件 §8
 - **memory**：`~/.claude/projects/.../memory/project_dcrenderkit.md`
+
+### 8.10 超出当前审计 scope 的未来阶段项（不要忘）
+
+以下是"商用级开源 SDK"目标所需但**不属于当前 rigor audit**，在 §8.1–8.6
+完成后应单独规划：
+
+**Phase 2 性能与稳定性**：
+- [ ] 性能 benchmark（当前未量化；4K 典型链 ~0.2ms/filter 是预测不是实测）
+- [ ] 内存 profile（TexturePool 行为、峰值占用）
+- [ ] 真机功耗（GPU utilization、散热）
+- [ ] 视频管线（per-frame 场景，当前 SDK 未跑过）
+
+**Phase 2 平台覆盖**：
+- [ ] macOS 路径验证（当前所有测试在 macOS 跑但 Demo 只在 iOS 跑）
+- [ ] Catalyst 兼容性未测
+- [ ] tvOS / visionOS 未规划
+
+**Phase 2 开源发布**：
+- [ ] README（中英双语）
+- [ ] CONTRIBUTING.md
+- [ ] CODE_OF_CONDUCT.md
+- [ ] CHANGELOG.md + SemVer 起跳
+- [ ] DocC 文档生成
+- [ ] LICENSE 明确（已选 MIT）
+- [ ] Package.swift 最终化（当前 dev，需要冻结 API）
+- [ ] GitHub Actions CI（swift test + swift build warnings-as-errors）
+- [ ] 发布 0.1.0-dev → 0.1.0 决策
+
+**Phase 2 API 稳定性**：
+- [ ] 所有 public API 标 `@available` 版本号
+- [ ] 内部类型改为 `internal` 严格（当前部分混乱）
+- [ ] 弃用标记机制（`@deprecated` 用于后续重命名）
+
+**Phase 2 Harbeth port 完整性**：
+- [ ] 每个 filter 对照原 Harbeth 源码，验证 "ported from" 注释声明与实际
+      行为一致（当前是 spot-check，不是系统性审）
+- [ ] 遗漏 feature 清单（Harbeth 有而 DCRenderKit 没有的）
+- [ ] DigiCam 迁移影响评估（哪些 DigiCam 代码要改）
+
+---
+
+### 8.11 核心未解决的**方法论**问题
+
+已经识别但没有解法：
+
+- **循环验证问题**：当前所有 `.linear` parity 测试用 pow(,2.2) 做 shader 和断言两端，只证明"我跟我自己一致"。**突破需要 §8.6 C 的真 Lightroom linear 导出**。没有它，所有"matches Lightroom" 声明永远未验证。
+- **闭源竞品验证**：Lightroom / Capture One / DaVinci 的具体公式不可见。我们只能用开源等价物（darktable / RawTherapee / Blender Filmic）作参考。接受"商用级 ≠ 像素级匹配 Adobe"的定义。
+- **Magic number origin 失传**：Harbeth 的拟合脚本已丢失。即使 §8.1 A.2 加了 FIXME 注释，真正要"溯源"必须**重新建立 fitting pipeline**，这是 §8.6 C 的延伸工作。
+
+---
 
 ### 8.9 Resume prompt（压缩后启动用）
 
