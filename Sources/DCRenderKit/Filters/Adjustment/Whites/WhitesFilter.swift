@@ -42,12 +42,24 @@ public struct WhitesFilter: FilterProtocol {
     /// Whites slider. Range `-100 ... +100`.
     public var whites: Float
 
-    /// Image mean luma in display space, `[0, 1]`.
+    /// Image mean luma in the pipeline's current color space, `[0, 1]`.
+    /// In `.perceptual` mode this is the gamma-space mean; in `.linear`
+    /// mode the linear-space mean. The filter converts to gamma space
+    /// internally for LUT lookup (the anchors are gamma-space fits).
     public var lumaMean: Float
 
-    public init(whites: Float = 0, lumaMean: Float = 0.5) {
+    /// Color space the input texture is in. Drives the shader's
+    /// linearize/delinearize wrapping and the LUT anchor domain.
+    public var colorSpace: DCRColorSpace
+
+    public init(
+        whites: Float = 0,
+        lumaMean: Float = 0.5,
+        colorSpace: DCRColorSpace = DCRenderKit.defaultColorSpace
+    ) {
         self.whites = whites
         self.lumaMean = lumaMean
+        self.colorSpace = colorSpace
     }
 
     public var modifier: ModifierEnum {
@@ -55,11 +67,19 @@ public struct WhitesFilter: FilterProtocol {
     }
 
     public var uniforms: FilterUniforms {
-        let (k100, b) = Self.lutInterpolate(lumaMean: lumaMean)
+        // Convert lumaMean to gamma-space before LUT lookup: the anchors
+        // (0.2877 / 0.3995 / 0.6004) are gamma-space Lightroom scene
+        // means. In .linear mode the caller passes a linear-space mean,
+        // so we un-linearize before interpolating.
+        let gammaLumaMean: Float = colorSpace == .linear
+            ? powf(max(lumaMean, 0), 1.0 / 2.2)
+            : lumaMean
+        let (k100, b) = Self.lutInterpolate(lumaMean: gammaLumaMean)
         return FilterUniforms(WhitesUniforms(
             whites: whites / 100.0,
             k100: k100,
-            b: b
+            b: b,
+            isLinearSpace: colorSpace == .linear ? 1 : 0
         ))
     }
 
@@ -98,4 +118,6 @@ struct WhitesUniforms {
     var k100: Float
     /// Interpolated highlight-concentration exponent for positive branch.
     var b: Float
+    /// 1 = linear input; 0 = gamma-encoded.
+    var isLinearSpace: UInt32
 }

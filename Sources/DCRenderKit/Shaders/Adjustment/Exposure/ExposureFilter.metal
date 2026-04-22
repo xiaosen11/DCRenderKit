@@ -102,9 +102,11 @@ kernel void DCRExposureFilter(
         }
     } else if (exposure < -0.001f) {
         // Negative: display-space compound curve.
-        //   f(x) = A * pow(x, gamma) + B * x
-        // Interpolated so identity at exposure = 0 (A=0, gamma=1, B=1).
-        // Applied to the input as-is regardless of color space.
+        //   f(x) = A · x^γ + B · x
+        // fit against Lightroom JPEG exports in gamma space. Interpolated
+        // so identity at exposure = 0 (A=0, γ=1, B=1). In .linear mode we
+        // wrap with linearize/delinearize so the fit hits the same tonal
+        // location — visual parity with perceptual mode.
         const float absExp = fabs(exposure);
         const float A = 0.270f * absExp;
         const float gamma = 1.0f + absExp * 2.49f;
@@ -112,8 +114,10 @@ kernel void DCRExposureFilter(
 
         for (int ch = 0; ch < 3; ch++) {
             float c = float(color[ch]);
-            float result = A * pow(max(c, 0.0f), gamma) + B * c;
-            color[ch] = half(clamp(result, 0.0f, 1.0f));
+            float c_gamma = isLinear ? dcr_linearToPerceptualApprox(c) : c;
+            float result = A * pow(max(c_gamma, 0.0f), gamma) + B * c_gamma;
+            float clamped = clamp(result, 0.0f, 1.0f);
+            color[ch] = half(isLinear ? dcr_perceptualToLinearApprox(clamped) : clamped);
         }
     }
 

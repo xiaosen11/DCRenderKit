@@ -86,10 +86,12 @@ final class Bgra8UnormSourceContractTests: XCTestCase {
     }
 
     func testContrastOnBgra8UnormSourceProducesFloatOutput() throws {
+        // Perceptual branch for derivation stability (see ContrastFilter
+        // tests for the full derivation of 0.181 from the cubic pivot).
         let source = try makeBgra8UnormUniform(r: 0.3, g: 0.3, b: 0.3)
         let output = try runPipeline(
             source: source,
-            steps: [.single(ContrastFilter(contrast: 100, lumaMean: 0.5))]
+            steps: [.single(ContrastFilter(contrast: 100, lumaMean: 0.5, colorSpace: .perceptual))]
         )
         XCTAssertEqual(output.pixelFormat, .rgba16Float)
         let p = try readRgbaFloat(output)[4][4]

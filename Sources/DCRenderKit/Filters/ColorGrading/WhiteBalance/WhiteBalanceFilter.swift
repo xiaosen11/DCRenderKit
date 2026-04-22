@@ -49,9 +49,19 @@ public struct WhiteBalanceFilter: FilterProtocol {
     /// shifts magenta.
     public var tint: Float
 
-    public init(temperature: Float = 5000, tint: Float = 0) {
+    /// Color space the input texture is in. The YIQ mix + warm-overlay
+    /// fit was done in gamma space; in `.linear` mode the shader wraps
+    /// the fit with linearize/delinearize for visual parity.
+    public var colorSpace: DCRColorSpace
+
+    public init(
+        temperature: Float = 5000,
+        tint: Float = 0,
+        colorSpace: DCRColorSpace = DCRenderKit.defaultColorSpace
+    ) {
         self.temperature = temperature
         self.tint = tint
+        self.colorSpace = colorSpace
     }
 
     public var modifier: ModifierEnum {
@@ -61,7 +71,8 @@ public struct WhiteBalanceFilter: FilterProtocol {
     public var uniforms: FilterUniforms {
         FilterUniforms(WhiteBalanceUniforms(
             temperature: temperature,
-            tint: tint
+            tint: tint,
+            isLinearSpace: colorSpace == .linear ? 1 : 0
         ))
     }
 
@@ -74,4 +85,6 @@ struct WhiteBalanceUniforms {
     var temperature: Float
     /// Tint in `-200 ... +200`. Shader clamps.
     var tint: Float
+    /// 1 = linear input; 0 = gamma-encoded.
+    var isLinearSpace: UInt32
 }

@@ -38,13 +38,26 @@ public struct ContrastFilter: FilterProtocol {
     /// Contrast slider. Range `-100 ... +100`.
     public var contrast: Float
 
-    /// Image mean luma in display space, `[0, 1]`. Shader clamps to
+    /// Image mean luma, `[0, 1]`, in the pipeline's current color space.
+    /// In `.perceptual` mode pass the gamma-space mean; in `.linear` mode
+    /// pass the linear-space mean — the shader converts to the gamma-space
+    /// anchor domain that the k / pivot fit was done in. Shader clamps to
     /// `[0.05, 0.95]` for numerical stability.
     public var lumaMean: Float
 
-    public init(contrast: Float = 0, lumaMean: Float = 0.5) {
+    /// Color space the pipeline is operating in. Drives the shader's
+    /// linearize/delinearize wrapping so the fitted k/pivot curve hits
+    /// the same tonal location regardless of pipeline color space.
+    public var colorSpace: DCRColorSpace
+
+    public init(
+        contrast: Float = 0,
+        lumaMean: Float = 0.5,
+        colorSpace: DCRColorSpace = DCRenderKit.defaultColorSpace
+    ) {
         self.contrast = contrast
         self.lumaMean = lumaMean
+        self.colorSpace = colorSpace
     }
 
     public var modifier: ModifierEnum {
@@ -54,7 +67,8 @@ public struct ContrastFilter: FilterProtocol {
     public var uniforms: FilterUniforms {
         FilterUniforms(ContrastUniforms(
             contrast: contrast / 100.0,
-            lumaMean: lumaMean
+            lumaMean: lumaMean,
+            isLinearSpace: colorSpace == .linear ? 1 : 0
         ))
     }
 
@@ -67,4 +81,6 @@ struct ContrastUniforms {
     var contrast: Float
     /// `0 ... 1`.
     var lumaMean: Float
+    /// 1 = linear input; 0 = gamma-encoded.
+    var isLinearSpace: UInt32
 }

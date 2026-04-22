@@ -191,41 +191,48 @@ final class ToneAdjustmentFilterTests: XCTestCase {
         )
     }
 
-    func testExposureLinearAndPerceptualAgreeOnNegativeBranch() throws {
-        // Negative branch has no color-space conversion inside the shader
-        // (compound `A·x^γ + B·x` is applied to input as-is), so the two
-        // modes must produce identical output.
-        let source = try makeToneSource(red: 0.5, green: 0.5, blue: 0.5)
-        let perceptualOut = try runSingle(
-            source, filter: ExposureFilter(exposure: -100, colorSpace: .perceptual)
+    func testExposureNegativeBranchLinearMatchesPerceptualViaGammaWrap() throws {
+        // After the negative branch also wraps with linearize/delinearize,
+        // the two modes produce numerically different outputs but the
+        // gamma-space equivalents match (visual parity).
+        let gammaX: Float = 0.7
+        let sourceGamma = try makeToneSource(red: gammaX, green: gammaX, blue: gammaX)
+        let sourceLinear = try makeToneSource(
+            red: powf(gammaX, 2.2), green: powf(gammaX, 2.2), blue: powf(gammaX, 2.2)
         )
-        let linearOut = try runSingle(
-            source, filter: ExposureFilter(exposure: -100, colorSpace: .linear)
+        let pOut = try runSingle(
+            sourceGamma, filter: ExposureFilter(exposure: -100, colorSpace: .perceptual)
         )
-        let pp = try readToneTexture(perceptualOut)[4][4]
-        let pl = try readToneTexture(linearOut)[4][4]
-        XCTAssertEqual(pp.r, pl.r, accuracy: 0.005)
+        let lOut = try runSingle(
+            sourceLinear, filter: ExposureFilter(exposure: -100, colorSpace: .linear)
+        )
+        let yp = try readToneTexture(pOut)[4][4].r
+        let yl = try readToneTexture(lOut)[4][4].r
+        let ylAsGamma = powf(max(yl, 0), 1.0 / 2.2)
+        XCTAssertEqual(
+            ylAsGamma, yp, accuracy: 0.03,
+            "Exposure negative linear → re-gamma must match perceptual; got \(ylAsGamma) vs \(yp)"
+        )
     }
 
     func testExposureNegativeFullSliderOnMidHigh() throws {
-        // Derivation for slider=-100, c=0.7:
-        //   exposure = -0.7, absExp = 0.7
+        // Perceptual branch. slider=-100, c=0.7:
         //   A = 0.189, γ = 2.743, B = 0.391
-        //   0.7^2.743 ≈ 0.376
-        //   result = 0.189 * 0.376 + 0.391 * 0.7 ≈ 0.0710 + 0.2737 ≈ 0.345
+        //   result ≈ 0.189·0.376 + 0.391·0.7 ≈ 0.345
         let source = try makeToneSource(red: 0.7, green: 0.7, blue: 0.7)
-        let output = try runSingle(source, filter: ExposureFilter(exposure: -100))
+        let output = try runSingle(
+            source, filter: ExposureFilter(exposure: -100, colorSpace: .perceptual)
+        )
         let p = try readToneTexture(output)[4][4]
         XCTAssertEqual(p.r, 0.345, accuracy: 0.02)
     }
 
     func testExposureNegativeFullSliderOnShadow() throws {
-        // Derivation for slider=-100, c=0.3:
-        //   A=0.189, γ=2.743, B=0.391
-        //   0.3^2.743 ≈ 0.0368
-        //   result = 0.189 * 0.0368 + 0.391 * 0.3 ≈ 0.007 + 0.1173 ≈ 0.124
+        // Perceptual branch. slider=-100, c=0.3: result ≈ 0.124.
         let source = try makeToneSource(red: 0.3, green: 0.3, blue: 0.3)
-        let output = try runSingle(source, filter: ExposureFilter(exposure: -100))
+        let output = try runSingle(
+            source, filter: ExposureFilter(exposure: -100, colorSpace: .perceptual)
+        )
         let p = try readToneTexture(output)[4][4]
         XCTAssertEqual(p.r, 0.124, accuracy: 0.02)
     }
@@ -286,41 +293,39 @@ final class ToneAdjustmentFilterTests: XCTestCase {
     }
 
     func testContrastPositiveFullSliderDarkensBelowPivot() throws {
-        // Derivation for contrast=+100, lumaMean=0.5, x=0.3:
+        // Perceptual-branch derivation for contrast=+100, lumaMean=0.5, x=0.3:
         //   k     = (-0.356·0.5 + 2.289)·1 = 2.111
         //   pivot = 0.381·0.5 + 0.377 = 0.5675
-        //   y = 0.3 + 2.111·0.3·0.7·(0.3 - 0.5675)
-        //     = 0.3 + 2.111·0.21·(-0.2675)
-        //     = 0.3 - 0.1186
-        //     ≈ 0.181
+        //   y = 0.3 + 2.111·0.3·0.7·(0.3 - 0.5675) ≈ 0.181
         let source = try makeToneSource(red: 0.3, green: 0.3, blue: 0.3)
-        let output = try runSingle(source, filter: ContrastFilter(contrast: 100, lumaMean: 0.5))
+        let output = try runSingle(
+            source,
+            filter: ContrastFilter(contrast: 100, lumaMean: 0.5, colorSpace: .perceptual)
+        )
         let p = try readToneTexture(output)[4][4]
         XCTAssertEqual(p.r, 0.181, accuracy: 0.02)
     }
 
     func testContrastPositiveFullSliderBrightensAbovePivot() throws {
-        // Derivation for contrast=+100, lumaMean=0.5, x=0.7:
-        //   k=2.111, pivot=0.5675
-        //   y = 0.7 + 2.111·0.7·0.3·(0.7 - 0.5675)
-        //     = 0.7 + 2.111·0.21·0.1325
-        //     = 0.7 + 0.0587
-        //     ≈ 0.759
+        // Perceptual branch. k=2.111, pivot=0.5675.
+        //   y = 0.7 + 2.111·0.7·0.3·(0.7 - 0.5675) ≈ 0.759
         let source = try makeToneSource(red: 0.7, green: 0.7, blue: 0.7)
-        let output = try runSingle(source, filter: ContrastFilter(contrast: 100, lumaMean: 0.5))
+        let output = try runSingle(
+            source,
+            filter: ContrastFilter(contrast: 100, lumaMean: 0.5, colorSpace: .perceptual)
+        )
         let p = try readToneTexture(output)[4][4]
         XCTAssertEqual(p.r, 0.759, accuracy: 0.02)
     }
 
     func testContrastNegativeFullSliderLiftsDarkTowardPivot() throws {
-        // Derivation for contrast=-100, lumaMean=0.5, x=0.3:
-        //   k=-2.111, pivot=0.5675
-        //   y = 0.3 + (-2.111)·0.3·0.7·(0.3 - 0.5675)
-        //     = 0.3 + (-2.111)·0.21·(-0.2675)
-        //     = 0.3 + 0.1186
-        //     ≈ 0.419
+        // Perceptual branch. k=-2.111, pivot=0.5675.
+        //   y = 0.3 + (-2.111)·0.3·0.7·(0.3 - 0.5675) ≈ 0.419
         let source = try makeToneSource(red: 0.3, green: 0.3, blue: 0.3)
-        let output = try runSingle(source, filter: ContrastFilter(contrast: -100, lumaMean: 0.5))
+        let output = try runSingle(
+            source,
+            filter: ContrastFilter(contrast: -100, lumaMean: 0.5, colorSpace: .perceptual)
+        )
         let p = try readToneTexture(output)[4][4]
         XCTAssertEqual(p.r, 0.419, accuracy: 0.02)
     }
@@ -328,27 +333,70 @@ final class ToneAdjustmentFilterTests: XCTestCase {
     func testContrastLumaMeanClampingAtExtremes() throws {
         // lumaMean is clamped to [0.05, 0.95] inside the shader. Feeding
         // 0.01 must produce the same output as 0.05 (and 0.99 == 0.95).
+        // Perceptual branch to avoid the linear-to-gamma lumaMean warp.
         let source = try makeToneSource(red: 0.5, green: 0.5, blue: 0.5)
 
         let clampedLow = try runSingle(
-            source, filter: ContrastFilter(contrast: 100, lumaMean: 0.01)
+            source,
+            filter: ContrastFilter(contrast: 100, lumaMean: 0.01, colorSpace: .perceptual)
         )
         let lowEdge = try runSingle(
-            source, filter: ContrastFilter(contrast: 100, lumaMean: 0.05)
+            source,
+            filter: ContrastFilter(contrast: 100, lumaMean: 0.05, colorSpace: .perceptual)
         )
         let lowP = try readToneTexture(clampedLow)[4][4]
         let edgeP = try readToneTexture(lowEdge)[4][4]
         XCTAssertEqual(lowP.r, edgeP.r, accuracy: 1e-3, "lumaMean<0.05 must clamp to 0.05")
 
         let clampedHigh = try runSingle(
-            source, filter: ContrastFilter(contrast: 100, lumaMean: 0.99)
+            source,
+            filter: ContrastFilter(contrast: 100, lumaMean: 0.99, colorSpace: .perceptual)
         )
         let highEdge = try runSingle(
-            source, filter: ContrastFilter(contrast: 100, lumaMean: 0.95)
+            source,
+            filter: ContrastFilter(contrast: 100, lumaMean: 0.95, colorSpace: .perceptual)
         )
         let highP = try readToneTexture(clampedHigh)[4][4]
         let highEdgeP = try readToneTexture(highEdge)[4][4]
         XCTAssertEqual(highP.r, highEdgeP.r, accuracy: 1e-3, "lumaMean>0.95 must clamp to 0.95")
+    }
+
+    func testContrastLinearModeMatchesPerceptualViaGammaWrap() throws {
+        // Parity proof: linear mode's pow-wrap must produce output that
+        // equals the perceptual output when both are mapped to the same
+        // color space. Pipeline: feed a gamma value x_g. In perceptual
+        // mode the output is y_p (gamma). In linear mode the input is
+        // srgbToLinear(x_g) and the output is y_l (linear). The invariant
+        // is: linearToGamma(y_l) ≈ y_p, i.e. pow(y_l, 1/2.2) ≈ y_p.
+        //
+        // Because our `makeToneSource` just writes bit patterns with no
+        // color-space tagging, we can simulate both paths by feeding the
+        // same numerical source to each filter instance, and comparing
+        // pow(y_l, 1/2.2) to y_p directly. A tight match proves the
+        // linear branch's wrap is correctly derived.
+        let gammaX: Float = 0.5
+        let sourceGamma = try makeToneSource(red: gammaX, green: gammaX, blue: gammaX)
+        let sourceLinear = try makeToneSource(
+            red: powf(gammaX, 2.2), green: powf(gammaX, 2.2), blue: powf(gammaX, 2.2)
+        )
+
+        let perceptualOut = try runSingle(
+            sourceGamma,
+            filter: ContrastFilter(contrast: 100, lumaMean: 0.5, colorSpace: .perceptual)
+        )
+        let linearOut = try runSingle(
+            sourceLinear,
+            filter: ContrastFilter(contrast: 100, lumaMean: powf(0.5, 2.2), colorSpace: .linear)
+        )
+
+        let yp = try readToneTexture(perceptualOut)[4][4].r
+        let yl = try readToneTexture(linearOut)[4][4].r
+        let ylAsGamma = powf(max(yl, 0), 1.0 / 2.2)
+
+        XCTAssertEqual(
+            ylAsGamma, yp, accuracy: 0.03,
+            "Linear-mode output re-gammad must match perceptual output (parity). got linear≈\(ylAsGamma), perceptual=\(yp)"
+        )
     }
 
     // MARK: - Whites
@@ -372,42 +420,98 @@ final class ToneAdjustmentFilterTests: XCTestCase {
     }
 
     func testWhitesPositiveFullSliderLowLumaMeanAnchor() throws {
-        // Derivation for whites=+100, lumaMean=0.2877 (anchor 0), x=0.7:
-        //   k100=2.3215, b=1.3881, t=1.0, k=2.3215
-        //   (1-0.7)^1.3881 = 0.3^1.3881 = exp(1.3881·ln(0.3)) = exp(-1.672) ≈ 0.188
-        //   y = 0.7 · (1 + 2.3215·0.7·0.188) = 0.7 · 1.3056 ≈ 0.914
+        // Perceptual branch, LUT anchor 0 (lumaMean=0.2877, k100=2.3215, b=1.3881).
+        //   (0.3)^1.3881 ≈ 0.188
+        //   y = 0.7·(1 + 2.3215·0.7·0.188) ≈ 0.914
         let source = try makeToneSource(red: 0.7, green: 0.7, blue: 0.7)
-        let output = try runSingle(source, filter: WhitesFilter(whites: 100, lumaMean: 0.2877))
+        let output = try runSingle(
+            source,
+            filter: WhitesFilter(whites: 100, lumaMean: 0.2877, colorSpace: .perceptual)
+        )
         let p = try readToneTexture(output)[4][4]
         XCTAssertEqual(p.r, 0.914, accuracy: 0.03)
     }
 
     func testWhitesPositiveFullSliderBrightRegion() throws {
-        // Derivation for whites=+100, lumaMean=0.2877, x=0.9:
-        //   k=2.3215, b=1.3881
-        //   (0.1)^1.3881 = exp(1.3881·ln(0.1)) = exp(-3.196) ≈ 0.0408
-        //   y = 0.9 · (1 + 2.3215·0.9·0.0408) = 0.9 · 1.0853 ≈ 0.977
+        // Perceptual branch. (0.1)^1.3881 ≈ 0.0408; y ≈ 0.977.
         let source = try makeToneSource(red: 0.9, green: 0.9, blue: 0.9)
-        let output = try runSingle(source, filter: WhitesFilter(whites: 100, lumaMean: 0.2877))
+        let output = try runSingle(
+            source,
+            filter: WhitesFilter(whites: 100, lumaMean: 0.2877, colorSpace: .perceptual)
+        )
         let p = try readToneTexture(output)[4][4]
         XCTAssertEqual(p.r, 0.977, accuracy: 0.02)
     }
 
     func testWhitesNegativeFullSliderGrayDarkens() throws {
-        // Derivation for whites=-100, uniform gray x=0.7:
-        //   t = 1.0, k_neg = -0.1995
-        //   luma = 0.7 (Rec.709 on uniform = input)
-        //   0.7^1.4628 = exp(1.4628·ln(0.7)) = exp(-0.522) ≈ 0.593
-        //   0.3^0.2094 = exp(0.2094·ln(0.3)) = exp(-0.252) ≈ 0.777
-        //   y = 0.7·(1 + (-0.1995)·0.593·0.777)
-        //     = 0.7·(1 - 0.0919) = 0.7·0.9081 ≈ 0.636
-        //   ratio = y / luma = 0.908 → each channel = 0.7·0.908 = 0.636
+        // Perceptual branch. Luma-ratio on uniform 0.7 gray:
+        //   0.7^1.4628 ≈ 0.593; 0.3^0.2094 ≈ 0.777
+        //   y ≈ 0.7·(1 - 0.0919) ≈ 0.636
         let source = try makeToneSource(red: 0.7, green: 0.7, blue: 0.7)
-        let output = try runSingle(source, filter: WhitesFilter(whites: -100, lumaMean: 0.5))
+        let output = try runSingle(
+            source,
+            filter: WhitesFilter(whites: -100, lumaMean: 0.5, colorSpace: .perceptual)
+        )
         let p = try readToneTexture(output)[4][4]
         XCTAssertEqual(p.r, 0.636, accuracy: 0.02)
         XCTAssertEqual(p.g, 0.636, accuracy: 0.02)
         XCTAssertEqual(p.b, 0.636, accuracy: 0.02)
+    }
+
+    func testWhitesLinearPositiveMatchesPerceptualViaGammaWrap() throws {
+        // Parity for Whites positive branch. lumaMean in perceptual mode
+        // is a gamma-space value (0.2877); the equivalent in linear mode
+        // is srgbToLinear(0.2877) = 0.2877^2.2 ≈ 0.0665.
+        let gammaX: Float = 0.7
+        let gammaLumaMean: Float = 0.2877
+        let sourceGamma = try makeToneSource(red: gammaX, green: gammaX, blue: gammaX)
+        let sourceLinear = try makeToneSource(
+            red: powf(gammaX, 2.2), green: powf(gammaX, 2.2), blue: powf(gammaX, 2.2)
+        )
+        let linearLumaMean = powf(gammaLumaMean, 2.2)
+
+        let pOut = try runSingle(
+            sourceGamma,
+            filter: WhitesFilter(whites: 100, lumaMean: gammaLumaMean, colorSpace: .perceptual)
+        )
+        let lOut = try runSingle(
+            sourceLinear,
+            filter: WhitesFilter(whites: 100, lumaMean: linearLumaMean, colorSpace: .linear)
+        )
+        let yp = try readToneTexture(pOut)[4][4].r
+        let yl = try readToneTexture(lOut)[4][4].r
+        let ylAsGamma = powf(max(yl, 0), 1.0 / 2.2)
+
+        XCTAssertEqual(
+            ylAsGamma, yp, accuracy: 0.03,
+            "Whites positive linear → re-gamma must match perceptual; got \(ylAsGamma) vs \(yp)"
+        )
+    }
+
+    func testWhitesLinearNegativeMatchesPerceptualViaGammaWrap() throws {
+        // Parity for negative branch too.
+        let gammaX: Float = 0.7
+        let sourceGamma = try makeToneSource(red: gammaX, green: gammaX, blue: gammaX)
+        let sourceLinear = try makeToneSource(
+            red: powf(gammaX, 2.2), green: powf(gammaX, 2.2), blue: powf(gammaX, 2.2)
+        )
+
+        let pOut = try runSingle(
+            sourceGamma,
+            filter: WhitesFilter(whites: -100, lumaMean: 0.5, colorSpace: .perceptual)
+        )
+        let lOut = try runSingle(
+            sourceLinear,
+            filter: WhitesFilter(whites: -100, lumaMean: powf(0.5, 2.2), colorSpace: .linear)
+        )
+        let yp = try readToneTexture(pOut)[4][4].r
+        let yl = try readToneTexture(lOut)[4][4].r
+        let ylAsGamma = powf(max(yl, 0), 1.0 / 2.2)
+
+        XCTAssertEqual(
+            ylAsGamma, yp, accuracy: 0.03,
+            "Whites negative linear → re-gamma must match perceptual; got \(ylAsGamma) vs \(yp)"
+        )
     }
 
     func testWhitesLUTInterpolationEdgeClamp() {
@@ -439,33 +543,33 @@ final class ToneAdjustmentFilterTests: XCTestCase {
     }
 
     func testBlacksPositiveFullSliderOnDeepShadow() throws {
-        // Derivation for blacks=+100, x=0.1:
-        //   k=0.6312, a=2.1857
-        //   (1-0.1)^2.1857 = 0.9^2.1857 = exp(2.1857·ln(0.9)) = exp(-0.230) ≈ 0.795
-        //   y = 0.1·(1 + 0.6312·0.795) = 0.1·1.5018 ≈ 0.150
+        // Perceptual-branch derivation. k=0.6312, a=2.1857.
+        //   (0.9)^2.1857 ≈ 0.795
+        //   y = 0.1·(1 + 0.6312·0.795) ≈ 0.150
         let source = try makeToneSource(red: 0.1, green: 0.1, blue: 0.1)
-        let output = try runSingle(source, filter: BlacksFilter(blacks: 100))
+        let output = try runSingle(
+            source, filter: BlacksFilter(blacks: 100, colorSpace: .perceptual)
+        )
         let p = try readToneTexture(output)[4][4]
         XCTAssertEqual(p.r, 0.150, accuracy: 0.02)
     }
 
     func testBlacksPositiveFullSliderOnMidtone() throws {
-        // Derivation for blacks=+100, x=0.5:
-        //   (0.5)^2.1857 = exp(2.1857·ln(0.5)) = exp(-1.515) ≈ 0.220
-        //   y = 0.5·(1 + 0.6312·0.220) = 0.5·1.1389 ≈ 0.569
+        // Perceptual branch. (0.5)^2.1857 ≈ 0.220; y ≈ 0.569.
         let source = try makeToneSource(red: 0.5, green: 0.5, blue: 0.5)
-        let output = try runSingle(source, filter: BlacksFilter(blacks: 100))
+        let output = try runSingle(
+            source, filter: BlacksFilter(blacks: 100, colorSpace: .perceptual)
+        )
         let p = try readToneTexture(output)[4][4]
         XCTAssertEqual(p.r, 0.569, accuracy: 0.02)
     }
 
     func testBlacksNegativeFullSliderCrushesShadow() throws {
-        // Derivation for blacks=-100, x=0.2:
-        //   k=-1.5515, a=2.3236
-        //   (0.8)^2.3236 = exp(2.3236·ln(0.8)) = exp(-0.518) ≈ 0.596
-        //   y = 0.2·(1 + (-1.5515)·0.596) = 0.2·(1 - 0.924) = 0.2·0.076 ≈ 0.015
+        // Perceptual branch. k=-1.5515, a=2.3236. y ≈ 0.015.
         let source = try makeToneSource(red: 0.2, green: 0.2, blue: 0.2)
-        let output = try runSingle(source, filter: BlacksFilter(blacks: -100))
+        let output = try runSingle(
+            source, filter: BlacksFilter(blacks: -100, colorSpace: .perceptual)
+        )
         let p = try readToneTexture(output)[4][4]
         XCTAssertEqual(p.r, 0.015, accuracy: 0.02)
     }
@@ -473,10 +577,14 @@ final class ToneAdjustmentFilterTests: XCTestCase {
     func testBlacksMonotonicInSliderForShadow() throws {
         // For a fixed shadow input (0.15), sweeping slider -100 → +100 must
         // produce strictly monotonic output (crush → identity → lift).
+        // Perceptual to preserve derived monotonic behaviour (linear wrap
+        // preserves monotonicity too, but this test anchors perceptual).
         let source = try makeToneSource(red: 0.15, green: 0.15, blue: 0.15)
         var last: Float = -.infinity
         for slider: Float in [-100, -50, 0, 50, 100] {
-            let output = try runSingle(source, filter: BlacksFilter(blacks: slider))
+            let output = try runSingle(
+                source, filter: BlacksFilter(blacks: slider, colorSpace: .perceptual)
+            )
             let p = try readToneTexture(output)[4][4]
             XCTAssertGreaterThan(
                 p.r, last,
@@ -484,6 +592,31 @@ final class ToneAdjustmentFilterTests: XCTestCase {
             )
             last = p.r
         }
+    }
+
+    func testBlacksLinearModeMatchesPerceptualViaGammaWrap() throws {
+        // Parity proof for Blacks linear wrap. See Contrast's parity test
+        // for the methodology — same approach here.
+        let gammaX: Float = 0.15
+        let sourceGamma = try makeToneSource(red: gammaX, green: gammaX, blue: gammaX)
+        let sourceLinear = try makeToneSource(
+            red: powf(gammaX, 2.2), green: powf(gammaX, 2.2), blue: powf(gammaX, 2.2)
+        )
+
+        let perceptualOut = try runSingle(
+            sourceGamma, filter: BlacksFilter(blacks: 100, colorSpace: .perceptual)
+        )
+        let linearOut = try runSingle(
+            sourceLinear, filter: BlacksFilter(blacks: 100, colorSpace: .linear)
+        )
+        let yp = try readToneTexture(perceptualOut)[4][4].r
+        let yl = try readToneTexture(linearOut)[4][4].r
+        let ylAsGamma = powf(max(yl, 0), 1.0 / 2.2)
+
+        XCTAssertEqual(
+            ylAsGamma, yp, accuracy: 0.03,
+            "Blacks linear → re-gamma must match perceptual output; got linear→gamma=\(ylAsGamma), perceptual=\(yp)"
+        )
     }
 
     // MARK: - Fuse group registration

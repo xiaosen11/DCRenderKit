@@ -32,8 +32,17 @@ public struct BlacksFilter: FilterProtocol {
     /// Blacks slider. Range `-100 ... +100`.
     public var blacks: Float
 
-    public init(blacks: Float = 0) {
+    /// Color space the input texture is in. Drives the shader's
+    /// linearize/delinearize wrapping so the fit (done in gamma space)
+    /// hits the same tonal location in linear mode.
+    public var colorSpace: DCRColorSpace
+
+    public init(
+        blacks: Float = 0,
+        colorSpace: DCRColorSpace = DCRenderKit.defaultColorSpace
+    ) {
         self.blacks = blacks
+        self.colorSpace = colorSpace
     }
 
     public var modifier: ModifierEnum {
@@ -41,7 +50,10 @@ public struct BlacksFilter: FilterProtocol {
     }
 
     public var uniforms: FilterUniforms {
-        FilterUniforms(BlacksUniforms(blacks: blacks / 100.0))
+        FilterUniforms(BlacksUniforms(
+            blacks: blacks / 100.0,
+            isLinearSpace: colorSpace == .linear ? 1 : 0
+        ))
     }
 
     public static var fuseGroup: FuseGroup? { .toneAdjustment }
@@ -51,4 +63,6 @@ public struct BlacksFilter: FilterProtocol {
 struct BlacksUniforms {
     /// `-1.0 ... +1.0`.
     var blacks: Float
+    /// 1 = linear input; 0 = gamma-encoded.
+    var isLinearSpace: UInt32
 }

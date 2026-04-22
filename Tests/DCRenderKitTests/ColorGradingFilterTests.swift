@@ -123,7 +123,7 @@ final class ColorGradingFilterTests: XCTestCase {
         let source = try makeCGSource(red: 0.5, green: 0.5, blue: 0.5)
         let output = try runSingle(
             source,
-            filter: WhiteBalanceFilter(temperature: 5000, tint: 0)
+            filter: WhiteBalanceFilter(temperature: 5000, tint: 0, colorSpace: .perceptual)
         )
         let p = try readCGTexture(output)[4][4]
         // Neutral 5000K + zero tint is exact identity (tempCoef = 0, tint Q shift = 0).
@@ -136,7 +136,7 @@ final class ColorGradingFilterTests: XCTestCase {
         let source = try makeCGSource(red: 0.5, green: 0.5, blue: 0.5)
         let output = try runSingle(
             source,
-            filter: WhiteBalanceFilter(temperature: 7000, tint: 0)
+            filter: WhiteBalanceFilter(temperature: 7000, tint: 0, colorSpace: .perceptual)
         )
         let p = try readCGTexture(output)[4][4]
         assertFinite(p)
@@ -148,7 +148,7 @@ final class ColorGradingFilterTests: XCTestCase {
         let source = try makeCGSource(red: 0.5, green: 0.5, blue: 0.5)
         let output = try runSingle(
             source,
-            filter: WhiteBalanceFilter(temperature: 4200, tint: 0)
+            filter: WhiteBalanceFilter(temperature: 4200, tint: 0, colorSpace: .perceptual)
         )
         let p = try readCGTexture(output)[4][4]
         assertFinite(p)
@@ -161,11 +161,11 @@ final class ColorGradingFilterTests: XCTestCase {
         let source = try makeCGSource(red: 0.5, green: 0.5, blue: 0.5)
         let neutral = try runSingle(
             source,
-            filter: WhiteBalanceFilter(temperature: 5000, tint: 0)
+            filter: WhiteBalanceFilter(temperature: 5000, tint: 0, colorSpace: .perceptual)
         )
         let magenta = try runSingle(
             source,
-            filter: WhiteBalanceFilter(temperature: 5000, tint: 200)
+            filter: WhiteBalanceFilter(temperature: 5000, tint: 200, colorSpace: .perceptual)
         )
         let pn = try readCGTexture(neutral)[4][4]
         let pm = try readCGTexture(magenta)[4][4]
@@ -176,6 +176,31 @@ final class ColorGradingFilterTests: XCTestCase {
         let lumaN = 0.299 * pn.r + 0.587 * pn.g + 0.114 * pn.b
         let lumaM = 0.299 * pm.r + 0.587 * pm.g + 0.114 * pm.b
         XCTAssertEqual(lumaN, lumaM, accuracy: 0.02)
+    }
+
+    func testWhiteBalanceLinearMatchesPerceptualViaGammaWrap() throws {
+        // Parity proof for WhiteBalance linear wrap.
+        let gammaX: Float = 0.5
+        let sourceGamma = try makeCGSource(red: gammaX, green: gammaX, blue: gammaX)
+        let sourceLinear = try makeCGSource(
+            red: powf(gammaX, 2.2), green: powf(gammaX, 2.2), blue: powf(gammaX, 2.2)
+        )
+        let pOut = try runSingle(
+            sourceGamma,
+            filter: WhiteBalanceFilter(temperature: 7000, tint: 150, colorSpace: .perceptual)
+        )
+        let lOut = try runSingle(
+            sourceLinear,
+            filter: WhiteBalanceFilter(temperature: 7000, tint: 150, colorSpace: .linear)
+        )
+        let pp = try readCGTexture(pOut)[4][4]
+        let pl = try readCGTexture(lOut)[4][4]
+        let plGammaR = powf(max(pl.r, 0), 1.0 / 2.2)
+        let plGammaG = powf(max(pl.g, 0), 1.0 / 2.2)
+        let plGammaB = powf(max(pl.b, 0), 1.0 / 2.2)
+        XCTAssertEqual(plGammaR, pp.r, accuracy: 0.03, "R parity")
+        XCTAssertEqual(plGammaG, pp.g, accuracy: 0.03, "G parity")
+        XCTAssertEqual(plGammaB, pp.b, accuracy: 0.03, "B parity")
     }
 
     func testWhiteBalanceFuseGroupIsColorGrading() {
