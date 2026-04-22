@@ -6,6 +6,25 @@
 #include <metal_stdlib>
 using namespace metal;
 
+// ── sin-trick pattern verification ──
+//
+// The noise hash `fract(sin(dot(pos, (12.9898, 78.233))) · 43758.5453)` is
+// a classic shadertoy hash that degrades numerically at large `pos` values
+// (Float32 precision of `sin` degrades past ~2¹⁶ argument magnitude).
+// Historically this produces visible diagonal / cross banding on 4K inputs.
+//
+// Verified clean at 4K on 2026-04-22 (§8.1 A.3):
+//   - Test: FilmGrainPatternTests.test4KFilmGrainSinTrickRowColumnBanding
+//   - Method: 4096×4096 uniform 0.5-gray patch, density=1, grainSize=1
+//   - row-mean stddev and column-mean stddev both within 1.1× the i.i.d.
+//     noise baseline (σ/√N where σ ≈ 0.036 output delta stddev, N=4096)
+//   - No periodic structure detectable by 1D first-moment analysis
+//
+// If future GPU architecture changes or new regression testing exposes
+// banding at higher resolutions, replace the sin-trick hash with PCG
+// (Jarzynski & Olano 2020) or Wyvill hash (GPU Pro 5). Keep the symmetric
+// SoftLight blend pipeline (which is independent of hash choice).
+
 // Symmetric SoftLight. Derivation: Photoshop's SoftLight uses sqrt() for
 // the lighten half and `base*(1-base)` for the darken half, which is not
 // symmetric around 0.5 blend and biases mean brightness under noise. By
