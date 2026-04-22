@@ -38,15 +38,43 @@ struct CCDUniforms {
 // noise (sensor noise floor), then luma-channel sharpening sampled from
 // original (so noise and CA edges aren't re-hardened), then strength mix.
 //
-// FIXME(§8.1 A.4 + §8.4 Audit.4): The "CA → saturation → noise → sharpen"
-// ordering is an inherited artistic choice from the Harbeth lineage.
-// The rationales given above ("CA happens on raw sensor", "pre-noise so
-// grain doesn't get saturated") are plausible but not literature-grounded
-// — real CCD/CMOS signal chains differ (demosaic → WB → gamma → noise
-// shaping). This ordering is a look-design decision, not sensor-physical
-// simulation. Validation: findings-and-plan.md §8.1 A.4 (溯源 attempt)
-// and §8.4 Audit.4 (industry reference: sensor noise modeling papers,
-// VSCO-style filter technical docs where public).
+// Step-ordering provenance (§8.1 A.4 verified 2026-04-22, fetched URL):
+//
+// The "CA → saturation → noise → sharpen" ordering is an **artistic look
+// choice**, not a faithful reproduction of a real CCD/CMOS signal chain.
+// Confirmed by comparing against openISP reference implementation at
+// https://github.com/cruxopen/openISP whose documented ISP pipeline is:
+//
+//   Bayer:  DPC → BLC → LSC → Anti-aliasing NR → AWB → Bayer-NR
+//   RGB:    Demosaic → Gamma → CCM → ColorSpaceConversion
+//   YUV:    Luma/Chroma NR → Edge Enhancement → False-color → Hue/Sat
+//
+// Real ISPs:
+//   - **Correct** chromatic aberration at lens/optical level (pre-sensor),
+//     not as a mid-pipeline mutation — DCRenderKit instead **adds** CA
+//     as an aesthetic "vintage" signature
+//   - Apply noise **reduction** at two stages (Bayer + YUV) — DCRenderKit
+//     **adds** synthetic grain as a "CCD sensor readout" aesthetic
+//   - Place saturation/hue at the very **end** of YUV processing —
+//     DCRenderKit puts saturation early (before noise injection) so the
+//     grain doesn't get saturation-boosted
+//   - Edge Enhancement (sharpening) happens **before** saturation in YUV,
+//     not after — DCRenderKit reverses this to keep grain from being
+//     re-sharpened
+//
+// Conclusion: the "CA → sat → noise → sharp" order is a coherent
+// **aesthetic narrative** ("lens aberration → color look → sensor
+// grain → post-processing polish") but it is NOT a sensor-physical
+// simulation. The filter name "CCD" refers to the vintage-camera look,
+// not to a simulation of CCD sensor physics. All downstream documents
+// and SwiftDoc should describe this as an artistic effect, not a
+// sensor model.
+//
+// Sources (fetched 2026-04-22):
+// - github.com/cruxopen/openISP — documented open-source ISP pipeline
+// - (§8.4 Audit.4 TODO: cross-reference VSCO / RNI / similar film-sim
+//   app technical disclosures when available; none publicly documented
+//   at time of verification)
 
 kernel void DCRCCDFilter(
     texture2d<half, access::write> output [[texture(0)]],

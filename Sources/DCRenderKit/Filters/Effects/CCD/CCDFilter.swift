@@ -9,8 +9,15 @@
 
 import Foundation
 
-/// Early-era CCD sensor emulation as a single compute kernel with four
-/// subordinate effects. Fusing the four subordinate effects eliminates
+/// Early-era CCD camera **aesthetic** — not a sensor-physical simulation.
+/// Fuses chromatic aberration, saturation boost, digital noise, and
+/// sharpening into one compute kernel to produce a vintage-CCD look.
+///
+/// The step order (CA → saturation → noise → sharpen) is an artistic
+/// narrative ("lens aberration → color tint → sensor grain → post
+/// polish"), not the real ISP pipeline — see
+/// `Shaders/Effects/CCD/CCDFilter.metal` for the comparison against
+/// `github.com/cruxopen/openISP`. Fusing the four effects eliminates
 /// three intermediate texture passes vs. running them as separate
 /// `FilterProtocol` stages.
 ///
