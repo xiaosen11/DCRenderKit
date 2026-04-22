@@ -405,6 +405,15 @@ P4 + Phase C/D 后的补充审计。已修复的 fitted filter wrap（5个）+ L
 - **产品决策不是工程决策**
 - 建议 Phase 2 重新采集 LR 参考数据时一起做
 
+### 7.5 F3 修复完成（2026-04-22，commit 2907b2b）
+
+HighlightShadow + Clarity 的 baseLuma 空间错位已修：shader 中 baseLuma 在
+smoothstep 前转 gamma；apply 步骤的 ratio-multiply 也整体 gamma-wrap。
+加 3 个 parity 测试 + F3 直接回归测试（linear 0.133 midtone 必须被 HS
+slider 激活）。248 tests 全绿。
+
+---
+
 ### 7.4 `.linear` 漂移的正确认知（两次迭代后的最终版）
 
 三次说法：
@@ -416,3 +425,108 @@ P4 + Phase C/D 后的补充审计。已修复的 fitted filter wrap（5个）+ L
 真机反馈是关键的反证据：**如果审计判据无法解释"SoftGlow 反而更好"，判据就是错的**。修正后的判据可以统一解释所有真机观察。
 
 **当前状态**：最大的两处（5 个 fitted + LUT3D）已 wrap，**其余见 7.2** 列为 Phase 2/3 tech debt。`.linear` 默认仍可用，但用户真机体验会有以上 table 描述的偏移。
+
+---
+
+## 8. 彻底严谨化 audit plan（2026-04-22，上下文告急前持久化）
+
+基于 session 里三层反复收敛的教训：
+1. "激进/保守"不是质量判据（`.claude/rules/engineering-judgment.md §1`）
+2. 横切关注点改动必然迭代（§2）
+3. 替换算法前问历史（LLF 教训，§3）
+4. 过去 Claude 推荐的"业界通用做法"可能是合成，需 fetched URL 重新验证（§4）
+5. Perception-based 不是不可形式化的挡箭牌（§5）
+
+### 8.1 Autonomous — 我独立可做（~12h）
+
+- [ ] **A.1 pow(,2.2) 换真 sRGB 曲线**（IEC 61966-2-1 分段式）。6-7 个 .metal helper 替换 + parity 测试 tolerance 调整（从 0.05→~0.02）
+- [ ] **A.2 Tier 2 magic number 全部 FIXME 注释** + origin 追溯尝试（HS 窗口端点、× 0.35/× 0.50、EV_RANGE=4.25、`135` 金字塔锚、p=0.012/0.019、× 1.6 锐化等）
+- [ ] **A.3 FilmGrain sin-trick 4K pattern 验证**。构造 4096×4096 uniform patch，dump 输出观察有无网格/条纹。如有 → 换 PCG hash 或 Wyvill hash
+- [ ] **A.4 CCD 步骤顺序文献溯源**（"CA → sat → noise → sharpen" 是否有 sensor 物理依据）。找到 → 加 citation；找不到 → 声明 "artistic choice, not sensor simulation"
+- [ ] **A.5 PortraitBlur 代码审 + F2 根因调查**。读 implementation + shader + mask pipeline。找到失效原因。（与 color space 独立）
+- [ ] **A.6 测试 tolerance 错误预算显式建模**。pow(,2.2) ≈ 2% / op，2 ops 累积 ~4%；Float16 量化 ~0.2%；guided filter 噪声 ~2%。加 rules/testing.md 条目
+- [ ] **A.7 Vibrance 换 CIELAB C* chroma**。改 shader，实现 `chroma = √(a² + b²)` 作为饱和代理。有标准公式可查（CIE 1976）
+
+### 8.2 Contract formalization — Perception-based filter 行为契约（~12-18h）
+
+每个 filter 写 1-2 页 contract + 构造合成测试图：
+
+- [ ] **A+.1 HighlightShadow 契约**：
+  - halo-free: edge-step 过冲 < Δ%（待测定 Δ）
+  - Weber-linear slider: effect magnitude 在 log-luma 单位线性
+  - Zone 系统 targeting: Zone VII+ (gamma ≥0.7) = full highlight 响应
+  - midtone 稳定性: baseLuma ∈ [0.4, 0.6] 下 slider 效果 < 5% 满量程
+- [ ] **A+.2 Clarity 契约**：
+  - spectral band 选择性: FFT 在 [ω_lo, ω_hi] 放大 >6dB，两侧衰减 >6dB
+  - edge preservation: 无 Gibbs ringing（主瓣外 sidelobe < 3dB）
+  - dynamic range preservation: max-min 在 ε 内
+- [ ] **A+.3 SoftGlow 契约**：
+  - additivity: bloom(a+b) = bloom(a) + bloom(b) 在 linear 空间
+  - threshold-gated energy: ∫bloom = K·∫{I > threshold}·I·p(I)
+
+### 8.3 Contract verification — 按契约测实现（~15-25h）
+
+**每个 filter 进入 A++ 前先问 Design History**（见 rules §3）：
+
+- [ ] 我进入 filter X 的契约化前，先 dump 我回忆的历史 → 你补充/更正 → 才决定 patch vs document vs 重写
+- [ ] **A++.1 HighlightShadow**：测 halo 实际边界；LLF 历史文档化（尝试过 N 次失败，guided filter 作为 trade-off）
+- [ ] **A++.2 Clarity**：FFT 验证 spectral selectivity
+- [ ] **A++.3 SoftGlow**：光学 additivity + 能量守恒测
+
+### 8.4 Industry claim audit — 重新调研 7 个算法选择（~10-15h）
+
+**硬约束**：只能引 fetched URL / DOI，不能引记忆（`rules/engineering-judgment.md §4`）。
+
+- [ ] **Audit.1 SoftGlow Dual Kawase** — 查 Unity HDRP / Unreal Bloom / darktable / Blender 实际实现
+- [ ] **Audit.2 Clarity guided filter residual** — 查 Adobe ACR / darktable / RawTherapee
+- [ ] **Audit.3 Vibrance max-avg proxy** — 查 Adobe / Capture One / darktable
+- [ ] **Audit.4 CCD 步骤顺序** — 查 sensor noise modeling 论文 / VSCO 类 filter 实现参考
+- [ ] **Audit.5 HighlightShadow guided filter** — LLF 不可得情况下的主流替代
+- [ ] **Audit.6 FilmGrain sin-trick** — 是 shadertoy 做法还是主流胶片模拟（AgX / darktable / VSCO）
+- [ ] **Audit.7 Tone curve families** — Contrast/Blacks/Exposure-neg 是否有 OCIO / ACES / Filmic Blender / AgX 的标准曲线可参考
+
+**建议顺序**：先 3 个（SoftGlow / Clarity / Vibrance） → 看 LLM-fabrication rate
+- 2+ 个是编的 → 全审
+- 基本靠谱 → 按需
+
+### 8.5 需要用户决策 (B)
+
+- [ ] **B.1 Tier 3 纯拟合替换**是否接受 slider 手感变化？（Contrast 换 log-space、Blacks 换 Filmic toe、Exposure-neg 换 Reinhard-mirror、Vibrance 换 CIELAB）
+- [ ] **B.2 EV_RANGE=4.25** 保留 Harbeth parity 还是对齐 Lightroom 标准？
+- [ ] **B.3 Saturation/Vibrance 在 linear 下的微偏**是否接受？
+- [ ] **B.4 真 sRGB 曲线引入后，既有 parity 测试 tolerance 从 0.05 调到 0.02** 可接受？
+
+### 8.6 需要用户数据 (C)
+
+- [ ] **C.1** 1-2 张 RAW 或 16-bit TIFF 源图 + 每个 slider ±50/±100 的 Lightroom 导出图。导出配置：**Linear 色彩空间，16-bit TIFF**（需要 LR 的 ProPhoto Linear 或 AdobeRGB Linear）
+- [ ] **C.2** 完成 C.1 后：用真 Lightroom ground truth 对比 DCRenderKit 的 linear pipeline，**重拟合** 5 个 fitted filter（取代继承的 Harbeth 常数）
+
+### 8.7 本质上限的诚实改写（原 D → D'）
+
+"本质上限" 是我之前用来逃避的说法。每项实际**都可形式化**，只是我需要做功：
+
+- "HS/Clarity 层次感" → §8.2 contract
+- "bloom 更物理正确" → §8.3 A++.3 additivity 测
+- "商用级" → 定义 PSNR/SSIM vs reference 在 Δ 内（要求 §8.5 产品决策）
+
+### 8.8 当前持久化在哪
+
+- **规则**：`.claude/rules/testing.md`（测试严谨性）+ `.claude/rules/engineering-judgment.md`（方法论，新加）
+- **本 plan**：本文件 §8
+- **memory**：`~/.claude/projects/.../memory/project_dcrenderkit.md`
+
+### 8.9 Resume prompt（压缩后启动用）
+
+```
+继续 DCRenderKit 的彻底严谨化 audit。先读：
+1. DCRenderKit/docs/findings-and-plan.md §8（完整 TODO）
+2. DCRenderKit/.claude/rules/engineering-judgment.md（6 条方法论）
+3. DCRenderKit/.claude/rules/testing.md（测试严谨性）
+4. ~/.claude/projects/.../memory/project_dcrenderkit.md
+
+当前完成：P0–P4、Phase A、Phase C（5 fitted wrap）、LUT3D wrap、F3 fix
+(HS+Clarity)。248 tests 全绿。
+
+下一步按 §8.1 A.1–A.7 顺序，或 §8.4 Audit.1–.3 先启动。
+进入 §8.3 前先问 Design History（§8.3 顶规则）。
+```
