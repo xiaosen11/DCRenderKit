@@ -129,7 +129,10 @@ final class PhotoEditModel {
             let dt = (CACurrentMediaTime() - start) * 1000
             lastExportMs = dt
 
-            let image = try await Self.cgImageFromTexture(output)
+            let image = try await Self.cgImageFromTexture(
+                output,
+                sourceColorSpace: DCRenderKit.defaultColorSpace
+            )
             try await saveToPhotos(cgImage: image)
 
             exportState = .success(durationMs: dt)
@@ -146,7 +149,10 @@ final class PhotoEditModel {
 
     // MARK: - Private helpers
 
-    private static func cgImageFromTexture(_ texture: MTLTexture) async throws -> CGImage {
+    private static func cgImageFromTexture(
+        _ texture: MTLTexture,
+        sourceColorSpace: DCRColorSpace
+    ) async throws -> CGImage {
         // Read back rgba16Float pixels → convert to 8-bit for JPEG.
         let w = texture.width
         let h = texture.height
@@ -182,14 +188,34 @@ final class PhotoEditModel {
             )
         }
         var u8 = [UInt8](repeating: 0, count: w * h * 4)
+        let needsGammaEncode = (sourceColorSpace == .linear)
         for i in 0..<(w * h) {
-            let r = Float(Float16(bitPattern: half[i * 4 + 0]))
-            let g = Float(Float16(bitPattern: half[i * 4 + 1]))
-            let b = Float(Float16(bitPattern: half[i * 4 + 2]))
+            var r = Float(Float16(bitPattern: half[i * 4 + 0]))
+            var g = Float(Float16(bitPattern: half[i * 4 + 1]))
+            var b = Float(Float16(bitPattern: half[i * 4 + 2]))
             let a = Float(Float16(bitPattern: half[i * 4 + 3]))
-            u8[i * 4 + 0] = UInt8(max(0, min(1, r)) * 255)
-            u8[i * 4 + 1] = UInt8(max(0, min(1, g)) * 255)
-            u8[i * 4 + 2] = UInt8(max(0, min(1, b)) * 255)
+            r = max(0, min(1, r))
+            g = max(0, min(1, g))
+            b = max(0, min(1, b))
+            // CGColorSpaceCreateDeviceRGB() is sRGB on iOS; it expects
+            // gamma-encoded bytes. In `.linear` mode the pipeline output
+            // carries linear-light values, so we must gamma-encode
+            // before packing to UInt8. Skipping this step causes Photos
+            // to decode the linear value as if it were sRGB-encoded and
+            // darken midtones by roughly pow(0.5, 2.2) / 0.5 ≈ 2.3x.
+            //
+            // `pow(x, 1/2.2)` mirrors the SDK's internal linear↔perceptual
+            // approximation; when findings-and-plan.md §8.1 A.1 swaps
+            // the SDK to a piecewise sRGB curve, update this site in
+            // lockstep to keep the round-trip symmetric.
+            if needsGammaEncode {
+                r = pow(r, 1.0 / 2.2)
+                g = pow(g, 1.0 / 2.2)
+                b = pow(b, 1.0 / 2.2)
+            }
+            u8[i * 4 + 0] = UInt8(r * 255)
+            u8[i * 4 + 1] = UInt8(g * 255)
+            u8[i * 4 + 2] = UInt8(b * 255)
             u8[i * 4 + 3] = UInt8(max(0, min(1, a)) * 255)
         }
 
