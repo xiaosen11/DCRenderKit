@@ -331,3 +331,60 @@ public static let defaultColorSpace: DCRColorSpace = .perceptual
 如果 `.linear` 默认效果不如 perceptual：切回 `.perceptual` 默认，等 Phase 2 有时间再 refit 那 5 个参数化 filter。
 
 **不 block Phase 2 其他工作**。
+
+---
+
+## 7. 2026-04-22 audit: .linear 隐性漂移清单
+
+P4 + Phase C/D 后的补充审计。已修复的 fitted filter wrap（5个）+ LUT3D wrap 覆盖了**曲线类 + 色彩映射类**，但有若干 filter 的参数默认值 / 阈值 / 空间假设仍锚定 gamma 空间，`.linear` 下会有漂移——分级：
+
+### 7.1 已修复 (commit 24b9784 + 7c5b608)
+
+- Exposure（pos 原生 + neg wrap）
+- Contrast（wrap + lumaMean 转 gamma 做 pivot 查）
+- Whites（两分支 wrap + Swift LUT 转 gamma 查 anchor）
+- Blacks（wrap）
+- WhiteBalance（wrap 整个 YIQ→tint→warm-overlay pipeline）
+- LUT3D（wrap 输入输出，cube 在 gamma 空间查）
+
+### 7.2 未修复，但已知 `.linear` 漂移
+
+| Filter | 问题 | 严重度 | 修复思路 |
+|---|---|---|---|
+| **SoftGlow** | `threshold: 50` 用 0.5 做截断；linear 0.5 对应 gamma 0.73 的场景亮度 → "亮部"选择错位 | 明显 | shader 中 `if isLinearSpace: threshold = srgbToLinear(userThreshold)` |
+| **HighlightShadow** | baseLuma smoothstep 窗口 `[0.25, 0.85]` `[0.15, 0.75]` 是 gamma-空间锚 | **F3 根因之一** | 要么转换 baseLuma 到 gamma 再做窗口比较，要么把窗口端点转 linear |
+| **Clarity** | 同 HS，guided filter residual 基于 gamma 空间 base 公式推导 | 中 | 同 HS 处理 |
+| **FilmGrain** | grain 幅度固定值 ±X；linear 暗部 perceptual-louder ~4× | 中 | shader 中 amplitude *= sRGBToLinearDerivative(baseValue)（或做 per-pixel 调制） |
+| **CCD** | 含色彩调制 + 锐化 + 颗粒；颗粒部分同 FilmGrain | 中 | 同 FilmGrain |
+| **Saturation / Vibrance** | Rec.709 luma 在 linear 才"物理正确"；零饱和灰点在两空间不同 | **低，linear 更对** | 不需要"修"，但要文档化 "linear 模式下饱和感觉略不同" |
+| **Sharpen** | Laplacian 梯度在两空间幅度不等；锐化感觉轻 | 低 | 可 wrap，也可文档化 |
+| **NormalBlend** | alpha compositing 在 linear **才是数学正确** | **零漂移，linear 更对** | 无需改 |
+| **PortraitBlur** | 高斯模糊空间无关，mask 来自 Vision | 应零漂移 | F2 独立 bug |
+
+### 7.3 未修复的纯拟合 tech debt（原理派替代）
+
+三个 filter 当前用 MSE 选的经验公式：
+
+- **Contrast**: cubic pivot `y = x + k·x·(1-x)·(x-pivot)` — MSE=52.1 的优选
+- **Blacks**: `y = x·(1 + k·(1-x)^a)` — MSE=0.63 vs weighted-parab / power-law
+- **Exposure 负向**: 复合 `A·x^γ + B·x` — 非原理派（正向 Reinhard 是原理派）
+
+**原理派候选**（log-space / filmic 家族）：
+- **Contrast**: log-space 线性变换 = linear 空间的 power curve 锚在 pivot，`y = pivot·(x/pivot)^slope`。DaVinci Resolve primary contrast 的数学形式。
+- **Blacks**: Filmic toe function（有论文引用），或 gamma 参数化。
+- **Exposure 负向**: 负 EV offset + 阴影 toe（对称于正向 Reinhard 架构）。
+
+**为什么不立即替换**：
+- 所有 5 个 fitted filter 是**以 Lightroom 导出图为 ground truth** 拟的
+- 替换 = 换了套 UI 手感（"相同 slider 值看起来不一样"）
+- **产品决策不是工程决策**
+- 建议 Phase 2 重新采集 LR 参考数据时一起做
+
+### 7.4 `.linear` 隐性漂移的正确认知
+
+我原来的"其他 16 个 filter 不动、math 自动作用新空间"说法**半对半错**：
+
+- ✅ **shader 公式不需要改** — 数学形式在两空间都合法
+- ❌ **但若干 filter 的参数默认值 / 阈值 / 预设数据是 gamma-空间校准的** — `.linear` 下参数意义改变，需要要么 wrap 要么重新校准
+
+**当前状态**：最大的两处（5 个 fitted + LUT3D）已 wrap，**其余见 7.2** 列为 Phase 2/3 tech debt。`.linear` 默认仍可用，但用户真机体验会有以上 table 描述的偏移。
