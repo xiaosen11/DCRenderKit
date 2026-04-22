@@ -17,8 +17,11 @@ import Metal
 ///
 /// - ``perceptual``: values are sRGB-gamma encoded. Matches Harbeth's
 ///   historical behaviour and DigiCam's visual parity target: filters'
-///   curves were fit against Lightroom-exported JPEGs whose pixels are
-///   also gamma-encoded. Drawable presentation uses `.bgra8Unorm` — byte
+///   curves inherit fitted constants from the Harbeth lineage, originally
+///   tuned against gamma-space JPEG exports from a consumer photo-editing
+///   app (fitting pipeline lost; no pixel-level parity claim against any
+///   specific app — see findings-and-plan.md §8.6). Drawable presentation
+///   uses `.bgra8Unorm` — byte
 ///   values flow unchanged from the intermediate to the screen.
 ///
 /// - ``linear``: values represent linear scene light. Source textures are

@@ -14,7 +14,7 @@ using namespace metal;
 //
 // Negative: display-space A*pow(x,gamma) + B*x
 //   A*x^gamma gives dark-region contrast, B*x is the linear shoulder term
-//   that matches Lightroom's ACR3 S-curve lift.
+//   that matches the consumer-app reference's S-curve shoulder lift.
 //   A = 0.270, gamma = 3.49, B = 0.130 at slider = -1.
 //
 // Identity at exposure = 0 is exact (both branches gated by dead-zone).
@@ -41,8 +41,8 @@ using namespace metal;
 //     (`.bgra8Unorm_srgb`) will handle gamma encoding on final write.
 //
 // The negative branch's compound curve `A·x^γ + B·x` was fit against
-// Lightroom exports in display-space (perceptual) and is applied to
-// whatever numeric distribution the input carries. In `.linear` mode
+// gamma-space reference exports from a consumer photo-editing app and is
+// applied to whatever numeric distribution the input carries. In `.linear` mode
 // the curve hits a different portion of the effective tonal range —
 // the "feel" drifts vs. the DigiCam baseline, but the output stays
 // finite and in-gamut. Refit is a future-work item tracked in the
@@ -54,9 +54,9 @@ struct ExposureUniforms {
 };
 
 /// Approximate sRGB → linear. Cheap power-2.2 model; good enough for
-/// the product fit that targets Lightroom-exported JPEGs. For strict
-/// sRGB conformance the GPU's hardware sampler does a piecewise curve
-/// — we use that path in `.linear` mode instead of doing it here.
+/// the product fit that targets gamma-space JPEG reference exports. For
+/// strict sRGB conformance the GPU's hardware sampler does a piecewise
+/// curve — we use that path in `.linear` mode instead of doing it here.
 inline float dcr_perceptualToLinearApprox(float c) {
     return pow(max(c, 0.0f), 2.2f);
 }
@@ -103,8 +103,9 @@ kernel void DCRExposureFilter(
     } else if (exposure < -0.001f) {
         // Negative: display-space compound curve.
         //   f(x) = A · x^γ + B · x
-        // fit against Lightroom JPEG exports in gamma space. Interpolated
-        // so identity at exposure = 0 (A=0, γ=1, B=1). In .linear mode we
+        // fit against gamma-space JPEG exports from a consumer photo-editing
+        // app. Interpolated so identity at exposure = 0 (A=0, γ=1, B=1).
+        // In .linear mode we
         // wrap with linearize/delinearize so the fit hits the same tonal
         // location — visual parity with perceptual mode.
         const float absExp = fabs(exposure);

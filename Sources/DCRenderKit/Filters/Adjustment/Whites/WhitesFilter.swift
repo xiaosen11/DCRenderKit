@@ -68,8 +68,9 @@ public struct WhitesFilter: FilterProtocol {
 
     public var uniforms: FilterUniforms {
         // Convert lumaMean to gamma-space before LUT lookup: the anchors
-        // (0.2877 / 0.3995 / 0.6004) are gamma-space Lightroom scene
-        // means. In .linear mode the caller passes a linear-space mean,
+        // (0.2877 / 0.3995 / 0.6004) are gamma-space scene means from the
+        // consumer-app reference exports. In .linear mode the caller
+        // passes a linear-space mean,
         // so we un-linearize before interpolating.
         let gammaLumaMean: Float = colorSpace == .linear
             ? powf(max(lumaMean, 0), 1.0 / 2.2)
@@ -87,9 +88,10 @@ public struct WhitesFilter: FilterProtocol {
 
     // MARK: - LUT (positive side only)
 
-    // Three anchor scenes against Lightroom +100 ground truth. Values
-    // below are fit × 0.7 (product decision: slider ±100 uses 70% of raw
-    // magnitude to keep extreme feel within perceptual comfort).
+    // Three anchor scenes against the consumer-app reference's +100
+    // exports. Values below are fit × 0.7 (product decision: slider ±100
+    // uses 70% of raw magnitude to keep extreme feel within perceptual
+    // comfort).
     private static let lutMeans: [Float] = [0.2877, 0.3995, 0.6004]
     private static let lutK100:  [Float] = [2.3215, 5.4223, 0.6251]
     private static let lutB:     [Float] = [1.3881, 1.9729, 0.9875]

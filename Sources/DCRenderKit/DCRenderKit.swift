@@ -21,8 +21,12 @@
 // - `.perceptual`: Textures load as-is (sRGB-gamma encoded values),
 //   intermediates carry gamma floats, drawable uses `.bgra8Unorm`.
 //   This is the Harbeth / DigiCam parity mode — the product curves
-//   (Contrast / Whites / Blacks / WhiteBalance / Exposure) were fit
-//   against Lightroom-exported JPEGs in this space.
+//   (Contrast / Whites / Blacks / WhiteBalance / Exposure) inherit fitted
+//   constants from the Harbeth lineage, originally tuned against
+//   gamma-space JPEG exports from a consumer photo-editing app (fitting
+//   pipeline lost; no pixel-level parity claim against any specific app).
+//   See docs/findings-and-plan.md §8.6 for the Tier 2 spot-check
+//   validation roadmap.
 //
 // Switching requires a single line change to `DCRenderKit.defaultColorSpace`
 // + rebuild. No refit is required; parameter curves retain their

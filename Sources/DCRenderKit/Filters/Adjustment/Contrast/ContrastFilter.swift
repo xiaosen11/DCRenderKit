@@ -18,9 +18,10 @@ import Foundation
 ///   - `k = (-0.356 * lumaMean + 2.289) * contrast` (slope control)
 ///   - `pivot = 0.381 * lumaMean + 0.377` (crossover control)
 /// - Why cubic pivot: compared against sigmoid / piecewise-power / parabolic
-///   pivot families on 3 Lightroom-exported scenes (luma means 0.29 / 0.40 /
-///   0.60), the cubic pivot family produced the lowest cross-scene average
-///   MSE (≈ 52.1) with only 2 adaptive coefficients.
+///   pivot families on 3 reference scenes (gamma-space JPEG exports from a
+///   consumer photo-editing app, luma means 0.29 / 0.40 / 0.60), the cubic
+///   pivot family produced the lowest cross-scene average MSE (≈ 52.1)
+///   with only 2 adaptive coefficients.
 /// - Why adapt to lumaMean: bright scenes tolerate steeper slopes than dark
 ///   scenes before dark-region crush; a single fixed curve over-compresses
 ///   shadows on high-key content and blows highlights on low-key content.

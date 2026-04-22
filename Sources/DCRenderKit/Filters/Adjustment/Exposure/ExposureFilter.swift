@@ -17,14 +17,15 @@ import Foundation
 ///   - Reference: Reinhard et al., *Photographic Tone Reproduction for
 ///     Digital Images*, SIGGRAPH 2002
 ///   - Why Reinhard: preserves highlight rolloff rather than clipping,
-///     which matches Lightroom's exposure behavior on bright regions
+///     which matches the consumer-app reference's exposure behavior on
+///     bright regions
 ///   - Alternative considered: pure linear gain (too harsh, clips highlights
 ///     above +0.5 EV)
 /// - Negative direction: `A * x^gamma + B * x` in display space
 ///   - Why compound: a pure power curve under-compensated the dark tones
-///     compared to Lightroom's ACR3 S-curve shoulder; adding a linear term
-///     models the shoulder lift. MSE dropped 10.53 → 2.82 over three
-///     Lightroom-exported reference scenes.
+///     compared to the consumer-app reference's S-curve shoulder; adding
+///     a linear term models the shoulder lift. MSE dropped 10.53 → 2.82
+///     over three reference scenes exported in gamma space.
 ///
 /// ## Parameter range
 ///
@@ -42,7 +43,8 @@ public struct ExposureFilter: FilterProtocol {
     /// branch selection:
     ///   - ``DCRColorSpace/perceptual``: the shader applies an internal
     ///     `pow(,2.2)` linearize → Reinhard → `pow(,1/2.2)` de-linearize
-    ///     (matches the product fit against Lightroom-exported JPEGs).
+    ///     (matches the product fit against the consumer-app reference's
+    ///     gamma-space JPEG exports).
     ///   - ``DCRColorSpace/linear``: the input is already linear (either
     ///     the texture was loaded with `.SRGB: true` or upstream filters
     ///     produced linear values), so the shader skips the explicit

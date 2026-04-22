@@ -23,7 +23,8 @@ import Foundation
 ///     max-channel (saturating) when vibrance is positive, away from it
 ///     (desaturating) when negative.
 ///   - Factor `3` is GPUImage's historical default that produces a
-///     perceptually balanced curve matching Lightroom's vibrance slider.
+///     perceptually balanced curve matching the consumer-app reference's
+///     vibrance slider behavior.
 ///   - Reference: Brad Larson, *GPUImage* (2012), `VibranceFilter.fsh`.
 ///     Same shader shipped as Harbeth's C7Vibrance.
 ///

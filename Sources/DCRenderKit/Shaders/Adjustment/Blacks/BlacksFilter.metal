@@ -12,7 +12,8 @@ using namespace metal;
 //   Positive: k =  0.6312 * t, a = 2.1857 (lift shadows)
 //   Negative: k = -1.5515 * t, a = 2.3236 (crush shadows)
 // Cross-scene fit spread on k: 4%, on a: 1% → fixed parameters. Fitted in
-// gamma (sRGB) space against Lightroom ±100 references.
+// gamma (sRGB) space against ±100 exports from a consumer photo-editing
+// app.
 //
 // ## Color-space branching (u.isLinearSpace)
 //

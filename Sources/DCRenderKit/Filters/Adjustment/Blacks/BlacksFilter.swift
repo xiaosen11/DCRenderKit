@@ -16,10 +16,10 @@ import Foundation
 /// - Algorithm: `y = x * (1 + k * (1-x)^a)`, per-channel
 ///   - The `(1-x)^a` envelope peaks near `x = 0` and fades to 0 at `x = 1`,
 ///     so the multiplicative deviation is concentrated in shadows.
-/// - Why fixed parameters (no LUT): cross-scene fit on 3 Lightroom
-///   references produced spread `k: 4%`, `a: 1%`. The per-scene gain from
-///   a LUT is below the MSE noise floor, so fixed parameters are
-///   justified and halve the per-frame Swift work.
+/// - Why fixed parameters (no LUT): cross-scene fit on 3 consumer-app
+///   reference exports produced spread `k: 4%`, `a: 1%`. The per-scene
+///   gain from a LUT is below the MSE noise floor, so fixed parameters
+///   are justified and halve the per-frame Swift work.
 /// - Alternatives considered: `model_ka / weighted parabola / power law /
 ///   model_kb_mirror`. `model_ka` produced MSE 0.63 at +100 bridge; next
 ///   best (weighted parabola) was 1.15.

@@ -400,10 +400,10 @@ P4 + Phase C/D 后的补充审计。已修复的 fitted filter wrap（5个）+ L
 - **Exposure 负向**: 负 EV offset + 阴影 toe（对称于正向 Reinhard 架构）。
 
 **为什么不立即替换**：
-- 所有 5 个 fitted filter 是**以 Lightroom 导出图为 ground truth** 拟的
+- 所有 5 个 fitted filter 的常数继承自 Harbeth 谱系（原始 fitting pipeline 已失传；用户 2026-04-22 澄清原始拟合参考是消费级调色 app 像素蛋糕，非 Lightroom）
 - 替换 = 换了套 UI 手感（"相同 slider 值看起来不一样"）
 - **产品决策不是工程决策**
-- 建议 Phase 2 重新采集 LR 参考数据时一起做
+- 建议 §8.6 Tier 2 spot-check（20 张像素蛋糕 JPEG / SSIM > 0.85）验证后再决定是否替换
 
 ### 7.5 F3 修复完成（2026-04-22，commit 2907b2b）
 
@@ -508,15 +508,85 @@ slider 激活）。248 tests 全绿。
   - **Blacks**: 当前 `y = x·(1 + k·(1-x)^a)` → 候选 Filmic toe function（Blender Filmic / AgX 的 toe 公式）
   - **Exposure 负向**: 当前复合 `A·x^γ + B·x` → 候选 "负 EV offset + 阴影 toe"（对称于正向 Reinhard 架构）或 inverse Reinhard
   - **Vibrance**: 当前 `max - avg` 色度代理 `× -3.0` → 候选 CIELAB C* = √(a²+b²) 作为饱和度代理（CIE 1976 标准）
-- [ ] **B.2 EV_RANGE=4.25** 保留 Harbeth parity 还是对齐 Lightroom 标准（Lightroom 典型 ±5 EV）？
+- [ ] **B.2 EV_RANGE=4.25** 保留 Harbeth parity 还是对齐业界惯例（主流调色 app 典型 ±5 EV）？（注：原"对齐 Lightroom"说法措辞错位，实际继承的是 Harbeth 常数）
 - [ ] **B.3 Saturation/Vibrance 在 linear 下的微偏**是否接受？
 - [ ] **B.4 真 sRGB 曲线引入后，既有 parity 测试 tolerance 从 0.05 调到 0.02** 可接受？
 - [ ] **B.5 Harbeth port 后的算法"业界通用"声明可信度**：若 §8.4 发现 2+ 个是过去 Claude 合成的 pseudo-consensus，是否全量重新调研 7 个？
 
-### 8.6 需要用户数据 (C)
+### 8.6 Validation roadmap — 16 filter 按 Tier 分治（2026-04-22 重构）
 
-- [ ] **C.1** 1-2 张 RAW 或 16-bit TIFF 源图 + 每个 slider ±50/±100 的 Lightroom 导出图。导出配置：**Linear 色彩空间，16-bit TIFF**（需要 LR 的 ProPhoto Linear 或 AdobeRGB Linear）
-- [ ] **C.2** 完成 C.1 后：用真 Lightroom ground truth 对比 DCRenderKit 的 linear pipeline，**重拟合** 5 个 fitted filter（取代继承的 Harbeth 常数）
+**原 §8.6 C "20 filter × Lightroom Linear TIFF 导出" 方案已作废**。原因：
+
+1. **目标 app 澄清**：5 个 fitted filter 实际对齐的是**像素蛋糕**（consumer 修图 app），非 Lightroom。过去所有 "matches Lightroom" claim 是措辞错位。用户 2026-04-22 disclose.
+2. **全量 ground truth 不可行**：20+ filter × 多 slider × 手动导出 → 工作量爆炸 + 主观误差 + 场景依赖。即使耗几天导 500 张，得到的也只是"带误差的参考点"，不是真 ground truth
+3. **Pixel-level parity 是伪目标**：闭源 app 公式不可见、版本漂移、滑块刻度非精确数值。追它就是自欺欺人
+
+**重构为按 filter 数学本质分四 Tier 分治**，每 Tier 诚实表达可达成的验证级别。
+
+#### 16-filter Tier 分类表（audit 通用 index）
+
+| Filter | Tier | 本质 | 验证策略 |
+|--------|------|------|---------|
+| Sharpen | 1 | Laplacian unsharp mask 公式 | unit test: identity / 方向 / 数值推导 |
+| Normal (Blend) | 1 | alpha 混合数学 | unit test |
+| Saturation | 1 | HSL / luma 公式 | unit test |
+| LUT3D | 1 | 查表 + gamma wrap | unit test（已有） |
+| Exposure 正向 | 1 | linear gain + Reinhard | unit test |
+| Exposure 负向 | 2 | fitted `A·x^γ + B·x` | Tier 2 spot-check |
+| Contrast | 2 | fitted cubic pivot | Tier 2 spot-check |
+| Blacks | 2 | fitted `y = x·(1+k·(1-x)^a)` | Tier 2 spot-check |
+| Whites | 2 | fitted 同类 | Tier 2 spot-check |
+| WhiteBalance | 2 | fitted Kelvin 斜率 | Tier 2 spot-check |
+| HighlightShadow | 3 | perception-based | §8.2 契约（halo-free / Zone targeting / midtone 稳定性） |
+| Clarity | 3 | perception-based | §8.2 契约（FFT spectral band selectivity / edge preservation） |
+| SoftGlow | 3 | perception-based | §8.2 契约（energy additivity / threshold-gated） |
+| Vibrance | 3 | perception-based | §8.2 契约（low-sat boost / skin protect） |
+| **FilmGrain** | 4 | 黑盒美学 | 用户 2026-04-22 确认满意 → snapshot 当前版 |
+| **CCD** | 4 | 黑盒美学 | 用户 2026-04-22 确认满意 → snapshot 当前版 |
+| **PortraitBlur** | 4 | 黑盒美学 | **当前 bug（slider 任意值 output == input），先修再 snapshot** |
+
+Tier 1（5）+ Tier 2（5）+ Tier 3（4）+ Tier 4（3）= 16.
+
+#### 各 Tier 工作项
+
+**Tier 1（5 filter，已有覆盖）**：
+- 现有 unit test 持续维护。无新增工作
+
+**Tier 2（5 filter，轻量 spot-check — 替代原 §8.6 C.1/C.2）**：
+- [ ] **C.1** 用户用**像素蛋糕**导出 reference：1 张代表性源图 + 每个 slider 4 个值（+50 / +100 / -50 / -100）× 5 filter = **20 张 JPEG**。不要求 TIFF 不要求 linear，接受 8-bit sRGB JPEG。一次性 15 分钟工作
+- [ ] **C.2** 写自动化对比脚本：DCRenderKit 输出 vs 像素蛋糕 JPEG 的 **SSIM**（perceptual similarity）。阈值 **SSIM > 0.85** pass（不追求 pixel-level 匹配）
+- [ ] **C.3** 低于阈值的 filter → 调查根因：wrong fitting constant / perceptual mismatch / DCRenderKit bug。不强求"追平像素蛋糕"
+
+**Tier 3（4 filter，契约化数学验证 — 已规划）**：
+- 见 §8.2 A+（契约形式化）+ §8.3 A++（按契约验证）
+- **不依赖用户数据**。构造合成测试图即可
+
+**Tier 4（3 filter，snapshot regression）**：
+- [ ] **C.4** 写 snapshot regression framework：fixed seed + 代表性输入 → 产出 baseline PNG，CI 上跑 SSIM diff
+- [ ] **C.5** FilmGrain snapshot（用户 2026-04-22 确认当前版满意，freeze）
+- [ ] **C.6** CCD snapshot（用户 2026-04-22 确认当前版满意，freeze）
+- [ ] **C.7** PortraitBlur 见 §8.1 A.5（bug 调查 + 修复 → 再 snapshot）
+
+#### 契约降级（所有 SDK 文档/注释）
+
+当前代码 + 文档 + memory 中共 **15 处 `fit against Lightroom`** + **6 处 plan 引用** + **2 处 memory claim** = 23 处需要改。统一改写为：
+
+**英文（code / SwiftDoc）**：
+```
+Fitted constants inherited from Harbeth lineage. Original fitting reference
+was a commercial consumer photo-editing app (details unrecoverable from
+lost fitting pipeline); no pixel-level parity is claimed against any
+specific app. See docs/findings-and-plan.md §8.6 for validation roadmap.
+```
+
+**中文（plan / memory）**：
+```
+Fitted 常数继承自 Harbeth 谱系。原始拟合参考是消费级调色 app（原 fitting
+pipeline 已失传，目标公式不可复现）；不声明像素级对齐任何具体 app。
+验证路线见 findings-and-plan §8.6。
+```
+
+**保留不改**：2 处并列 industry-reference 引用（`LUT3DFilter.swift:33` 列 pro tool 例子、`SharpenFilter.swift:18` 算法出处引用），这些是正确用法。
 
 ### 8.7 本质上限的诚实改写（原 D → D'）
 
@@ -576,8 +646,8 @@ slider 激活）。248 tests 全绿。
 
 已经识别但没有解法：
 
-- **循环验证问题**：当前所有 `.linear` parity 测试用 pow(,2.2) 做 shader 和断言两端，只证明"我跟我自己一致"。**突破需要 §8.6 C 的真 Lightroom linear 导出**。没有它，所有"matches Lightroom" 声明永远未验证。
-- **闭源竞品验证**：Lightroom / Capture One / DaVinci 的具体公式不可见。我们只能用开源等价物（darktable / RawTherapee / Blender Filmic）作参考。接受"商用级 ≠ 像素级匹配 Adobe"的定义。
+- **循环验证问题**：当前所有 `.linear` parity 测试用 pow(,2.2) 做 shader 和断言两端，只证明"我跟我自己一致"。**突破靠 §8.6 Tier 2 spot-check（SSIM vs 像素蛋糕 JPEG）**——但这是低严谨 spot-check 而非 pixel-level ground truth。接受"matches specific app" 声明不可严格证伪这一边界。
+- **闭源竞品验证**：Lightroom / Capture One / DaVinci / 像素蛋糕 等闭源 app 具体公式不可见，版本漂移 + 滑块刻度精度 + 场景依赖使 pixel-level parity 在物理上不可能。只能用开源等价物（darktable / RawTherapee / Blender Filmic）作算法参考。接受"商用级 ≠ 像素级匹配任何 app"的定义。
 - **Magic number origin 失传**：Harbeth 的拟合脚本已丢失。即使 §8.1 A.2 加了 FIXME 注释，真正要"溯源"必须**重新建立 fitting pipeline**，这是 §8.6 C 的延伸工作。
 
 ---

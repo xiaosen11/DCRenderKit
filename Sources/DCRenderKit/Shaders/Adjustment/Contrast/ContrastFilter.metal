@@ -13,10 +13,10 @@ using namespace metal;
 //   pivot =  0.381 * lumaMean + 0.377
 // Per-channel application.
 //
-// Fit against Lightroom ±100 exports across 3 scenes
-// (bridge / castle / tower, mean luma 0.29 / 0.40 / 0.60), in
-// *perceptual* (sRGB-gamma) space. Joint cross-scene average MSE = 52.1
-// (≈ 7.2 levels / 2.8%).
+// Fit against ±100 reference exports from a consumer photo-editing app
+// across 3 scenes (bridge / castle / tower, mean luma 0.29 / 0.40 /
+// 0.60), in *perceptual* (sRGB-gamma) space. Joint cross-scene average
+// MSE = 52.1 (≈ 7.2 levels / 2.8%).
 //
 // ## Color-space branching
 //

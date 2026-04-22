@@ -37,10 +37,11 @@ inline float dcr_whiteBalanceGammaToLinear(float c) {
 // ## Color-space branching
 //
 // The warm target (0.93, 0.54, 0) and tempCoef / tint fit were all done
-// in gamma space against Lightroom JPEG references. YIQ is a linear
-// transform of RGB, and its perceptual meaning depends on which space
-// the RGB is in — mixing with the warm target in linear space produces
-// visibly different whites-shift than in gamma space.
+// in gamma space against JPEG references from a consumer photo-editing
+// app. YIQ is a linear transform of RGB, and its perceptual meaning
+// depends on which space the RGB is in — mixing with the warm target in
+// linear space produces visibly different whites-shift than in gamma
+// space.
 //
 // u.isLinearSpace == 1: un-linearize to gamma → run the fit → re-linearize
 // u.isLinearSpace == 0: direct gamma-space math (DigiCam parity)

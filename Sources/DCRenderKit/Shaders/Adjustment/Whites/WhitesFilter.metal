@@ -40,11 +40,11 @@ inline float dcr_whitesGammaToLinear(float c) {
 // ## Color-space branching
 //
 // Both the positive (per-channel weighted parabola) and negative (luma-
-// ratio) branches were fit against Lightroom gamma-space exports. In
-// `.linear` mode we wrap each RGB triplet: un-linearize to gamma → apply
-// the existing formula → re-linearize. For the negative branch the luma
-// is likewise computed on the gamma-space RGB so that the per-pixel
-// ratio matches DigiCam parity.
+// ratio) branches were fit against gamma-space exports from a consumer
+// photo-editing app. In `.linear` mode we wrap each RGB triplet:
+// un-linearize to gamma → apply the existing formula → re-linearize.
+// For the negative branch the luma is likewise computed on the gamma-
+// space RGB so that the per-pixel ratio matches DigiCam parity.
 
 kernel void DCRWhitesFilter(
     texture2d<half, access::write> output [[texture(0)]],
