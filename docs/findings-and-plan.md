@@ -347,19 +347,44 @@ P4 + Phase C/D 后的补充审计。已修复的 fitted filter wrap（5个）+ L
 - WhiteBalance（wrap 整个 YIQ→tint→warm-overlay pipeline）
 - LUT3D（wrap 输入输出，cube 在 gamma 空间查）
 
-### 7.2 未修复，但已知 `.linear` 漂移
+### 7.2 `.linear` 漂移重审（2026-04-22 基于真机反馈 + 原理复查）
 
-| Filter | 问题 | 严重度 | 修复思路 |
-|---|---|---|---|
-| **SoftGlow** | `threshold: 50` 用 0.5 做截断；linear 0.5 对应 gamma 0.73 的场景亮度 → "亮部"选择错位 | 明显 | shader 中 `if isLinearSpace: threshold = srgbToLinear(userThreshold)` |
-| **HighlightShadow** | baseLuma smoothstep 窗口 `[0.25, 0.85]` `[0.15, 0.75]` 是 gamma-空间锚 | **F3 根因之一** | 要么转换 baseLuma 到 gamma 再做窗口比较，要么把窗口端点转 linear |
-| **Clarity** | 同 HS，guided filter residual 基于 gamma 空间 base 公式推导 | 中 | 同 HS 处理 |
-| **FilmGrain** | grain 幅度固定值 ±X；linear 暗部 perceptual-louder ~4× | 中 | shader 中 amplitude *= sRGBToLinearDerivative(baseValue)（或做 per-pixel 调制） |
-| **CCD** | 含色彩调制 + 锐化 + 颗粒；颗粒部分同 FilmGrain | 中 | 同 FilmGrain |
-| **Saturation / Vibrance** | Rec.709 luma 在 linear 才"物理正确"；零饱和灰点在两空间不同 | **低，linear 更对** | 不需要"修"，但要文档化 "linear 模式下饱和感觉略不同" |
-| **Sharpen** | Laplacian 梯度在两空间幅度不等；锐化感觉轻 | 低 | 可 wrap，也可文档化 |
-| **NormalBlend** | alpha compositing 在 linear **才是数学正确** | **零漂移，linear 更对** | 无需改 |
-| **PortraitBlur** | 高斯模糊空间无关，mask 来自 Vision | 应零漂移 | F2 独立 bug |
+**纠正**：初版 §7.2 把所有 "linear 下行为偏离 perceptual" 全部当作"漂移 = 要修"，这是错的。
+
+**关键判据**（用户真机 SoftGlow 反馈反向验证后收敛）：
+
+- **光学 / 发光 / 模糊 / 物理混合**类 → linear **物理正确**，保留不 wrap（wrap 反而破坏"更好"）
+- **gamma 分段阈值 / 窗口 / 依赖"人眼感知"数学**类 → linear **打破设计意图**，必须 wrap
+- **纯色彩运算（非曲线/阈值）** → 两空间都合法，仅"手感"微异，可接受
+
+#### A. 保留 — `.linear` 下更好 / 更物理正确
+
+| Filter | 原因 | 真机反馈 |
+|---|---|---|
+| **SoftGlow** | bloom 是光学叠加；光在 linear 才物理正确相加；threshold 偏移使 bloom 更选择性（只真亮部发光→更像真实镜头眩光） | "很好" |
+| **NormalBlend** | alpha compositing 的 Porter-Duff over 数学定义在 linear 空间 | 未测 |
+| **PortraitBlur** | 景深模糊本质是光学模糊；mask 来自 Vision 空间无关 | F2 不工作（独立 bug） |
+| **Sharpen** | Laplacian 在 linear 捕捉真实光子梯度 | "还可以" |
+| **FilmGrain** | 暗部颗粒更重 = 真实胶片特性；linear 意外对齐模拟胶片手感 | 未报问题 |
+| **CCD（整体）** | LUT 已 wrap / 锐化 linear 更对 / 颗粒同 FilmGrain / CA 空间无关 | 未报问题 |
+
+**这些不要 wrap**。
+
+#### B. 必修 — `.linear` 打破设计意图（F3 的主要修复路径）
+
+| Filter | 为什么必修 | 修法 |
+|---|---|---|
+| **HighlightShadow** | smoothstep 窗口 `[0.25, 0.85]` / `[0.15, 0.75]` 按 gamma 空间精确锚在"中亮到高亮"、"阴影到中亮"。`.linear` 下 baseLuma=0.25 对应 gamma 0.53 → **"高光窗口"只在真高亮区触发**、中亮区完全不响应 → **F3 "缺层次感 / 对高光暗部不够敏感"的直接原因** | shader 里 `baseLuma_gamma = dcr_linearToGamma(baseLuma_linear)` 再做 smoothstep |
+| **Clarity** | 同架构（guided filter base）。"局部对比度"设计目的是感知对比度，**只在 gamma 空间才匹配人眼感受** | 同 HS：residual 计算用 gamma-space base |
+
+#### C. 灰色 — 认知偏移但非 bug
+
+| Filter | 偏移性质 |
+|---|---|
+| **Saturation** | Rec.709 luma 在 linear 是物理 luminance, gamma 是感知近似。零饱和"灰"微异，视觉都合格 |
+| **Vibrance** | max-mean 色度代理幅度不同,相对响应特性一致 |
+
+不改代码,文档化"linear 下色彩感觉略不同"。
 
 ### 7.3 未修复的纯拟合 tech debt（原理派替代）
 
@@ -380,11 +405,14 @@ P4 + Phase C/D 后的补充审计。已修复的 fitted filter wrap（5个）+ L
 - **产品决策不是工程决策**
 - 建议 Phase 2 重新采集 LR 参考数据时一起做
 
-### 7.4 `.linear` 隐性漂移的正确认知
+### 7.4 `.linear` 漂移的正确认知（两次迭代后的最终版）
 
-我原来的"其他 16 个 filter 不动、math 自动作用新空间"说法**半对半错**：
+三次说法：
 
-- ✅ **shader 公式不需要改** — 数学形式在两空间都合法
-- ❌ **但若干 filter 的参数默认值 / 阈值 / 预设数据是 gamma-空间校准的** — `.linear` 下参数意义改变，需要要么 wrap 要么重新校准
+1. **P4 时**：「其他 16 个 filter 不动，math 自动作用新空间」 — **错**
+2. **§7.2 初版**：「11 个都有漂移，严重度从低到高」 — **过度激进**
+3. **§7.2 重审（本版）**：「光学类 linear 更好、曲线/阈值类必修、纯色彩类可接受」 — **基于 SoftGlow 真机反馈反向验证的收敛结论**
+
+真机反馈是关键的反证据：**如果审计判据无法解释"SoftGlow 反而更好"，判据就是错的**。修正后的判据可以统一解释所有真机观察。
 
 **当前状态**：最大的两处（5 个 fitted + LUT3D）已 wrap，**其余见 7.2** 列为 Phase 2/3 tech debt。`.linear` 默认仍可用，但用户真机体验会有以上 table 描述的偏移。
