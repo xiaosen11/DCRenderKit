@@ -77,10 +77,26 @@ public struct SoftGlowFilter: MultiPassFilter {
     public func passes(input: TextureInfo) -> [Pass] {
         guard strength > 0.001 else { return [] }
 
+        // FIXME(§8.6 Tier 2 + §8.2 A+.3): Threshold mapping `0.3 + slider ·
+        // 0.6` (slider 0→100 maps to smoothstep center [0.3, 0.9]) and
+        // offsetRatio mapping `0.002 + slider · 0.004` (slider 0→100 maps
+        // to short-side fraction [0.002, 0.006]) are inherited empirical
+        // ranges from the Harbeth lineage. Neither was derived from an
+        // optical PSF target or bloom physics. Original fit pipeline lost.
+        // Validation: findings-and-plan.md §8.6 Tier 2 + §8.2 A+.3
+        // (additivity contract: bloom(a+b) == bloom(a) + bloom(b)).
         let thresholdMapped = 0.3 + (threshold / 100.0) * 0.6
         let offsetRatio = 0.002 + (bloomRadius / 100.0) * 0.004
 
         // Adaptive pyramid depth. See type-level doc.
+        //
+        // FIXME(§8.4 Audit.1): Anchor 135 px traces to "1080p ÷ 2³ ≈ 135"
+        // — the choice preserves backward compatibility with the historical
+        // 3-level fixed pipeline. This derivation is internally consistent
+        // but its premise ("why 3 levels was right for 1080p") is itself
+        // inherited, not validated against any optical PSF or bloom-radius
+        // target. Industry reference for bloom pyramid depth (Unity HDRP /
+        // Unreal / Blender) pending §8.4 Audit.1.
         let shortSide = input.shortSide
         let levels = max(3, Int(log2(Float(shortSide) / 135.0)))
 
@@ -164,6 +180,14 @@ public struct SoftGlowFilter: MultiPassFilter {
             inputs: [.source, .named("u\(levels)")],
             output: .sameAsSource,
             uniforms: FilterUniforms(SoftGlowCompositeUniforms(
+                // FIXME(§8.6 Tier 2): × 0.35 Screen-blend-weight
+                // compression (slider 100 → 0.35 mix). Hand-tuned for
+                // "noticeable but not blown-out glow". Origin lost with
+                // fitting pipeline. Note: user 2026-04-22 previously
+                // retuned strength down to 35% from earlier higher
+                // values after real-device evaluation — this reflects
+                // a real perceptual ceiling, not arbitrary choice.
+                // Validation: findings-and-plan.md §8.6 Tier 2.
                 strength: (strength / 100.0) * 0.35
             ))
         ))

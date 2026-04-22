@@ -37,6 +37,16 @@ struct CCDUniforms {
 // saturation (pre-noise so grain doesn't get saturated), then digital
 // noise (sensor noise floor), then luma-channel sharpening sampled from
 // original (so noise and CA edges aren't re-hardened), then strength mix.
+//
+// FIXME(§8.1 A.4 + §8.4 Audit.4): The "CA → saturation → noise → sharpen"
+// ordering is an inherited artistic choice from the Harbeth lineage.
+// The rationales given above ("CA happens on raw sensor", "pre-noise so
+// grain doesn't get saturated") are plausible but not literature-grounded
+// — real CCD/CMOS signal chains differ (demosaic → WB → gamma → noise
+// shaping). This ordering is a look-design decision, not sensor-physical
+// simulation. Validation: findings-and-plan.md §8.1 A.4 (溯源 attempt)
+// and §8.4 Audit.4 (industry reference: sensor noise modeling papers,
+// VSCO-style filter technical docs where public).
 
 kernel void DCRCCDFilter(
     texture2d<half, access::write> output [[texture(0)]],
@@ -112,6 +122,12 @@ kernel void DCRCCDFilter(
         half4 right = dcr_ccdSafeRead(input, pos + int2( sharpStep,  0));
         half4 top   = dcr_ccdSafeRead(input, pos + int2( 0, -sharpStep));
         half4 bot   = dcr_ccdSafeRead(input, pos + int2( 0,  sharpStep));
+        // FIXME(§8.6 Tier 2): × 0.96 = 60% of SharpenFilter's × 1.6 product
+        // compression (see SharpenFilter.swift FIXME). Derivation chain:
+        // sharpAmount slider → SharpenFilter would apply × 1.6 → CCD uses
+        // 60% of that = × 0.96. The 60% ratio itself is empirical
+        // (hand-tuned balance of sharp vs CA vs noise). Transitively
+        // depends on the SharpenFilter × 1.6 value.
         half s = half(sharpAmount * 0.96f);  // 60% of SharpenFilter amplitude
 
         half lumaC = dot(origCenter.rgb, kLumaH);

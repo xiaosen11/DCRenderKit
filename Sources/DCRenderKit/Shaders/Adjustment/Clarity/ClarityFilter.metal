@@ -134,6 +134,13 @@ kernel void DCRClarityApply(
 
     float3 detail = origRGB - baseRGB;
 
+    // FIXME(§8.6 Tier 2 + §8.2 A+.2): Product compression factors × 1.5
+    // (positive) and × 0.7 (negative) are inherited empirical from Harbeth.
+    // Doc comment above claims "perceptually-linear slider response" but
+    // that's an unverified assertion — no Weber-Fechner linearity
+    // measurement exists for Clarity's slider. Original fit pipeline lost.
+    // Validation: findings-and-plan.md §8.6 Tier 2 (SSIM vs Pixel Cake) +
+    // §8.2 A+.2 contract formalization (FFT spectral selectivity).
     float3 result;
     if (intensity >= 0.0f) {
         result = origRGB + detail * (intensity * 1.5f);

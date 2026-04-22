@@ -108,6 +108,12 @@ public struct CCDFilter: FilterProtocol {
             caAmount: chromaticAberration / 100.0,
             sharpAmount: sharpening / 100.0,
             grainSize: grainSize,
+            // FIXME(§8.6 Tier 2): × 0.3 saturation-boost compression
+            // (slider 100 → saturation multiplier 1.3) is inherited
+            // empirical, claimed above as "half the magnitude of a
+            // standalone saturation" (~1.6). Rationale is qualitative.
+            // Origin of the 50%-of-standalone choice lost with fitting
+            // pipeline. Validation: findings-and-plan.md §8.6 Tier 2.
             saturation: 1.0 + (saturationBoost / 100.0) * 0.3,
             sharpStep: sharpStep,
             caMaxOffset: caMaxOffset

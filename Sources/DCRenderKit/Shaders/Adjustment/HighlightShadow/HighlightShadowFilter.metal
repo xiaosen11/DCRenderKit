@@ -111,12 +111,27 @@ kernel void DCRGuidedApplyRatio(
 
     // Two smoothstep windows. The inline smoothstep keeps the shader
     // deterministic across GPUs that differ on the `smoothstep` intrinsic.
+    //
+    // FIXME(§8.6 Tier 2): Window endpoints [0.25, 0.85] / [0.15, 0.75] are
+    // inherited empirical values from the Harbeth lineage, loosely inspired
+    // by Ansel Adams' Zone System (highlight ≈ Zone VII+, shadow ≈ Zone III-)
+    // but the exact anchors are hand-tuned, original fit pipeline lost.
+    // No Weber-Fechner linearity validation exists. Validation path:
+    // findings-and-plan.md §8.6 Tier 2 (SSIM vs Pixel Cake) and §8.2 A+.1
+    // contract formalization (Zone targeting / midtone stability).
     float t_h = clamp((baseLumaForWindows - 0.25f) / (0.85f - 0.25f), 0.0f, 1.0f);
     float h_weight = t_h * t_h * (3.0f - 2.0f * t_h);
 
     float t_s = clamp((baseLumaForWindows - 0.15f) / (0.75f - 0.15f), 0.0f, 1.0f);
     float s_weight = 1.0f - t_s * t_s * (3.0f - 2.0f * t_s);
 
+    // FIXME(§8.6 Tier 2): Product compression × 0.35 (highlight) and
+    // × 0.50 (shadow) plus ratio clamp [0.3, 3.0] are inherited empirical
+    // from Harbeth. Compression factors were hand-tuned for "visible but
+    // not harsh" slider feel. The clamp bounds prevent runaway
+    // multiplication (useful safety) but the specific bounds [0.3, 3.0]
+    // are empirical. No principled derivation. Validation:
+    // findings-and-plan.md §8.6 Tier 2.
     float ratio = 1.0f + highlights * h_weight * 0.35f
                        + shadows    * s_weight * 0.50f;
     ratio = clamp(ratio, 0.3f, 3.0f);
@@ -164,6 +179,13 @@ kernel void DCRHighlightShadowApply(
 
     float3 result = rgb * ratio;
 
+    // FIXME(§8.6 Tier 2): Saturation compensation slope × 0.25 (how much
+    // to compensate per unit of ratio) and clamp bounds [0.8, 1.3] are
+    // inherited empirical from Harbeth. The "brighten → slight desat /
+    // darken → slight sat" heuristic is qualitatively reasonable, but the
+    // specific 25% slope and ±30% clamp range have no principled
+    // derivation. Origin lost with fitting pipeline. Validation:
+    // findings-and-plan.md §8.6 Tier 2.
     float satFactor = clamp(1.0f + (1.0f - ratio) * 0.25f, 0.8f, 1.3f);
     float resLuma = dot(result, kDCRHighlightShadowLumaRec709);
     result = float3(resLuma) + (result - float3(resLuma)) * satFactor;

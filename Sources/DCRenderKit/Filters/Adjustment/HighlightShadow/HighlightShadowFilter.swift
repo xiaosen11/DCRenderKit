@@ -82,6 +82,12 @@ public struct HighlightShadowFilter: MultiPassFilter {
         // Anchor: radius ≈ 5 at √(480·360) ≈ 416 → p = 5/416 ≈ 0.012.
         // Scaled independently on X and Y so box-coverage ratio holds
         // under extreme aspect ratios.
+        //
+        // FIXME(§8.6 Tier 2): Anchor radius ≈ 5 at 480×360 is an inherited
+        // Harbeth hand-tune chosen to give HighlightShadow a "broad base"
+        // feel without haloing common edges. The specific radius was not
+        // fit against a measurable criterion — origin lost with the
+        // fitting pipeline. Validation: findings-and-plan.md §8.6 Tier 2.
         let quarterW = max(input.width / 4, 1)
         let quarterH = max(input.height / 4, 1)
         let p: Float = 0.012
@@ -103,6 +109,13 @@ public struct HighlightShadowFilter: MultiPassFilter {
                 inputs: [.named("downsample")],
                 output: .scaled(factor: 0.25),
                 uniforms: FilterUniforms(DCRGuidedComputeABUniforms(
+                    // FIXME(§8.6 Tier 2): Guided filter regularization
+                    // eps = 0.01 is inherited from Harbeth. "Favors broad
+                    // base" per He & Sun 2015 general guidance — larger
+                    // eps → smoother base, smaller eps → sharper edge
+                    // preservation. Specific value hand-tuned. Origin
+                    // lost with fitting pipeline. Validation:
+                    // findings-and-plan.md §8.6 Tier 2.
                     eps: 0.01,
                     radiusX: radiusX,
                     radiusY: radiusY

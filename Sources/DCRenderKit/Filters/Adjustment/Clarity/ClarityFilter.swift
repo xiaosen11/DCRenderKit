@@ -67,6 +67,12 @@ public struct ClarityFilter: MultiPassFilter {
         guard abs(normalized) > 0.001 else { return [] }
 
         // p anchor: radius ≈ 8 at √(480·360) ≈ 416 → p = 8/416 ≈ 0.019.
+        //
+        // FIXME(§8.6 Tier 2): Anchor radius ≈ 8 at 480×360 is an inherited
+        // Harbeth hand-tune, larger than HighlightShadow's 5 because
+        // Clarity "benefits from a wider base window". Rationale is
+        // qualitative; no principled derivation exists. Origin lost with
+        // fitting pipeline. Validation: findings-and-plan.md §8.6 Tier 2.
         let quarterW = max(input.width / 4, 1)
         let quarterH = max(input.height / 4, 1)
         let p: Float = 0.019
@@ -88,6 +94,13 @@ public struct ClarityFilter: MultiPassFilter {
                 inputs: [.named("downsample")],
                 output: .scaled(factor: 0.25),
                 uniforms: FilterUniforms(DCRGuidedComputeABUniforms(
+                    // FIXME(§8.6 Tier 2): Guided filter eps = 0.005
+                    // (tighter than HighlightShadow's 0.01). Rationale
+                    // "benefits from preserving smaller-scale features
+                    // in the base" is qualitative — the 0.005 specific
+                    // value is a hand-tuned Harbeth inheritance. Origin
+                    // lost with fitting pipeline. Validation:
+                    // findings-and-plan.md §8.6 Tier 2.
                     eps: 0.005,
                     radiusX: radiusX,
                     radiusY: radiusY
@@ -114,6 +127,14 @@ public struct ClarityFilter: MultiPassFilter {
                 inputs: [.source, .named("base")],
                 output: .sameAsSource,
                 uniforms: FilterUniforms(ClarityUniforms(
+                    // FIXME(§8.6 Tier 2): × 0.75 Swift-side compression
+                    // (applied before shader's own × 1.5 positive or × 0.7
+                    // negative). Effective slider 100 maps to 0.75 × 1.5 =
+                    // 1.125 positive gain or 0.75 × 0.7 = 0.525 negative
+                    // blend. The two-stage compression (Swift + shader) is
+                    // inherited and the split has no principled reason —
+                    // could be combined into one factor. Origin lost.
+                    // Validation: findings-and-plan.md §8.6 Tier 2.
                     intensity: normalized * 0.75,   // product compression
                     isLinearSpace: isLinear
                 ))

@@ -83,11 +83,24 @@ kernel void DCRWhiteBalanceFilter(
     // matrices can represent; prevents runaway overshoot.
     const float tint = clamp(u.tint, -200.0f, 200.0f);
     half3 yiq = RGBtoYIQ * rgb;
+    // FIXME(§8.6 Tier 2): 0.5226 is the Q-axis theoretical extreme in
+    // YIQ space derived from the RGB→YIQ transform (Rec.709 / NTSC-Japan
+    // variant) — this value has a principled origin. The × 0.1 attenuation
+    // factor, however, is inherited empirical: it limits the tint slider's
+    // effective Q-axis range to 10% of the theoretical max for "UI comfort".
+    // The 10% choice has no derivation. Origin of that factor lost with
+    // fitting pipeline. Validation: findings-and-plan.md §8.6 Tier 2.
     yiq.b = clamp(yiq.b + half(tint / 100.0f) * 0.5226h * 0.1h,
                   -0.5226h, 0.5226h);
     const half3 rgbTinted = YIQtoRGB * yiq;
 
     // Warm target and Overlay-blended version for temperature mixing.
+    // FIXME(§8.6 Tier 2): Warm target RGB (0.93, 0.54, 0.0) is inherited
+    // empirical, approximating a "tungsten/3200K tint" direction in sRGB
+    // space. Not derived from any CIE illuminant spectrum or principled
+    // color-temperature calibration — just a hand-picked color that
+    // "looks warm". Origin lost with fitting pipeline. Validation:
+    // findings-and-plan.md §8.6 Tier 2.
     const half3 warm = half3(0.93h, 0.54h, 0.0h);
     half3 blended;
     for (int i = 0; i < 3; i++) {
@@ -96,6 +109,16 @@ kernel void DCRWhiteBalanceFilter(
 
     // Piecewise-linear Kelvin coefficient. Negative coefficient means
     // cool, positive means warm.
+    //
+    // FIXME(§8.6 Tier 2): Kelvin slopes 0.0004 (cool side, tempK < 5000)
+    // and 0.00006 (warm side, tempK ≥ 5000, 6.67× gentler) are inherited
+    // empirical. The cool side's stronger response plausibly reflects
+    // greater perceptual sensitivity to blue-shift than warm-shift, but
+    // the specific 6.67× ratio has no principled derivation — not from
+    // any CIE illuminant curve fit or perceptual luminance model. Pivot
+    // 5000K is a reasonable daylight anchor (D50 is 5003K) but also
+    // empirical. Origin lost with fitting pipeline. Validation:
+    // findings-and-plan.md §8.6 Tier 2.
     const float tempK = clamp(u.temperature, 4000.0f, 8000.0f);
     float tempCoef;
     if (tempK < 5000.0f) {

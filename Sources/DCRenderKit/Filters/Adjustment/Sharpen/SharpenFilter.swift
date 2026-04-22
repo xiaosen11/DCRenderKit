@@ -52,6 +52,14 @@ public struct SharpenFilter: FilterProtocol {
     public var uniforms: FilterUniforms {
         // Product-side compression: raw amount/100 is too strong; ×1.6
         // peaks at +100 maps to a hand-tuned "strong but not haloed" level.
+        //
+        // FIXME(§8.6 Tier 2): The × 1.6 factor is inherited empirical from
+        // Harbeth. "Hand-tuned" is an accurate origin description — the
+        // value reflects human preference, not principled derivation.
+        // Note: CCDFilter's × 0.96 derivation ("60% of SharpenFilter
+        // amplitude") transitively depends on this value; changing here
+        // requires matching CCDFilter.metal FIXME. Validation:
+        // findings-and-plan.md §8.6 Tier 2.
         FilterUniforms(SharpenUniforms(
             amount: (amount / 100.0) * 1.6,
             step: step
