@@ -222,6 +222,78 @@ expected 值。这次不是凭记忆，是完整重推。
 
 ---
 
+## Part 3：Tolerance 错误预算建模（§8.1 A.6）
+
+写 `XCTAssertEqual(x, y, accuracy: Δ)` 时，`Δ` 不是拍脑袋选的数字。Δ 应该
+从已知误差源**累加推导**，并在断言注释里写清楚。
+
+### §3.1 DCRenderKit 里的误差源
+
+| 来源 | 典型 magnitude（每 op） | 累积规则 |
+|------|----------------------|---------|
+| Float16 (`rgba16Float`) 量化 | ~0.2% (10 bits mantissa) | 每个 intermediate texture 读写各 0.2%，多 pass 链路线性累加 |
+| sRGB 曲线近似（历史 pow(2.2)） | 曾 ~2%，§8.1 A.1 后 **→ 0** | 历史遗留；当前 SDK 用 IEC 61966-2-1 真分段 sRGB，不再贡献误差 |
+| Guided filter 噪声 | ~2% at edge-adjacent pixels | 仅 HS / Clarity 等用 guided filter 的 filter 受影响 |
+| Bilinear upsample 平滑 | ~0.5% | guided filter 的 ab coeffs 上采样到 full res |
+| Product compression 的 slider 非线性 | 不贡献数值误差但贡献"slider 值 → 效果强度"的非线性 | 推导预期时必须代入正确的 compression 系数 |
+
+### §3.2 典型 tolerance 预算
+
+**1D 逐像素 filter（Exposure / Saturation / LUT3D 等）**：
+- 无 guided filter、无 bilinear：只有 Float16 量化 ~0.2%
+- 推荐 `accuracy: 0.01`（留 5× 安全 margin 覆盖量化 + half-precision rounding）
+
+**2D 邻域 filter（Sharpen / PortraitBlur）**：
+- 多像素 sampling + weighted sum：累积 ~0.5%
+- 推荐 `accuracy: 0.02`
+
+**多尺度 filter（HighlightShadow / Clarity）**：
+- guided filter ~2% + bilinear upsample ~0.5% + Float16 量化 ~0.2%
+- 推荐 `accuracy: 0.03`（若 source 在 edge-adjacent，guided filter 噪声上升到 ~4%，可放宽到 `0.05`）
+
+**Pyramid filter（SoftGlow）**：
+- 多级累积 + tent upsample：每级 ~1%，3-4 级 ~4%
+- 推荐 `accuracy: 0.05`
+
+### §3.3 断言注释的 tolerance 推导格式
+
+```swift
+// Tolerance derivation:
+// - Float16 quantization:        ±0.2% (×255 ≈ ±0.5 out of 255)
+// - Guided filter noise:         ±2% (this filter uses HS's guided base)
+// - Bilinear upsample:           ±0.5%
+// - Total accumulated:           ±2.7%, rounded up to ±3% for safety
+// → accuracy: 0.03
+XCTAssertEqual(pixel.r, 0.907, accuracy: 0.03)
+```
+
+### §3.4 历史 case：sRGB 曲线从近似到精确的影响
+
+§8.1 A.1 之前 SDK 用 `pow(c, 2.2)` / `pow(c, 1/2.2)` 作为 sRGB transfer 近似，
+midtone 附近系统性误差 ~2%。但 parity 测试**断言端也用同样 pow(,2.2)**
+推导预期值，所以 shader 误差和断言误差相互抵消 — 这是**循环验证**：
+测试 pass 不代表 shader 正确，只代表 "shader 的误差和断言的假设一致"。
+
+§8.1 A.1 后 SDK 换成真 sRGB piecewise：
+- shader 输出更精确
+- 断言（仍可能用 pow(,2.2) 算预期）变得略不准确
+- 但差距 <2%，仍在 tolerance 内 → 测试继续 pass，且**实际精度更高**
+
+**教训**：写断言时，推导预期值用**真正正确的公式**（IEC 61966-2-1），不用
+"shader 内部用的近似公式"。这样即使 shader 再升级为更精确的实现，断言仍然
+代表"应该是的值"而不是"当前 shader 的值"。这是避免循环验证的正确做法。
+
+### §3.5 禁止事项
+
+- **禁止**为了让测试通过而放宽 tolerance（§2.3 既有规则）。放宽必须先推导新 tolerance
+  预算，在注释里证明新 Δ 有理有据
+- **禁止**用 "~1%" 这种无源 magic number 作 tolerance。必须指向 §3.1 表里的
+  某个误差源，或解释新误差源并加到表里
+- **禁止**在 parity 测试里断言到 Float16 精度极限（< 0.005）。half-float rounding
+  alone 就能让这种断言 flaky on GPU 架构切换
+
+---
+
 ## 适用范围
 
 - ✅ 所有新增单元测试
