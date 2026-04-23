@@ -29,14 +29,23 @@ struct BlacksUniforms {
     uint  isLinearSpace;  // 1 = linear input; 0 = gamma-encoded.
 };
 
-// IEC 61966-2-1 piecewise sRGB curves (§8.1 A.1). See ContrastFilter.metal
-// for rationale — this is the per-filter copy of the same formulas.
-inline float dcr_blacksLinearToGamma(float c) {
+// ═══════════════════════════════════════════════════════════════════
+// MIRROR: Foundation/SRGBGamma.metal
+// ═══════════════════════════════════════════════════════════════════
+// ShaderLibrary compiles each .metal file into its own MTLLibrary
+// (see ShaderLibrary.swift:236), so function symbols do not cross
+// translation-unit boundaries. Canonical copy of these helpers
+// lives in Foundation/SRGBGamma.metal. Edit one copy → edit every
+// mirror. Grep:
+//
+//     // MIRROR: Foundation/SRGBGamma.metal
+
+inline float DCRSRGBLinearToGamma(float c) {
     float cc = max(c, 0.0f);
     return cc <= 0.0031308f ? 12.92f * cc
                              : 1.055f * pow(cc, 1.0f / 2.4f) - 0.055f;
 }
-inline float dcr_blacksGammaToLinear(float c) {
+inline float DCRSRGBGammaToLinear(float c) {
     float cc = max(c, 0.0f);
     return cc <= 0.04045f ? cc / 12.92f
                           : pow((cc + 0.055f) / 1.055f, 2.4f);
@@ -74,10 +83,10 @@ kernel void DCRBlacksFilter(
 
     for (int ch = 0; ch < 3; ch++) {
         float c = float(color[ch]);
-        float c_gamma = isLinear ? dcr_blacksLinearToGamma(c) : c;
+        float c_gamma = isLinear ? DCRSRGBLinearToGamma(c) : c;
         float y = c_gamma * (1.0f + k * pow(max(1.0f - c_gamma, 1e-6f), a));
         float y_clamped = clamp(y, 0.0f, 1.0f);
-        color[ch] = half(isLinear ? dcr_blacksGammaToLinear(y_clamped) : y_clamped);
+        color[ch] = half(isLinear ? DCRSRGBGammaToLinear(y_clamped) : y_clamped);
     }
 
     output.write(half4(color, original.a), gid);

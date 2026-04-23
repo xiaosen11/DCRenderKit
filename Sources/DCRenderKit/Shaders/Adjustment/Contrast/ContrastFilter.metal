@@ -38,19 +38,23 @@ struct ContrastUniforms {
     uint  isLinearSpace;  // 1 = linear input; 0 = gamma-encoded.
 };
 
-// IEC 61966-2-1 piecewise sRGB curves (§8.1 A.1). Replaces the prior
-// pow(c, 2.2) / pow(c, 1/2.2) approximation — the approximation carried
-// a ~2% systematic error at midtones vs the true sRGB transfer function
-// used by iOS's MTKTextureLoader .SRGB:true hardware sampler. Round-trip
-// is now exact to ~0.01% (half-float precision floor). Function names
-// retain the "Gamma" suffix for call-site compatibility; Phase 2 may
-// rename to {LinearToSRGB, SRGBToLinear}.
-inline float dcr_contrastLinearToGamma(float c) {
+// ═══════════════════════════════════════════════════════════════════
+// MIRROR: Foundation/SRGBGamma.metal
+// ═══════════════════════════════════════════════════════════════════
+// ShaderLibrary compiles each .metal file into its own MTLLibrary
+// (see ShaderLibrary.swift:236), so function symbols do not cross
+// translation-unit boundaries. Canonical copy of these helpers
+// lives in Foundation/SRGBGamma.metal. Edit one copy → edit every
+// mirror. Grep:
+//
+//     // MIRROR: Foundation/SRGBGamma.metal
+
+inline float DCRSRGBLinearToGamma(float c) {
     float cc = max(c, 0.0f);
     return cc <= 0.0031308f ? 12.92f * cc
                              : 1.055f * pow(cc, 1.0f / 2.4f) - 0.055f;
 }
-inline float dcr_contrastGammaToLinear(float c) {
+inline float DCRSRGBGammaToLinear(float c) {
     float cc = max(c, 0.0f);
     return cc <= 0.04045f ? cc / 12.92f
                           : pow((cc + 0.055f) / 1.055f, 2.4f);
@@ -77,7 +81,7 @@ kernel void DCRContrastFilter(
     // hit the same tonal location regardless of color-space mode.
     float lumaMean = u.lumaMean;
     if (isLinear) {
-        lumaMean = dcr_contrastLinearToGamma(lumaMean);
+        lumaMean = DCRSRGBLinearToGamma(lumaMean);
     }
     lumaMean = clamp(lumaMean, 0.05f, 0.95f);
 
@@ -86,10 +90,10 @@ kernel void DCRContrastFilter(
 
     for (int ch = 0; ch < 3; ch++) {
         float x = float(color[ch]);
-        float x_gamma = isLinear ? dcr_contrastLinearToGamma(x) : x;
+        float x_gamma = isLinear ? DCRSRGBLinearToGamma(x) : x;
         float y = x_gamma + k * x_gamma * (1.0f - x_gamma) * (x_gamma - pivot);
         float y_clamped = clamp(y, 0.0f, 1.0f);
-        color[ch] = half(isLinear ? dcr_contrastGammaToLinear(y_clamped) : y_clamped);
+        color[ch] = half(isLinear ? DCRSRGBGammaToLinear(y_clamped) : y_clamped);
     }
 
     output.write(half4(color, original.a), gid);

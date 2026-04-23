@@ -8,14 +8,23 @@ using namespace metal;
 
 constant float3 kDCRHighlightShadowLumaRec709 = float3(0.2126f, 0.7152f, 0.0722f);
 
-// IEC 61966-2-1 piecewise sRGB curves (§8.1 A.1). See ContrastFilter.metal
-// for rationale — this is the per-filter copy of the same formulas.
-inline float dcr_hsLinearToGamma(float c) {
+// ═══════════════════════════════════════════════════════════════════
+// MIRROR: Foundation/SRGBGamma.metal
+// ═══════════════════════════════════════════════════════════════════
+// ShaderLibrary compiles each .metal file into its own MTLLibrary
+// (see ShaderLibrary.swift:236), so function symbols do not cross
+// translation-unit boundaries. Canonical copy of these helpers
+// lives in Foundation/SRGBGamma.metal. Edit one copy → edit every
+// mirror. Grep:
+//
+//     // MIRROR: Foundation/SRGBGamma.metal
+
+inline float DCRSRGBLinearToGamma(float c) {
     float cc = max(c, 0.0f);
     return cc <= 0.0031308f ? 12.92f * cc
                              : 1.055f * pow(cc, 1.0f / 2.4f) - 0.055f;
 }
-inline float dcr_hsGammaToLinear(float c) {
+inline float DCRSRGBGammaToLinear(float c) {
     float cc = max(c, 0.0f);
     return cc <= 0.04045f ? cc / 12.92f
                           : pow((cc + 0.055f) / 1.055f, 2.4f);
@@ -113,7 +122,7 @@ kernel void DCRGuidedApplyRatio(
     // gamma space so the smoothstep windows below hit their calibrated
     // tonal zones.
     const bool isLinear = (u.isLinearSpace != 0u);
-    float baseLumaForWindows = isLinear ? dcr_hsLinearToGamma(baseLuma) : baseLuma;
+    float baseLumaForWindows = isLinear ? DCRSRGBLinearToGamma(baseLuma) : baseLuma;
 
     // Two smoothstep windows. The inline smoothstep keeps the shader
     // deterministic across GPUs that differ on the `smoothstep` intrinsic.
@@ -178,9 +187,9 @@ kernel void DCRHighlightShadowApply(
     // Bring RGB into gamma space for the multiply + sat comp.
     float3 rgb = float3(orig.rgb);
     if (isLinear) {
-        rgb.r = dcr_hsLinearToGamma(rgb.r);
-        rgb.g = dcr_hsLinearToGamma(rgb.g);
-        rgb.b = dcr_hsLinearToGamma(rgb.b);
+        rgb.r = DCRSRGBLinearToGamma(rgb.r);
+        rgb.g = DCRSRGBLinearToGamma(rgb.g);
+        rgb.b = DCRSRGBLinearToGamma(rgb.b);
     }
 
     float3 result = rgb * ratio;
@@ -199,9 +208,9 @@ kernel void DCRHighlightShadowApply(
     result = clamp(result, 0.0f, 1.0f);
 
     if (isLinear) {
-        result.r = dcr_hsGammaToLinear(result.r);
-        result.g = dcr_hsGammaToLinear(result.g);
-        result.b = dcr_hsGammaToLinear(result.b);
+        result.r = DCRSRGBGammaToLinear(result.r);
+        result.g = DCRSRGBGammaToLinear(result.g);
+        result.b = DCRSRGBGammaToLinear(result.b);
     }
 
     output.write(half4(half3(result), orig.a), gid);

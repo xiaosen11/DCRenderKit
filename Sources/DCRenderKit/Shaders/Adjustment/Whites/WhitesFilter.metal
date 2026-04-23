@@ -30,14 +30,23 @@ struct WhitesUniforms {
     uint  isLinearSpace;  // 1 = linear input; 0 = gamma-encoded.
 };
 
-// IEC 61966-2-1 piecewise sRGB curves (§8.1 A.1). See ContrastFilter.metal
-// for rationale — this is the per-filter copy of the same formulas.
-inline float dcr_whitesLinearToGamma(float c) {
+// ═══════════════════════════════════════════════════════════════════
+// MIRROR: Foundation/SRGBGamma.metal
+// ═══════════════════════════════════════════════════════════════════
+// ShaderLibrary compiles each .metal file into its own MTLLibrary
+// (see ShaderLibrary.swift:236), so function symbols do not cross
+// translation-unit boundaries. Canonical copy of these helpers
+// lives in Foundation/SRGBGamma.metal. Edit one copy → edit every
+// mirror. Grep:
+//
+//     // MIRROR: Foundation/SRGBGamma.metal
+
+inline float DCRSRGBLinearToGamma(float c) {
     float cc = max(c, 0.0f);
     return cc <= 0.0031308f ? 12.92f * cc
                              : 1.055f * pow(cc, 1.0f / 2.4f) - 0.055f;
 }
-inline float dcr_whitesGammaToLinear(float c) {
+inline float DCRSRGBGammaToLinear(float c) {
     float cc = max(c, 0.0f);
     return cc <= 0.04045f ? cc / 12.92f
                           : pow((cc + 0.055f) / 1.055f, 2.4f);
@@ -71,9 +80,9 @@ kernel void DCRWhitesFilter(
     // Bring RGB to gamma space (no-op if already there).
     float3 rgb = float3(color);
     if (isLinear) {
-        rgb.r = dcr_whitesLinearToGamma(rgb.r);
-        rgb.g = dcr_whitesLinearToGamma(rgb.g);
-        rgb.b = dcr_whitesLinearToGamma(rgb.b);
+        rgb.r = DCRSRGBLinearToGamma(rgb.r);
+        rgb.g = DCRSRGBLinearToGamma(rgb.g);
+        rgb.b = DCRSRGBLinearToGamma(rgb.b);
     }
 
     if (whites > 0.001f) {
@@ -110,9 +119,9 @@ kernel void DCRWhitesFilter(
 
     // Re-linearize before write (no-op if we never left linear space).
     if (isLinear) {
-        rgb.r = dcr_whitesGammaToLinear(rgb.r);
-        rgb.g = dcr_whitesGammaToLinear(rgb.g);
-        rgb.b = dcr_whitesGammaToLinear(rgb.b);
+        rgb.r = DCRSRGBGammaToLinear(rgb.r);
+        rgb.g = DCRSRGBGammaToLinear(rgb.g);
+        rgb.b = DCRSRGBGammaToLinear(rgb.b);
     }
 
     output.write(half4(half3(rgb), original.a), gid);

@@ -58,14 +58,23 @@ struct LUT3DUniforms {
     uint  isLinearSpace;  // 1 = linear input; 0 = gamma-encoded.
 };
 
-// IEC 61966-2-1 piecewise sRGB curves (§8.1 A.1). See ContrastFilter.metal
-// for rationale — this is the per-filter copy of the same formulas.
-inline float dcr_lut3dLinearToGamma(float c) {
+// ═══════════════════════════════════════════════════════════════════
+// MIRROR: Foundation/SRGBGamma.metal
+// ═══════════════════════════════════════════════════════════════════
+// ShaderLibrary compiles each .metal file into its own MTLLibrary
+// (see ShaderLibrary.swift:236), so function symbols do not cross
+// translation-unit boundaries. Canonical copy of these helpers
+// lives in Foundation/SRGBGamma.metal. Edit one copy → edit every
+// mirror. Grep:
+//
+//     // MIRROR: Foundation/SRGBGamma.metal
+
+inline float DCRSRGBLinearToGamma(float c) {
     float cc = max(c, 0.0f);
     return cc <= 0.0031308f ? 12.92f * cc
                              : 1.055f * pow(cc, 1.0f / 2.4f) - 0.055f;
 }
-inline float dcr_lut3dGammaToLinear(float c) {
+inline float DCRSRGBGammaToLinear(float c) {
     float cc = max(c, 0.0f);
     return cc <= 0.04045f ? cc / 12.92f
                           : pow((cc + 0.055f) / 1.055f, 2.4f);
@@ -107,9 +116,9 @@ kernel void DCRLUT3DFilter(
     // native domain). In linear mode we un-linearize first.
     float3 rgbForLUT = clamp(float3(inColor.rgb), 0.0f, 1.0f);
     if (isLinear) {
-        rgbForLUT.r = dcr_lut3dLinearToGamma(rgbForLUT.r);
-        rgbForLUT.g = dcr_lut3dLinearToGamma(rgbForLUT.g);
-        rgbForLUT.b = dcr_lut3dLinearToGamma(rgbForLUT.b);
+        rgbForLUT.r = DCRSRGBLinearToGamma(rgbForLUT.r);
+        rgbForLUT.g = DCRSRGBLinearToGamma(rgbForLUT.g);
+        rgbForLUT.b = DCRSRGBLinearToGamma(rgbForLUT.b);
     }
 
     float4 lutColor = dcr_sampleLUT3D(lut, rgbForLUT);
@@ -117,9 +126,9 @@ kernel void DCRLUT3DFilter(
     // The LUT output is in gamma space. In linear mode we re-linearize
     // before mixing with the linear input.
     if (isLinear) {
-        lutColor.r = dcr_lut3dGammaToLinear(lutColor.r);
-        lutColor.g = dcr_lut3dGammaToLinear(lutColor.g);
-        lutColor.b = dcr_lut3dGammaToLinear(lutColor.b);
+        lutColor.r = DCRSRGBGammaToLinear(lutColor.r);
+        lutColor.g = DCRSRGBGammaToLinear(lutColor.g);
+        lutColor.b = DCRSRGBGammaToLinear(lutColor.b);
     }
 
     const float mixFactor = clamp(u.intensity, 0.0f, 1.0f);

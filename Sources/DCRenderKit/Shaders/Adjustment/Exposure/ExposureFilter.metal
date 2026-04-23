@@ -53,22 +53,27 @@ struct ExposureUniforms {
     uint  isLinearSpace;  // 1 if the input is linear-light; 0 if gamma-encoded.
 };
 
-/// sRGB → linear using the exact IEC 61966-2-1 piecewise transfer
-/// function (§8.1 A.1). Matches `MTKTextureLoader .SRGB:true` hardware
-/// decode so the software-side wrap in perceptual mode is consistent
-/// with what the linear-mode GPU sampler produces. Legacy "Approx" name
-/// retained for call-site compatibility; it is no longer an approximation.
-inline float dcr_perceptualToLinearApprox(float c) {
-    float cc = max(c, 0.0f);
-    return cc <= 0.04045f ? cc / 12.92f
-                          : pow((cc + 0.055f) / 1.055f, 2.4f);
-}
+// ═══════════════════════════════════════════════════════════════════
+// MIRROR: Foundation/SRGBGamma.metal
+// ═══════════════════════════════════════════════════════════════════
+// ShaderLibrary compiles each .metal file into its own MTLLibrary
+// (see ShaderLibrary.swift:236), so function symbols do not cross
+// translation-unit boundaries. Canonical copy of these helpers
+// lives in Foundation/SRGBGamma.metal. Edit one copy → edit every
+// mirror. Grep:
+//
+//     // MIRROR: Foundation/SRGBGamma.metal
 
-/// Inverse of `dcr_perceptualToLinearApprox` — linear → sRGB encode.
-inline float dcr_linearToPerceptualApprox(float c) {
+inline float DCRSRGBLinearToGamma(float c) {
     float cc = max(c, 0.0f);
     return cc <= 0.0031308f ? 12.92f * cc
                              : 1.055f * pow(cc, 1.0f / 2.4f) - 0.055f;
+}
+
+inline float DCRSRGBGammaToLinear(float c) {
+    float cc = max(c, 0.0f);
+    return cc <= 0.04045f ? cc / 12.92f
+                          : pow((cc + 0.055f) / 1.055f, 2.4f);
 }
 
 kernel void DCRExposureFilter(
@@ -108,12 +113,12 @@ kernel void DCRExposureFilter(
         for (int ch = 0; ch < 3; ch++) {
             float c = float(color[ch]);
             float linear = isLinear ? max(c, 0.0f)
-                                    : dcr_perceptualToLinearApprox(c);
+                                    : DCRSRGBGammaToLinear(c);
             float gained = linear * gain;
             float mapped = gained * (1.0f + gained / white2) / (1.0f + gained);
             float clamped = clamp(mapped, 0.0f, 1.0f);
             color[ch] = half(isLinear ? clamped
-                                      : dcr_linearToPerceptualApprox(clamped));
+                                      : DCRSRGBLinearToGamma(clamped));
         }
     } else if (exposure < -0.001f) {
         // Negative: display-space compound curve.
@@ -130,10 +135,10 @@ kernel void DCRExposureFilter(
 
         for (int ch = 0; ch < 3; ch++) {
             float c = float(color[ch]);
-            float c_gamma = isLinear ? dcr_linearToPerceptualApprox(c) : c;
+            float c_gamma = isLinear ? DCRSRGBLinearToGamma(c) : c;
             float result = A * pow(max(c_gamma, 0.0f), gamma) + B * c_gamma;
             float clamped = clamp(result, 0.0f, 1.0f);
-            color[ch] = half(isLinear ? dcr_perceptualToLinearApprox(clamped) : clamped);
+            color[ch] = half(isLinear ? DCRSRGBGammaToLinear(clamped) : clamped);
         }
     }
 

@@ -92,14 +92,23 @@ struct ClarityUniforms {
     uint  isLinearSpace;  // 1 = linear input; 0 = gamma-encoded.
 };
 
-// IEC 61966-2-1 piecewise sRGB curves (§8.1 A.1). See ContrastFilter.metal
-// for rationale — this is the per-filter copy of the same formulas.
-inline float dcr_clarityLinearToGamma(float c) {
+// ═══════════════════════════════════════════════════════════════════
+// MIRROR: Foundation/SRGBGamma.metal
+// ═══════════════════════════════════════════════════════════════════
+// ShaderLibrary compiles each .metal file into its own MTLLibrary
+// (see ShaderLibrary.swift:236), so function symbols do not cross
+// translation-unit boundaries. Canonical copy of these helpers
+// lives in Foundation/SRGBGamma.metal. Edit one copy → edit every
+// mirror. Grep:
+//
+//     // MIRROR: Foundation/SRGBGamma.metal
+
+inline float DCRSRGBLinearToGamma(float c) {
     float cc = max(c, 0.0f);
     return cc <= 0.0031308f ? 12.92f * cc
                              : 1.055f * pow(cc, 1.0f / 2.4f) - 0.055f;
 }
-inline float dcr_clarityGammaToLinear(float c) {
+inline float DCRSRGBGammaToLinear(float c) {
     float cc = max(c, 0.0f);
     return cc <= 0.04045f ? cc / 12.92f
                           : pow((cc + 0.055f) / 1.055f, 2.4f);
@@ -130,12 +139,12 @@ kernel void DCRClarityApply(
     float3 origRGB = float3(orig.rgb);
     float3 baseRGB = float3(baseColor.rgb);
     if (isLinear) {
-        origRGB.r = dcr_clarityLinearToGamma(origRGB.r);
-        origRGB.g = dcr_clarityLinearToGamma(origRGB.g);
-        origRGB.b = dcr_clarityLinearToGamma(origRGB.b);
-        baseRGB.r = dcr_clarityLinearToGamma(baseRGB.r);
-        baseRGB.g = dcr_clarityLinearToGamma(baseRGB.g);
-        baseRGB.b = dcr_clarityLinearToGamma(baseRGB.b);
+        origRGB.r = DCRSRGBLinearToGamma(origRGB.r);
+        origRGB.g = DCRSRGBLinearToGamma(origRGB.g);
+        origRGB.b = DCRSRGBLinearToGamma(origRGB.b);
+        baseRGB.r = DCRSRGBLinearToGamma(baseRGB.r);
+        baseRGB.g = DCRSRGBLinearToGamma(baseRGB.g);
+        baseRGB.b = DCRSRGBLinearToGamma(baseRGB.b);
     }
 
     float3 detail = origRGB - baseRGB;
@@ -157,9 +166,9 @@ kernel void DCRClarityApply(
     result = clamp(result, 0.0f, 1.0f);
 
     if (isLinear) {
-        result.r = dcr_clarityGammaToLinear(result.r);
-        result.g = dcr_clarityGammaToLinear(result.g);
-        result.b = dcr_clarityGammaToLinear(result.b);
+        result.r = DCRSRGBGammaToLinear(result.r);
+        result.g = DCRSRGBGammaToLinear(result.g);
+        result.b = DCRSRGBGammaToLinear(result.b);
     }
 
     output.write(half4(half3(result), orig.a), gid);

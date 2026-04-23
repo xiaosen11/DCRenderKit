@@ -27,14 +27,23 @@ inline half dcr_whiteBalanceOverlay(half v, half w) {
     }
 }
 
-// IEC 61966-2-1 piecewise sRGB curves (§8.1 A.1). See ContrastFilter.metal
-// for rationale — this is the per-filter copy of the same formulas.
-inline float dcr_whiteBalanceLinearToGamma(float c) {
+// ═══════════════════════════════════════════════════════════════════
+// MIRROR: Foundation/SRGBGamma.metal
+// ═══════════════════════════════════════════════════════════════════
+// ShaderLibrary compiles each .metal file into its own MTLLibrary
+// (see ShaderLibrary.swift:236), so function symbols do not cross
+// translation-unit boundaries. Canonical copy of these helpers
+// lives in Foundation/SRGBGamma.metal. Edit one copy → edit every
+// mirror. Grep:
+//
+//     // MIRROR: Foundation/SRGBGamma.metal
+
+inline float DCRSRGBLinearToGamma(float c) {
     float cc = max(c, 0.0f);
     return cc <= 0.0031308f ? 12.92f * cc
                              : 1.055f * pow(cc, 1.0f / 2.4f) - 0.055f;
 }
-inline float dcr_whiteBalanceGammaToLinear(float c) {
+inline float DCRSRGBGammaToLinear(float c) {
     float cc = max(c, 0.0f);
     return cc <= 0.04045f ? cc / 12.92f
                           : pow((cc + 0.055f) / 1.055f, 2.4f);
@@ -68,9 +77,9 @@ kernel void DCRWhiteBalanceFilter(
     // Bring RGB to gamma space for the fit math.
     half3 rgb = inColor.rgb;
     if (isLinear) {
-        rgb.r = half(dcr_whiteBalanceLinearToGamma(float(rgb.r)));
-        rgb.g = half(dcr_whiteBalanceLinearToGamma(float(rgb.g)));
-        rgb.b = half(dcr_whiteBalanceLinearToGamma(float(rgb.b)));
+        rgb.r = half(DCRSRGBLinearToGamma(float(rgb.r)));
+        rgb.g = half(DCRSRGBLinearToGamma(float(rgb.g)));
+        rgb.b = half(DCRSRGBLinearToGamma(float(rgb.b)));
     }
 
     // RGB ↔ YIQ matrices (NTSC). Used here for tint (Q axis only).
@@ -137,9 +146,9 @@ kernel void DCRWhiteBalanceFilter(
 
     // Re-linearize before write (no-op in perceptual mode).
     if (isLinear) {
-        mixed.r = half(dcr_whiteBalanceGammaToLinear(float(mixed.r)));
-        mixed.g = half(dcr_whiteBalanceGammaToLinear(float(mixed.g)));
-        mixed.b = half(dcr_whiteBalanceGammaToLinear(float(mixed.b)));
+        mixed.r = half(DCRSRGBGammaToLinear(float(mixed.r)));
+        mixed.g = half(DCRSRGBGammaToLinear(float(mixed.g)));
+        mixed.b = half(DCRSRGBGammaToLinear(float(mixed.b)));
     }
 
     output.write(half4(mixed, inColor.a), gid);
