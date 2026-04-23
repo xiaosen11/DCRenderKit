@@ -2,43 +2,76 @@
 //  VibranceFilter.swift
 //  DCRenderKit
 //
-//  Selective saturation — boosts already-unsaturated colours while
-//  leaving high-chroma regions relatively untouched. Port of Harbeth's
-//  C7Vibrance, which itself ports GPUImage's classic vibrance shader.
+//  Adobe-semantic Vibrance (OKLCh selective saturation + skin hue
+//  protect). See `docs/contracts/vibrance.md` for the contract;
+//  `Shaders/ColorGrading/Vibrance/VibranceFilter.metal` for the
+//  kernel.
 //
 
 import Foundation
 
-/// "Vibrance" — perceptually smarter saturation that scales stronger on
-/// undersaturated pixels than on already-saturated ones.
+/// "Vibrance" — perceptually-selective saturation that boosts
+/// low-chroma pixels more strongly than already-saturated ones AND
+/// leaves warm skin hues largely untouched.
 ///
 /// ## Model form justification
 ///
-/// - Type: 1D per-pixel (colour grading)
-/// - Algorithm: `amount = (max(RGB) - mean(RGB)) · (-3·vibrance)`,
-///   `out = mix(rgb, vec3(max(RGB)), amount)`.
-///   - `max - mean` is a cheap saturation proxy: ≈ 0 on grayscale pixels,
-///     larger on high-chroma pixels.
-///   - Multiplying by `-vibrance` means the mix blends *toward* the
-///     max-channel (saturating) when vibrance is positive, away from it
-///     (desaturating) when negative.
-///   - Factor `3` is GPUImage's historical default that produces a
-///     perceptually balanced curve matching the consumer-app reference's
-///     vibrance slider behavior.
-///   - Reference: Brad Larson, *GPUImage* (2012), `VibranceFilter.fsh`.
-///     Same shader shipped as Harbeth's C7Vibrance.
+/// - Type: 1D per-pixel, perception-based (Tier 3)
+/// - Algorithm: linear sRGB → OKLab → OKLCh; two multiplicative
+///   weights modulate the slider's effect on chroma; gamut clamp at
+///   constant `(L, h)`; OKLab → linear sRGB.
+///   - Reference: Ottosson (2020), *A perceptual color space for image
+///     processing*. https://bottosson.github.io/posts/oklab/
+///   - Adobe/Lightroom "Vibrance" semantics (selective + skin protect)
+///     codified from published behavioural descriptions (SLR Lounge,
+///     Boris FX, Digital Photography School). The Adobe algorithm is
+///     proprietary; our shader is an independent OKLCh implementation
+///     that targets the same contract (`docs/contracts/vibrance.md`).
+///   - Skin-hue parameters: centre ≈ 45° and half-width ≈ 25° on the
+///     OKLCh hue axis, measured empirically from ColorChecker Light /
+///     Dark Skin patches (h ≈ 44.9° and 46.7°) and cross-checked
+///     against the CIELAB cross-cultural preferred-skin-hue of ≈ 49°
+///     (IS&T 2020).
+///
+/// ## Weights
+///
+/// ```
+/// w_lowsat = 1 − smoothstep(0.08, 0.25, C)   // low-chroma full weight
+/// w_skin   = 1 − skin_hue_gate(h)             // skin hue: suppressed
+/// C' = C · (1 + vibrance · w_lowsat · w_skin)
+/// ```
+///
+/// Constants (`C_low`, `C_high`, skin centre / half-width) are internal
+/// to the shader. They are calibrated against the `docs/contracts/vibrance.md`
+/// conditions and the behaviour expected by the Vibrance name in
+/// commercial photo tools; deviating from them changes filter character
+/// and should only be done alongside a contract revision.
 ///
 /// ## Parameter range
 ///
-/// `vibrance` in `[-1.2, +1.2]`:
-/// - `0` = identity (no change)
-/// - Positive = selective saturation boost (protects saturated pixels)
-/// - Negative = selective desaturation (affects colourful regions more)
+/// `vibrance` in `[-1, +1]`:
+/// - `0` = identity (exact, up to Float16 quantization)
+/// - Positive = selective saturation boost (low-C gets more, skin
+///   protected)
+/// - Negative = selective desaturation (low-C pulled toward grey,
+///   high-C and skin largely unchanged)
 ///
-/// Identity at `vibrance = 0` is exact (amount factor collapses to 0).
+/// ## Breaking change from pre-#14 implementation
+///
+/// The prior implementation `mix(rgb, vec3(max), (max − mean) · −3·vib)`
+/// inherited from GPUImage / Harbeth C7Vibrance behaved as a non-Adobe
+/// "max-anchor saturation" — already-saturated pixels received *more*
+/// boost rather than less, and no skin protection existed. The new
+/// implementation flips that to Adobe semantics. Slider handfeel and
+/// visual response differ noticeably; existing presets that depend on
+/// the old curve will need retuning. See the #14 commit message for
+/// migration notes.
 public struct VibranceFilter: FilterProtocol {
 
-    /// Vibrance slider. Range `-1.2 ... +1.2`; identity at `0`.
+    /// Vibrance slider. Range `-1 ... +1`; identity at `0`. Positive
+    /// selectively boosts low-chroma pixels (protecting already-saturated
+    /// colours and warm skin hues); negative selectively desaturates
+    /// low-chroma pixels.
     public var vibrance: Float
 
     public init(vibrance: Float = 0.0) {
@@ -58,6 +91,6 @@ public struct VibranceFilter: FilterProtocol {
 
 /// Memory layout matches `constant VibranceUniforms& u [[buffer(0)]]`.
 struct VibranceUniforms {
-    /// `-1.2 ... +1.2`. Shader clamps.
+    /// `-1 ... +1`, identity at `0`. Shader clamps.
     var vibrance: Float
 }

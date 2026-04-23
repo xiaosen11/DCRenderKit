@@ -123,6 +123,52 @@ final class ColorGradingFilterTests: XCTestCase {
         XCTAssertEqual(VibranceFilter.fuseGroup, .colorGrading)
     }
 
+    /// Adobe-semantic skin protect: ColorChecker Light Skin patch at
+    /// vibrance = +1 should barely move because the hue gate suppresses
+    /// the boost. Full contract verification lives in #28.
+    func testVibranceProtectsSkinHue() throws {
+        // ColorChecker Light Skin patch — linear sRGB ≈ (0.573, 0.261, 0.166).
+        // OKLCh hue ≈ 45°, right at the skin-protect centre.
+        let source = try makeCGSource(red: 0.573, green: 0.261, blue: 0.166)
+        let output = try runSingle(source, filter: VibranceFilter(vibrance: 1.0))
+        let p = try readCGTexture(output)[4][4]
+        assertFinite(p)
+        // Each channel within 0.02 of input. Bigger shifts would mean
+        // the skin gate isn't suppressing the boost.
+        XCTAssertEqual(p.r, 0.573, accuracy: 0.02)
+        XCTAssertEqual(p.g, 0.261, accuracy: 0.02)
+        XCTAssertEqual(p.b, 0.166, accuracy: 0.02)
+    }
+
+    /// Adobe-semantic selective boost: a low-chroma non-skin pixel
+    /// (pale blue-ish) should gain visible chroma at vibrance = +1,
+    /// unlike the skin case above. The test input has OKLCh hue ≈ 257°
+    /// (blue biased slightly green), well outside the skin protection
+    /// window.
+    ///
+    /// Derivation (manual, via Ottosson matrices):
+    ///   input RGB (0.45, 0.50, 0.58) → OKLab (0.791, -0.0046, -0.0198)
+    ///   → OKLCh (L=0.791, C=0.0203, h=-1.80 rad ≈ 257°).
+    ///   w_lowsat = 1 (C < 0.08), w_skin = 1 (hue far from 45°).
+    ///   boost factor = 1 + 1 · 1 · 1 = 2 → C' = 0.041.
+    ///   Inverse path gives output ≈ (0.405, 0.505, 0.669).
+    ///
+    /// Directional assertions:
+    ///   - R drops clearly (0.45 → 0.405).
+    ///   - B rises clearly (0.58 → 0.669).
+    ///   - G is left alone at first glance but in OKLCh the hue direction
+    ///     (a < 0, b < 0) and the inverse-matrix row for G has both
+    ///     coefficients negative — so pushing a and b further negative
+    ///     *raises* G by ~0.005. Not useful as a direction assertion.
+    func testVibranceBoostsLowSatNonSkin() throws {
+        let source = try makeCGSource(red: 0.45, green: 0.50, blue: 0.58)
+        let output = try runSingle(source, filter: VibranceFilter(vibrance: 1.0))
+        let p = try readCGTexture(output)[4][4]
+        assertFinite(p)
+        XCTAssertLessThan(p.r, 0.43, "R should drop clearly (expected ≈ 0.405)")
+        XCTAssertGreaterThan(p.b, 0.62, "B should rise clearly (expected ≈ 0.669)")
+    }
+
     // MARK: - WhiteBalance
 
     func testWhiteBalanceIdentityAtNeutralKelvin() throws {
