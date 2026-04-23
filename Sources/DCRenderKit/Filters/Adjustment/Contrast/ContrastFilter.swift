@@ -7,33 +7,65 @@
 
 import Foundation
 
-/// Contrast adjustment driven by a cubic pivot curve whose steepness and
-/// crossover point adapt to the image's mean luminance.
+/// Contrast adjustment via log-space slope around a scene-adaptive
+/// luminance pivot (DaVinci Resolve primary-contrast formulation).
 ///
 /// ## Model form justification
 ///
 /// - Type: 1D per-pixel (tone adjustment)
-/// - Algorithm: cubic pivot curve `y = x + k * x * (1-x) * (x-pivot)`
-///   - Per-channel in display space, clamped to `[0, 1]`
-///   - `k = (-0.356 * lumaMean + 2.289) * contrast` (slope control)
-///   - `pivot = 0.381 * lumaMean + 0.377` (crossover control)
-/// - Why cubic pivot: compared against sigmoid / piecewise-power / parabolic
-///   pivot families on 3 reference scenes (gamma-space JPEG exports from a
-///   consumer photo-editing app, luma means 0.29 / 0.40 / 0.60), the cubic
-///   pivot family produced the lowest cross-scene average MSE (≈ 52.1)
-///   with only 2 adaptive coefficients.
-/// - Why adapt to lumaMean: bright scenes tolerate steeper slopes than dark
-///   scenes before dark-region crush; a single fixed curve over-compresses
-///   shadows on high-key content and blows highlights on low-key content.
+/// - Algorithm: **log-space slope** `y = pivot · (x / pivot)^slope`
+///   where `slope = exp2(contrast · 1.585)`.
+///   - Per-channel, applied in gamma (display) space and clamped to
+///     `[0, 1]`.
+///   - Raising linear `log x` around a pivot by a multiplicative slope
+///     is the **standard primary-contrast operator** used by DaVinci
+///     Resolve (see the curve-math write-up at
+///     https://knarkowicz.wordpress.com/2016/01/06/aces-filmic-tone-mapping-curve/
+///     §"slope/offset/power", and ACES RRT's S-curve middle linear
+///     segment definition which uses the same form).
+///   - `slope = exp2(contrast · 1.585)` so `slider = ±1` yields
+///     `slope ∈ {1/3, 3}` — the commercial grading convention "3× or
+///     1/3× contrast at slider extremes" (±1.585 stops of log-space
+///     amplification).
+///   - `pivot` is the image's **mean luminance** (scene-adaptive).
+///     Dark scenes end up with a lower pivot (crushing shadows,
+///     lifting highlights); bright scenes end up with a higher
+///     pivot (crushing highlights, lifting shadows). This matches the
+///     photographer's intuition that "contrast" should pivot around
+///     the scene's own midpoint rather than a fixed gray (DaVinci by
+///     default fixes pivot at 0.18 for scene-invariant grading; we
+///     optimise for UI feel rather than grading-room invariance).
+/// - Why **not** the prior cubic pivot
+///   (`y = x + k·x·(1-x)·(x-pivot)`): the cubic was a fitted polynomial
+///   against gamma-space consumer-photo-app exports (MSE 52.1), with
+///   no closed-form principle behind the specific coefficient shape.
+///   Log-space slope is the principled version of the same intent —
+///   no fit, a single well-known photo-grading primitive.
 ///
 /// ## Parameter range
 ///
-/// - `contrast`: slider in `-100 ... +100`
-/// - `lumaMean`: pre-computed average display-space luma of the source,
-///   expected in `[0.05, 0.95]`. Consumers typically obtain it via a single
-///   reduction pass (MPS image statistics) before running the filter.
+/// - `contrast`: slider in `-100 ... +100`, normalised to `-1 ... +1`
+///   and raised to the log-space slope exponent via
+///   `slope = exp2(±1.585)`.
+/// - `lumaMean`: pre-computed mean-luminance pivot of the source,
+///   expected in `(0, 1)`. Consumers typically obtain it via a single
+///   reduction pass (`ImageStatistics.lumaMean`). The shader clamps it
+///   to `[0.05, 0.95]` for numerical stability — a pivot at 0 or 1
+///   degenerates the `pow` expression.
 ///
-/// Identity at `contrast = 0` (k collapses to 0, curve degenerates to y = x).
+/// Identity at `contrast = 0` (slope = 1, curve degenerates to y = x).
+///
+/// ## Breaking change from pre-Session-C fitted cubic
+///
+/// Switching from fitted cubic to log-space slope changes the response
+/// shape across all slider positions. The curves agree at `contrast =
+/// 0` (both pass through y = x) and at the tonal endpoints, but the
+/// midtone region behaves more like a DaVinci slope control and less
+/// like the Harbeth-lineage cubic. Existing presets that depended on
+/// the cubic's exact midtone curvature need retuning; this is
+/// intentional per the Tier 2 "replace Harbeth-fitted curves with
+/// principled operators" decision. findings-and-plan §8.5 B.1 tracks
+/// the full switchover across fitted filters.
 public struct ContrastFilter: FilterProtocol {
 
     /// Contrast slider. Range `-100 ... +100`.

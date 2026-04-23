@@ -86,8 +86,9 @@ final class Bgra8UnormSourceContractTests: XCTestCase {
     }
 
     func testContrastOnBgra8UnormSourceProducesFloatOutput() throws {
-        // Perceptual branch for derivation stability (see ContrastFilter
-        // tests for the full derivation of 0.181 from the cubic pivot).
+        // DaVinci log-slope at contrast=+100, lumaMean=0.5, x=0.3:
+        //   slope = exp2(1.585) ≈ 3
+        //   y = 0.5·(0.3/0.5)^3 = 0.5·0.216 = 0.108
         let source = try makeBgra8UnormUniform(r: 0.3, g: 0.3, b: 0.3)
         let output = try runPipeline(
             source: source,
@@ -95,7 +96,7 @@ final class Bgra8UnormSourceContractTests: XCTestCase {
         )
         XCTAssertEqual(output.pixelFormat, .rgba16Float)
         let p = try readRgbaFloat(output)[4][4]
-        XCTAssertEqual(p.r, 0.181, accuracy: 0.02)
+        XCTAssertEqual(p.r, 0.108, accuracy: 0.02)
     }
 
     func testSharpenOnBgra8UnormStepEdgeProducesOvershoot() throws {

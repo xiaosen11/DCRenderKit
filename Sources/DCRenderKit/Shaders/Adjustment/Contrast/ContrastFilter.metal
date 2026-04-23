@@ -6,31 +6,31 @@
 #include <metal_stdlib>
 using namespace metal;
 
-// ── ContrastFilter — luma-mean adaptive cubic pivot ──
+// ── ContrastFilter — DaVinci log-space slope around scene pivot ──
 //
-// Model: y = clamp(x + k * x * (1 - x) * (x - pivot), 0, 1)
-//   k     = (-0.356 * lumaMean + 2.289) * contrast
-//   pivot =  0.381 * lumaMean + 0.377
-// Per-channel application.
+// Model: y = pivot · (x / pivot)^slope,  slope = exp2(contrast · 1.585)
+//   Per-channel in gamma (display) space, clamped to [0, 1].
+//   pivot = image mean luminance (scene-adaptive), clamped to
+//           [0.05, 0.95] for numerical stability.
 //
-// Fit against ±100 reference exports from a consumer photo-editing app
-// across 3 scenes (bridge / castle / tower, mean luma 0.29 / 0.40 /
-// 0.60), in *perceptual* (sRGB-gamma) space. Joint cross-scene average
-// MSE = 52.1 (≈ 7.2 levels / 2.8%).
+// Reference: DaVinci Resolve primary-contrast operator. See
+//   https://knarkowicz.wordpress.com/2016/01/06/aces-filmic-tone-mapping-curve/
+//   §"slope/offset/power" — the same slope/pivot form appears in the
+//   ACES RRT middle linear segment and in OCIO primary-grading docs.
+// The 1.585 = log2(3) magic number makes slider = ±1 yield
+//   slope ∈ {1/3, 3} — the commercial "±1.585 stops of contrast"
+//   convention.
+//
+// Identity at contrast = 0: slope = 2^0 = 1, y = pivot·(x/pivot)^1 = x.
 //
 // ## Color-space branching
 //
-// u.isLinearSpace == 0: apply the curve directly on gamma-encoded floats
-//   (DigiCam parity — the fit's native domain).
-//
-// u.isLinearSpace == 1: linear-light input. Un-linearize to gamma → apply
-//   fitted curve → re-linearize. Two extra pow()s per channel, visual
-//   parity with the perceptual branch; `lumaMean` is likewise converted
-//   to gamma-space before plugging into the k/pivot formulas.
-//
-// Identity at contrast = 0 is exact in both branches: k → 0 collapses
-// the cubic term; the pow wrapping is mathematically a no-op up to the
-// 2.2-vs-true-sRGB approximation noise.
+// u.isLinearSpace == 0: apply the slope curve directly on gamma-encoded
+//   floats. This is the curve's native domain.
+// u.isLinearSpace == 1: input is linear-light. Un-linearize to gamma
+//   with the shared IEC 61966-2-1 helpers → apply the slope → re-
+//   linearize. The pivot is also converted to gamma space so it anchors
+//   at the same perceived-brightness point regardless of space.
 
 struct ContrastUniforms {
     float contrast;       // -1.0 ... +1.0
@@ -77,21 +77,27 @@ kernel void DCRContrastFilter(
     const bool isLinear = (u.isLinearSpace != 0u);
 
     // lumaMean is fed in the pipeline's current space. Convert to
-    // gamma-space before plugging into the fit formulas, so k / pivot
-    // hit the same tonal location regardless of color-space mode.
-    float lumaMean = u.lumaMean;
+    // gamma-space so the pivot anchors at the same perceived-
+    // brightness location regardless of whether the pipeline carries
+    // linear or gamma values.
+    float pivot = u.lumaMean;
     if (isLinear) {
-        lumaMean = DCRSRGBLinearToGamma(lumaMean);
+        pivot = DCRSRGBLinearToGamma(pivot);
     }
-    lumaMean = clamp(lumaMean, 0.05f, 0.95f);
+    pivot = clamp(pivot, 0.05f, 0.95f);
 
-    const float k     = (-0.356f * lumaMean + 2.289f) * contrast;
-    const float pivot =  0.381f * lumaMean + 0.377f;
+    // log2(3) ≈ 1.585 → slider ±1 maps to slope ∈ {1/3, 3}, the
+    // commercial "±1.585 stops of contrast" convention.
+    const float slope = exp2(contrast * 1.585f);
 
     for (int ch = 0; ch < 3; ch++) {
         float x = float(color[ch]);
         float x_gamma = isLinear ? DCRSRGBLinearToGamma(x) : x;
-        float y = x_gamma + k * x_gamma * (1.0f - x_gamma) * (x_gamma - pivot);
+        // pow(x/pivot, slope) — pivot-anchored log-space slope.
+        // max(..., 1e-6) guards pow against a zero base at slope < 1
+        // (which would otherwise emit 0^negative = inf).
+        float ratio = max(x_gamma, 1e-6f) / pivot;
+        float y = pivot * pow(ratio, slope);
         float y_clamped = clamp(y, 0.0f, 1.0f);
         color[ch] = half(isLinear ? DCRSRGBGammaToLinear(y_clamped) : y_clamped);
     }

@@ -277,11 +277,10 @@ final class ToneAdjustmentFilterTests: XCTestCase {
 
     // MARK: - Contrast
     //
-    // ContrastFilter.metal shader contract:
-    //   k     = (-0.356 * lumaMean + 2.289) * contrast
-    //   pivot =  0.381 * lumaMean + 0.377
-    //   y     = clamp(x + k·x·(1-x)·(x - pivot), 0, 1)
-    // lumaMean clamped to [0.05, 0.95] inside the shader.
+    // ContrastFilter.metal shader contract (DaVinci log-space slope):
+    //   pivot clamped to [0.05, 0.95] in the shader
+    //   slope = exp2(contrast · 1.585)   → slider ±1 ⇒ slope ∈ {1/3, 3}
+    //   y = clamp(pivot · (x / pivot)^slope, 0, 1)
 
     func testContrastIdentityAtZero() throws {
         let source = try makeToneSource(red: 0.42, green: 0.55, blue: 0.18)
@@ -294,40 +293,44 @@ final class ToneAdjustmentFilterTests: XCTestCase {
 
     func testContrastPositiveFullSliderDarkensBelowPivot() throws {
         // Perceptual-branch derivation for contrast=+100, lumaMean=0.5, x=0.3:
-        //   k     = (-0.356·0.5 + 2.289)·1 = 2.111
-        //   pivot = 0.381·0.5 + 0.377 = 0.5675
-        //   y = 0.3 + 2.111·0.3·0.7·(0.3 - 0.5675) ≈ 0.181
+        //   slope = exp2(+1 · 1.585) ≈ 3.0
+        //   ratio = 0.3 / 0.5 = 0.6
+        //   y = 0.5 · 0.6^3 = 0.5 · 0.216 = 0.108
         let source = try makeToneSource(red: 0.3, green: 0.3, blue: 0.3)
         let output = try runSingle(
             source,
             filter: ContrastFilter(contrast: 100, lumaMean: 0.5, colorSpace: .perceptual)
         )
         let p = try readToneTexture(output)[4][4]
-        XCTAssertEqual(p.r, 0.181, accuracy: 0.02)
+        XCTAssertEqual(p.r, 0.108, accuracy: 0.02)
     }
 
     func testContrastPositiveFullSliderBrightensAbovePivot() throws {
-        // Perceptual branch. k=2.111, pivot=0.5675.
-        //   y = 0.7 + 2.111·0.7·0.3·(0.7 - 0.5675) ≈ 0.759
-        let source = try makeToneSource(red: 0.7, green: 0.7, blue: 0.7)
+        // x=0.6 (was 0.7): at slider=+100 with pivot=0.5 and slope=3,
+        //   x=0.7 ⇒ y = 0.5 · 1.4^3 = 1.372 → clamps to 1.0, so the
+        // assertion would only prove the clamp, not the brighten shape.
+        // x=0.6 ⇒ ratio 1.2, stays in-gamut:
+        //   y = 0.5 · 1.2^3 = 0.5 · 1.728 = 0.864
+        let source = try makeToneSource(red: 0.6, green: 0.6, blue: 0.6)
         let output = try runSingle(
             source,
             filter: ContrastFilter(contrast: 100, lumaMean: 0.5, colorSpace: .perceptual)
         )
         let p = try readToneTexture(output)[4][4]
-        XCTAssertEqual(p.r, 0.759, accuracy: 0.02)
+        XCTAssertEqual(p.r, 0.864, accuracy: 0.02)
     }
 
     func testContrastNegativeFullSliderLiftsDarkTowardPivot() throws {
-        // Perceptual branch. k=-2.111, pivot=0.5675.
-        //   y = 0.3 + (-2.111)·0.3·0.7·(0.3 - 0.5675) ≈ 0.419
+        // contrast=-100, pivot=0.5, slope = exp2(-1.585) = 1/3:
+        //   ratio = 0.6, 0.6^(1/3) ≈ 0.8434
+        //   y = 0.5 · 0.8434 ≈ 0.422
         let source = try makeToneSource(red: 0.3, green: 0.3, blue: 0.3)
         let output = try runSingle(
             source,
             filter: ContrastFilter(contrast: -100, lumaMean: 0.5, colorSpace: .perceptual)
         )
         let p = try readToneTexture(output)[4][4]
-        XCTAssertEqual(p.r, 0.419, accuracy: 0.02)
+        XCTAssertEqual(p.r, 0.422, accuracy: 0.02)
     }
 
     func testContrastLumaMeanClampingAtExtremes() throws {
