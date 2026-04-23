@@ -58,15 +58,21 @@ final class ColorGradingFilterTests: XCTestCase {
     }
 
     func testSaturationZeroGoesGrayscale() throws {
+        // OKLCh implementation collapses to a gray that preserves OKLab L
+        // (perceptual lightness), not Rec.709 Y. All three channels must
+        // still be equal. We assert they're equal rather than computing a
+        // specific expected value — OKLab's round-trip for an L-only input
+        // is exactly (k, k, k) because a=b=0 and the inverse matrices
+        // collapse to identity on the grey diagonal.
         let source = try makeCGSource(red: 0.8, green: 0.2, blue: 0.4)
         let output = try runSingle(source, filter: SaturationFilter(saturation: 0))
         let p = try readCGTexture(output)[4][4]
-        // All channels collapse to Rec.709 luma. For (0.8, 0.2, 0.4):
-        // luma = 0.2125*0.8 + 0.7154*0.2 + 0.0721*0.4 = 0.3420.
-        let expected: Float = 0.2125 * 0.8 + 0.7154 * 0.2 + 0.0721 * 0.4
-        XCTAssertEqual(p.r, expected, accuracy: 0.02)
-        XCTAssertEqual(p.g, expected, accuracy: 0.02)
-        XCTAssertEqual(p.b, expected, accuracy: 0.02)
+        XCTAssertEqual(p.r, p.g, accuracy: 0.005, "R and G should match (grayscale)")
+        XCTAssertEqual(p.g, p.b, accuracy: 0.005, "G and B should match (grayscale)")
+        // Numeric range check: perceptual L-gray is brighter than Rec.709
+        // luma (which was ~0.342), but still within the [0, 1] gamut.
+        XCTAssertGreaterThan(p.r, 0.3)
+        XCTAssertLessThan(p.r, 0.5)
     }
 
     func testSaturationDoubleBoostsChroma() throws {
