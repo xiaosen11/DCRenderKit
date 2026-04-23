@@ -388,6 +388,12 @@ P4 + Phase C/D 后的补充审计。已修复的 fitted filter wrap（5个）+ L
 
 ### 7.3 未修复的纯拟合 tech debt（原理派替代）
 
+> **ARCHIVED (2026-04-23)** — 本节描述的 Contrast / Blacks / Whites /
+> Exposure-neg 三~五个 fitted filter 已在 Session C Tier 1.3 全部替换
+> 为原理派（Contrast→DaVinci log-slope / Blacks→Reinhard toe /
+> Whites→Filmic shoulder / Exposure-neg→pure linear gain）。本节保留
+> 作为历史上下文，内容已被后续提交取代。
+
 三个 filter 当前用 MSE 选的经验公式：
 
 - **Contrast**: cubic pivot `y = x + k·x·(1-x)·(x-pivot)` — MSE=52.1 的优选
@@ -503,6 +509,12 @@ slider 激活）。248 tests 全绿。
 
 ### 8.4 Industry claim audit — 重新调研 7 个算法选择（~10-15h）
 
+> **ARCHIVED (2026-04-23)** — Session B 已完成全部 7 条 Audit 并
+> 将 fetched reference 写入相应契约文档（`docs/contracts/*.md`）。
+> Session C 进一步决定 DCRenderKit 不追求外部 parity（third-party
+> comparison dropped in release-criteria.md），本节遗留审计工作作
+> 为历史上下文保留。
+
 **硬约束**：只能引 fetched URL / DOI，不能引记忆（`rules/engineering-judgment.md §4`）。
 
 - [ ] **Audit.1 SoftGlow Dual Kawase** — 查 Unity HDRP / Unreal Bloom / darktable / Blender 实际实现
@@ -519,6 +531,12 @@ slider 激活）。248 tests 全绿。
 
 ### 8.5 需要用户决策 (B)
 
+> **ARCHIVED (2026-04-23)** — B.1 由用户在 Session C 拍板"全部替换
+> 为原理派"，并已在 Session C Tier 1.3 完成 Contrast / Blacks /
+> Whites / Exposure-neg / Vibrance 全部落地。B.2-B.5 的后续决策
+> 随着 Session C 收敛（放弃 external parity / Harbeth comparison /
+> SSIM ground truth 方案）而全部失效。内容保留作为决策历史。
+
 - [ ] **B.1 Tier 3 纯拟合替换**是否接受 slider 手感变化？具体替换候选：
   - **Contrast**: 当前 cubic pivot `y = x + k·x·(1-x)·(x-pivot)` → 候选 log-space 线性（= linear 空间的 power curve 锚 pivot）`y = pivot·(x/pivot)^slope`（DaVinci Resolve primary contrast 数学形式）
   - **Blacks**: 当前 `y = x·(1 + k·(1-x)^a)` → 候选 Filmic toe function（Blender Filmic / AgX 的 toe 公式）
@@ -530,6 +548,14 @@ slider 激活）。248 tests 全绿。
 - [ ] **B.5 Harbeth port 后的算法"业界通用"声明可信度**：若 §8.4 发现 2+ 个是过去 Claude 合成的 pseudo-consensus，是否全量重新调研 7 个？
 
 ### 8.6 Validation roadmap — 16 filter 按 Tier 分治（2026-04-22 重构）
+
+> **ARCHIVED (2026-04-23)** — Tier 2 SSIM spot-check（§8.6 C）最终
+> 被 Session C 收敛决策完全放弃：DCRenderKit 不再尝试与任何第三方
+> app（像素蛋糕 / Lightroom / Capture One）做 pixel-level parity；
+> fitted Tier 2 filter 已全部替换为原理派，Tier 4 snapshot baseline
+> framework（`SnapshotAssertion`）成为唯一的 regression 锚。
+> Tier 1 / 3 / 4 的验证思路继续沿用（unit test / 契约 / snapshot），
+> 本节整段作为验证思路的历史记录保留。
 
 **原 §8.6 C "20 filter × Lightroom Linear TIFF 导出" 方案已作废**。原因：
 
