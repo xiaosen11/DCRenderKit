@@ -394,16 +394,32 @@ P4 + Phase C/D 后的补充审计。已修复的 fitted filter wrap（5个）+ L
 - **Blacks**: `y = x·(1 + k·(1-x)^a)` — MSE=0.63 vs weighted-parab / power-law
 - **Exposure 负向**: 复合 `A·x^γ + B·x` — 非原理派（正向 Reinhard 是原理派）
 
-**原理派候选**（log-space / filmic 家族）：
-- **Contrast**: log-space 线性变换 = linear 空间的 power curve 锚在 pivot，`y = pivot·(x/pivot)^slope`。DaVinci Resolve primary contrast 的数学形式。
-- **Blacks**: Filmic toe function（有论文引用），或 gamma 参数化。
-- **Exposure 负向**: 负 EV offset + 阴影 toe（对称于正向 Reinhard 架构）。
+**原理派候选**（log-space / filmic 家族，§8.4 Audit.7 commit session B fetched references）：
+
+1. **Contrast**: log-space 线性变换 = linear 空间的 power curve 锚在 pivot，`y = pivot · (x/pivot)^slope`
+   - DaVinci Resolve primary contrast 的数学形式
+   - 对标: ACES RRT S-curve 中间线性段 slope > 1 (参考 [knarkowicz ACES Filmic curve](https://knarkowicz.wordpress.com/2016/01/06/aces-filmic-tone-mapping-curve/))
+
+2. **Blacks**: Filmic **toe function**（S-curve 下端弯曲部分）
+   - 参考: Blender Filmic / AgX toe 公式，AgX 是 Filmic 2.0 升级版 ([Blender AgX replace commit](https://projects.blender.org/blender/blender/pulls/106355))
+   - 简化形式: `y = x / (x + ε·(1 − x))` (Reinhard toe with scale)
+
+3. **Exposure 负向**: 负 EV offset + 阴影 toe
+   - 对标 inverse Reinhard 或 Filmic shoulder 反向
+   - 当前 DCR 正向 Reinhard 已为原理派，负向**复合 A·x^γ + B·x** 是 ad-hoc —— 对称化路径明显
+
+**Reinhard 家族补注** ([Reinhard et al. 2002 原始论文](https://pages.cs.wisc.edu/~saikat/projects/hdr/doc/rgtm.html))：
+- 标准 Reinhard: `C / (1 + C)` —— 简单但缺 "toe" 区（[Reinhard desaturates blacks discussion](https://imdoingitwrong.wordpress.com/2010/08/19/why-reinhard-desaturates-my-blacks-3/)）
+- Extended Reinhard: `C·(1 + C/C_white²) / (1 + C)` —— 有 white point control
+- AgX > Filmic: AgX unsaturates highly exposed colors 更好 (模拟胶片 silver halide 饱和去色)
 
 **为什么不立即替换**：
 - 所有 5 个 fitted filter 的常数继承自 Harbeth 谱系（原始 fitting pipeline 已失传；用户 2026-04-22 澄清原始拟合参考是消费级调色 app 像素蛋糕，非 Lightroom）
 - 替换 = 换了套 UI 手感（"相同 slider 值看起来不一样"）
-- **产品决策不是工程决策**
-- 建议 §8.6 Tier 2 spot-check（20 张像素蛋糕 JPEG / SSIM > 0.85）验证后再决定是否替换
+- **产品决策不是工程决策**（§8.5 B.1 pending 用户决策）
+- §8.4 Audit.7 已完成 (commit session B): 原理派替代**有明确业界 fetched 依据**（AgX / ACES / Reinhard / DaVinci），任何未来替换 task 都从这里起步
+
+**Tier 2 spot-check (§8.6 C.1-C.3)** 已被用户签字 "不做外部锚定"。替换决策只能靠 DCR 内部 A/B 或接受 empirical 现状
 
 ### 7.5 F3 修复完成（2026-04-22，commit 2907b2b）
 

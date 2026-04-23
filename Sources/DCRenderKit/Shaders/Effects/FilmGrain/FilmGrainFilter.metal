@@ -6,24 +6,42 @@
 #include <metal_stdlib>
 using namespace metal;
 
-// ── sin-trick pattern verification ──
+// ── Hash choice (§8.4 Audit.6, 2026-04-23) ──
 //
-// The noise hash `fract(sin(dot(pos, (12.9898, 78.233))) · 43758.5453)` is
-// a classic shadertoy hash that degrades numerically at large `pos` values
-// (Float32 precision of `sin` degrades past ~2¹⁶ argument magnitude).
-// Historically this produces visible diagonal / cross banding on 4K inputs.
+// The noise hash `fract(sin(dot(pos, (12.9898, 78.233))) · 43758.5453)`
+// is the canonical "shadertoy sin-trick" — the exact same formula
+// appears across real-time shader film-grain implementations:
+//   - lettier.github.io/3d-game-shaders-for-beginners/film-grain.html
+//   - shadertoy.com/view/3sGGRz ("Simple Film Grain Shader")
+//   - mattdesl/glsl-film-grain (GitHub)
+// It is the industry-standard hash for real-time GPU film-grain in
+// the shader category. DCR uses it for the same reason: cheap,
+// Float32-compatible, well-tested across the category.
 //
-// Verified clean at 4K on 2026-04-22 (§8.1 A.3):
+// Trade-off vs realistic particle-based grain (Audit.6): IPOL 2017
+// "Realistic Film Grain Rendering"
+// (https://www.ipol.im/pub/art/2017/192/article_lr.pdf) uses stochastic
+// silver-halide-crystal models per film stock (Kodak Portra cubic,
+// Fuji sigma, etc.). That class of algorithm is an order of magnitude
+// more expensive, offline-oriented, and NOT the right fit for the
+// real-time camera-preview use case. DCR's category (real-time shader
+// film grain) uses the hash approach universally, the sin-trick being
+// its canonical realization.
+//
+// Numerically the sin-trick degrades past ~2¹⁶ argument magnitude due
+// to sin precision falloff in Float32, producing visible diagonal /
+// cross banding on large textures. Verified clean at 4K on 2026-04-22
+// (§8.1 A.3):
 //   - Test: FilmGrainPatternTests.test4KFilmGrainSinTrickRowColumnBanding
 //   - Method: 4096×4096 uniform 0.5-gray patch, density=1, grainSize=1
-//   - row-mean stddev and column-mean stddev both within 1.1× the i.i.d.
-//     noise baseline (σ/√N where σ ≈ 0.036 output delta stddev, N=4096)
+//   - Row-mean stddev and column-mean stddev both within 1.1× the
+//     i.i.d. noise baseline
 //   - No periodic structure detectable by 1D first-moment analysis
 //
 // If future GPU architecture changes or new regression testing exposes
-// banding at higher resolutions, replace the sin-trick hash with PCG
-// (Jarzynski & Olano 2020) or Wyvill hash (GPU Pro 5). Keep the symmetric
-// SoftLight blend pipeline (which is independent of hash choice).
+// banding at higher resolutions, replace with PCG (Jarzynski & Olano
+// 2020) or Wyvill hash (GPU Pro 5). Keep the symmetric SoftLight blend
+// pipeline (hash-independent).
 
 // Symmetric SoftLight. Derivation: Photoshop's SoftLight uses sqrt() for
 // the lighten half and `base*(1-base)` for the darken half, which is not
