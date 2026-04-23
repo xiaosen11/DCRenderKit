@@ -2,10 +2,15 @@
 //  PortraitBlurFilter.swift
 //  DCRenderKit
 //
-//  Subject-aware depth-of-field blur. mask=1 regions stay sharp, mask=0
-//  regions are blurred with a 16-tap Poisson-disc kernel. Ported from
-//  DigiCam. Static factory methods for Vision-based mask generation are
-//  included for consumer convenience.
+//  Subject-aware depth-of-field blur. Two-pass Poisson-disc stochastic
+//  blur: the second pass samples a 90°-rotated variant of the first
+//  pass's Poisson pattern, so the 16-tap kernel in effect draws from
+//  32 uncorrelated sample positions — that is what kills the residual
+//  banding 16-tap Poisson-disc shows at large radii.
+//
+//  Ported from DigiCam originally as a single-pass filter; upgraded to
+//  the two-pass architecture in Session C for the "slider +100 feels
+//  weak" real-device report (#75).
 //
 
 import Foundation
@@ -19,51 +24,81 @@ import Vision
 import CoreVideo
 #endif
 
-/// Subject-mask driven depth-of-field blur.
+/// Subject-mask-driven depth-of-field blur.
 ///
-/// ## Algorithm
+/// ## Model form justification
 ///
-/// - Type: 2D neighborhood with per-pixel radius modulation
-/// - Kernel: 16-tap **Poisson-disc** sampling pattern inside a unit disc,
-///   Gaussian-weighted by distance-from-center. Poisson-disc (vs a regular
-///   grid) prevents the grid-aliased "cross" pattern common with small
-///   sample counts.
-///   - Reference: Mitchell, "Spectrally Optimal Sampling for Distribution
-///     Ray Tracing" (SIGGRAPH '91). Modern GPU-filter adoption in
-///     Unity's HDRP bokeh and UE's depth-of-field.
-/// - Mask: R8Unorm texture in `[0, 1]`. 1 = subject, 0 = background.
-///   `blurAmount = (1 - mask) · strength` so mask-edge pixels naturally
-///   fade between sharp and blurred (no manual smoothstep needed).
+/// - Type: 2D neighbourhood (mask-modulated variable radius)
+/// - Algorithm: **Two-pass Poisson-disc** stochastic blur.
+///   - 16-tap Poisson pattern per pass, Gaussian-weighted by distance
+///     from centre (Mitchell, "Spectrally Optimal Sampling for
+///     Distribution Ray Tracing", SIGGRAPH 1991).
+///   - Pass 1 reads the source texture; pass 2 reads pass 1's output
+///     and uses a **90°-rotated** copy of the same Poisson pattern.
+///     The two passes together draw from **32 uncorrelated sample
+///     positions** — `rotate(p, 90°)` never coincides with `p` for
+///     any non-origin Poisson tap, so second-pass samples land in
+///     the gaps left by the first pass.
+///   - Effective standard deviation is `σ_single × √2`, matching the
+///     Gaussian convolution-of-two-Gaussians identity. Per-pass radius
+///     of `0.030 · shortSide` produces an effective `0.0424 · shortSide`
+///     blur: ~46 px at 1080p, ~92 px at 4K — the Apple Portrait / LR
+///     50-100 px range that real-device feedback (#75) called out as
+///     the target.
+/// - Why **not** separable Gaussian: mask-modulated per-pixel radius
+///   breaks the space-invariance assumption that lets Gaussian
+///   convolution be separated into two 1D passes. Variable-σ separable
+///   Gaussian is an approximation whose quality at sharp mask
+///   boundaries is worse than the uncorrelated-stochastic approach
+///   used here.
+/// - Why **not** disk DoF: disk DoF requires a depth map, but the SDK's
+///   `PortraitBlurMaskGenerator` returns a binary subject mask — there
+///   is no depth signal to drive a physically-correct CoC radius.
+/// - Why **not** Dual Kawase pyramid: pyramid blur is fixed-radius
+///   per-level; mask-modulated per-pixel radius cannot be expressed
+///   in the pyramid.
+///
+/// ## Pass graph
+///
+/// 1. **pass1** (`DCRPortraitBlurFilterPass1`): `source + mask → temp`.
+///    Standard Poisson-disc pattern; `localRadius = (1 − mask) · strength
+///    · shortSide · 0.030`.
+/// 2. **final** (`DCRPortraitBlurFilterPass2`): `temp + mask → output`.
+///    Pattern rotated 90° in-shader; same radius formula.
+///
+/// Identity short-circuit: when the filter was built with `maskTexture
+/// == nil`, `passes(input:)` returns an empty array and the SDK falls
+/// through to passing `source` unchanged. When `strength == 0`, pass 1
+/// still runs but its output matches the input within Float16 noise
+/// (dead-zone handled inside the shader); we don't short-circuit at
+/// strength=0 in Swift to keep the pass graph shape stable for
+/// downstream snapshot testing.
 ///
 /// ## Spatial parameter (rules/spatial-params.md §2)
 ///
-/// `localRadius = blurAmount · shortSide · 0.025` — image-structure
-/// parameter, scales with the source's short side so a given `strength`
-/// produces visually comparable blur at any resolution:
-/// - 1080p: max radius ≈ 27 pixels
-/// - 4K:    max radius ≈ 54 pixels
+/// `localRadius = (1 − mask) · strength · shortSide · 0.030` is an
+/// image-structure parameter. Coefficient 0.030 chosen so the
+/// **effective** (two-pass) radius of 0.0424 · shortSide places the
+/// slider's +100 endpoint in the Apple Portrait / Lightroom 50-100 px
+/// range on both 1080p and 4K inputs.
 ///
-/// ## Known limitation
+/// ## Sendable note
 ///
-/// 16-tap Poisson disc shows mild banding beyond ~60 pixel radii. For
-/// large-aperture / very soft bokeh, apply the filter twice (the
-/// banding at N samples decorrelates between applications, effectively
-/// doubling the sample count). A full hybrid separable-Gaussian path
-/// for large radii is a Phase 2 candidate; this port preserves exact
-/// DigiCam behaviour.
-///
-/// ## Failure modes
-///
-/// The mask is required at init; pass `nil` there and the initializer
-/// degrades to a no-op filter that simply returns the source. This
-/// mirrors the DigiCam behaviour of "mask-less subjects = untouched
-/// image" without the shader-side undefined-texture-binding hazard.
-public struct PortraitBlurFilter: FilterProtocol, @unchecked Sendable {
+/// Stores an `MTLTexture` mask, which is not natively `Sendable`. The
+/// mask is immutable after `init` and read by the shader with
+/// `.shaderRead` — the standard safe-to-share pattern for read-only
+/// Metal resources. `@unchecked Sendable` carries that justification.
+public struct PortraitBlurFilter: MultiPassFilter, @unchecked Sendable {
 
-    /// Blur strength slider `0 ... 100`.
+    /// Blur strength slider, `0 ... 100`. Internally normalised to
+    /// `0.0 ... 1.0` for the shader. No product compression: the
+    /// coefficient in the shader (`0.030 · shortSide`) already
+    /// encodes the desired product-level feel.
     public var strength: Float
 
-    /// Subject mask texture (R8Unorm). `nil` → identity behaviour.
+    /// Subject mask texture (R8Unorm). `1.0` = subject (kept sharp),
+    /// `0.0` = background (fully blurred). `nil` makes the filter an
+    /// identity pass-through.
     private let maskTexture: MTLTexture?
 
     public init(strength: Float = 50, maskTexture: MTLTexture?) {
@@ -71,33 +106,47 @@ public struct PortraitBlurFilter: FilterProtocol, @unchecked Sendable {
         self.maskTexture = maskTexture
     }
 
-    public var modifier: ModifierEnum {
-        // Choose between the real kernel and a trivial identity kernel
-        // so that a missing mask never lets the GPU bind undefined
-        // textures. The identity kernel still respects ComputeDispatcher's
-        // binding convention (writes to dest, reads from source).
-        if maskTexture == nil {
-            return .compute(kernel: "DCRPortraitBlurIdentity")
-        }
-        return .compute(kernel: "DCRPortraitBlurFilter")
-    }
-
-    public var uniforms: FilterUniforms {
-        FilterUniforms(PortraitBlurUniforms(
-            strength: (strength / 100.0) * 0.5   // product compression ×0.5
-        ))
-    }
-
     public var additionalInputs: [MTLTexture] {
         maskTexture.map { [$0] } ?? []
     }
 
-    public static var fuseGroup: FuseGroup? { nil }
+    public func passes(input: TextureInfo) -> [Pass] {
+        // Identity pass-through when no mask was provided — emit an
+        // empty pass graph so the executor hands the source back
+        // unchanged.
+        guard maskTexture != nil else {
+            return []
+        }
+
+        let uniforms = FilterUniforms(PortraitBlurUniforms(
+            strength: strength / 100.0
+        ))
+
+        return [
+            .compute(
+                name: "pass1",
+                kernel: "DCRPortraitBlurFilterPass1",
+                inputs: [.source, .additional(0)],
+                output: .sameAsSource,
+                uniforms: uniforms
+            ),
+            .final(
+                name: "pass2",
+                kernel: "DCRPortraitBlurFilterPass2",
+                inputs: [.named("pass1"), .additional(0)],
+                output: .sameAsSource,
+                uniforms: uniforms
+            ),
+        ]
+    }
 }
 
-/// Memory layout matches `constant PortraitBlurUniforms& u [[buffer(0)]]`.
+/// Memory layout matches `constant PortraitBlurUniforms& u [[buffer(0)]]`
+/// in `PortraitBlurFilter.metal`.
 struct PortraitBlurUniforms {
-    /// Product-compressed strength `0 ... 0.5`.
+    /// Blur strength normalised to `0.0 ... 1.0`. No product
+    /// compression: the shader's `0.030 · shortSide` coefficient
+    /// already encodes the desired peak radius.
     var strength: Float
 }
 

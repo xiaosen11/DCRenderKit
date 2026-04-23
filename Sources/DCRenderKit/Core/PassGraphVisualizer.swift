@@ -68,6 +68,7 @@ public enum PassGraphVisualizer {
                 switch input {
                 case .source: return "source"
                 case .named(let n): return n
+                case .additional(let i): return "additional[\(i)]"
                 }
             }.joined(separator: ", ")
 
@@ -131,6 +132,7 @@ public enum PassGraphVisualizer {
                 switch input {
                 case .source: from = "source"
                 case .named(let n): from = mermaidId(n)
+                case .additional(let i): from = "additional_\(i)"
                 }
                 lines.append("    \(from) --> \(mermaidId(pass.name))")
             }

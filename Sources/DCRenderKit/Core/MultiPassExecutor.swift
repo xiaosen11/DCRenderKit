@@ -74,6 +74,7 @@ public struct MultiPassExecutor {
     public static func execute(
         passes: [Pass],
         source: MTLTexture,
+        additionalInputs: [MTLTexture] = [],
         intermediatePixelFormat: MTLPixelFormat,
         commandBuffer: MTLCommandBuffer,
         psoCache: PipelineStateCache = .shared,
@@ -135,9 +136,10 @@ public struct MultiPassExecutor {
             ))
 
             // Resolve input textures.
-            let (sourceInput, additionalInputs) = try resolveInputs(
+            let (sourceInput, passAdditionalInputs) = try resolveInputs(
                 pass: pass,
                 source: source,
+                additionalInputs: additionalInputs,
                 produced: produced
             )
 
@@ -147,7 +149,7 @@ public struct MultiPassExecutor {
                 try ComputeDispatcher.dispatch(
                     kernel: kernel,
                     uniforms: pass.uniforms,
-                    additionalInputs: additionalInputs,
+                    additionalInputs: passAdditionalInputs,
                     source: sourceInput,
                     destination: outputTexture,
                     commandBuffer: commandBuffer,
@@ -282,6 +284,7 @@ public struct MultiPassExecutor {
     private static func resolveInputs(
         pass: Pass,
         source: MTLTexture,
+        additionalInputs: [MTLTexture],
         produced: [String: MTLTexture]
     ) throws -> (primary: MTLTexture, additional: [MTLTexture]) {
         guard !pass.inputs.isEmpty else {
@@ -304,6 +307,14 @@ public struct MultiPassExecutor {
                     ))
                 }
                 textures.append(tex)
+            case .additional(let index):
+                guard index >= 0, index < additionalInputs.count else {
+                    throw PipelineError.filter(.invalidPassGraph(
+                        filterName: "MultiPass",
+                        reason: "pass '\(pass.name)' references .additional(\(index)) but filter provided only \(additionalInputs.count) auxiliary textures"
+                    ))
+                }
+                textures.append(additionalInputs[index])
             }
         }
 

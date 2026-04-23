@@ -117,7 +117,7 @@ final class SmokeTests: XCTestCase {
         let pipeline = makePipeline(
             input: .texture(source),
             steps: [
-                .single(PortraitBlurFilter(strength: 100, maskTexture: mask)),
+                .multi(PortraitBlurFilter(strength: 100, maskTexture: mask)),
                 .single(SharpenFilter(amount: 40, step: 2)),
             ]
         )

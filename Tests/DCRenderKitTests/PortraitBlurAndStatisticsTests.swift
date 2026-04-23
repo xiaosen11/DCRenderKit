@@ -50,7 +50,7 @@ final class PortraitBlurAndStatisticsTests: XCTestCase {
 
     func testPortraitBlurNilMaskIsIdentity() throws {
         let source = try makeBlurSource(red: 0.3, green: 0.6, blue: 0.9, width: 32, height: 32)
-        let output = try runSingle(
+        let output = try runMulti(
             source,
             filter: PortraitBlurFilter(strength: 100, maskTexture: nil)
         )
@@ -63,7 +63,7 @@ final class PortraitBlurAndStatisticsTests: XCTestCase {
     func testPortraitBlurStrengthZeroIsIdentity() throws {
         let source = try makeBlurSource(red: 0.5, green: 0.5, blue: 0.5, width: 32, height: 32)
         let mask = try makeMask(width: 32, height: 32, subjectValue: 0)  // all background
-        let output = try runSingle(
+        let output = try runMulti(
             source,
             filter: PortraitBlurFilter(strength: 0, maskTexture: mask)
         )
@@ -77,7 +77,7 @@ final class PortraitBlurAndStatisticsTests: XCTestCase {
         let mask = try makeMask(
             width: source.width, height: source.height, subjectValue: 1
         )
-        let output = try runSingle(
+        let output = try runMulti(
             source,
             filter: PortraitBlurFilter(strength: 100, maskTexture: mask)
         )
@@ -96,12 +96,12 @@ final class PortraitBlurAndStatisticsTests: XCTestCase {
     func testPortraitBlurAllBackgroundProducesBlur() throws {
         // 4K-sized source so localRadius > 0.5 → blur path fires.
         // Use a ramp + mask=0 everywhere. Center pixels should differ
-        // from the source due to Poisson disc averaging.
+        // from the source due to Poisson disc averaging (now two-pass).
         let source = try makeRampBlurSource(width: 128, height: 128)
         let mask = try makeMask(
             width: source.width, height: source.height, subjectValue: 0
         )
-        let output = try runSingle(
+        let output = try runMulti(
             source,
             filter: PortraitBlurFilter(strength: 100, maskTexture: mask)
         )
@@ -163,13 +163,13 @@ final class PortraitBlurAndStatisticsTests: XCTestCase {
 
     // MARK: - Helpers
 
-    private func runSingle<F: FilterProtocol>(
+    private func runMulti<F: MultiPassFilter>(
         _ source: MTLTexture,
         filter: F
     ) throws -> MTLTexture {
         let pipeline = Pipeline(
             input: .texture(source),
-            steps: [.single(filter)],
+            steps: [.multi(filter)],
             optimizer: FilterGraphOptimizer(),
             intermediatePixelFormat: .rgba16Float,
             device: device,

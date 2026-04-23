@@ -67,12 +67,23 @@ public protocol MultiPassFilter: Sendable {
     /// - Returns: Ordered list of passes to execute. Empty means identity.
     func passes(input: TextureInfo) -> [Pass]
 
+    /// External input textures the pass graph can reference via
+    /// ``PassInput/additional(_:)``. Order matters: the index inside
+    /// `PassInput.additional(i)` is looked up in this array.
+    ///
+    /// Used for filters that consume caller-supplied auxiliary textures
+    /// (e.g. ``PortraitBlurFilter``'s subject mask). Default is empty —
+    /// pipeline-internal multi-pass filters (SoftGlow, HighlightShadow,
+    /// Clarity) don't need external textures.
+    var additionalInputs: [MTLTexture] { get }
+
     /// Identifies whether this filter can be fused. Multi-pass filters are
     /// rarely fusable; default is `nil`.
     static var fuseGroup: FuseGroup? { get }
 }
 
 extension MultiPassFilter {
+    public var additionalInputs: [MTLTexture] { [] }
     public static var fuseGroup: FuseGroup? { nil }
 }
 
@@ -202,8 +213,9 @@ public struct Pass: Sendable {
 
 // MARK: - PassInput
 
-/// Reference to a texture consumed by a `Pass`. Either the original source or
-/// the output of a previously named pass.
+/// Reference to a texture consumed by a `Pass`. Either the original
+/// source, the output of a previously named pass, or one of the
+/// filter's caller-supplied auxiliary textures.
 public enum PassInput: Sendable, Hashable {
 
     /// The source texture supplied to the filter (the chain input).
@@ -211,6 +223,12 @@ public enum PassInput: Sendable, Hashable {
 
     /// The named output of an earlier pass within this filter's graph.
     case named(String)
+
+    /// Index into the filter's ``MultiPassFilter/additionalInputs``
+    /// array. Used for caller-supplied auxiliary textures such as
+    /// subject masks, LUTs, or blend overlays that the pass graph
+    /// consumes repeatedly across multiple passes.
+    case additional(Int)
 }
 
 // MARK: - TextureSpec

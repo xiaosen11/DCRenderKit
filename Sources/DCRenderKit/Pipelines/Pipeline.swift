@@ -426,6 +426,7 @@ public final class Pipeline: @unchecked Sendable {
         return try MultiPassExecutor.execute(
             passes: passes,
             source: sourceTexture,
+            additionalInputs: filter.additionalInputs,
             intermediatePixelFormat: intermediatePixelFormat,
             commandBuffer: commandBuffer,
             psoCache: psoCache,
