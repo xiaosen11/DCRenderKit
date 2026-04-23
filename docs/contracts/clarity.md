@@ -59,9 +59,25 @@
 7. clamp to [0, 1], output = srgb_gamma_to_linear(outGamma)
 ```
 
-常数来源（`findings-and-plan.md` §8.1 A.2, commit `d5ea56a` FIXME）:
-- product compression `× 1.5 positive` / `× 0.7 negative` — Harbeth 血缘，未独立验证"perceptually linear slider"宣称
-- guided filter `ε = 0.005`, `p = 0.019` (radius 相对 quarterRes short side)
+常数来源与依据（§8.1 A.2 FIXME + B-series 反推 commit session B）:
+
+**Guided filter `ε = 0.005` (B.2 derivation)**:
+- 工业/学术 ε 范围 0.001–0.1 ([Guided Filter Wikipedia](https://en.wikipedia.org/wiki/Guided_filter))；[MATLAB `imguidedfilter` default](https://www.mathworks.com/help/images/ref/imguidedfilter.html) 0.01 for `[0,1]`
+- DCR Clarity 选 0.005 = MATLAB default 一半 = **更强边缘保持** (less smoothing)
+- **硬依据**: 设计意图是 "base 只抓大尺度结构，让更多中频 detail 留在 residual 给 amplify"。较小 ε 正好服务此意图。对比 HS (ε=0.01) 也合逻辑 —— HS 要 broader base，Clarity 要 sharper base
+- 此值在论文推荐范围内，语义正向
+
+**Guided filter radius `p = 0.019` (fraction of quarter-res short side)**:
+- 比 HS (0.012) 稍大 — 配合 Clarity 的 "broader textured-patch base" 意图
+- 仍在论文推荐范围内，但**具体值 Harbeth-inherited，无独立 derivation**。可视为 empirical 偏工程判断
+- 1080p quarter-res 270 px → 5.1 px radius → ~20 px full-res radius → 1.9% 短边
+
+**Product compression `× 1.5 positive` / `× 0.7 negative` (B.1 findings)**:
+- **Weber-Fechner** ([Wikipedia](https://en.wikipedia.org/wiki/Weber%E2%80%93Fechner_law)) 给 qualitative log-linear 关系 + 1% JND，**不提供具体数值系数推导**
+- **Unsharp mask amount** ([Wikipedia](https://en.wikipedia.org/wiki/Unsharp_masking)) 在所有主流实现中都是 user-taste 参数，**无理论最优值**（MATLAB imsharpen default amount=0.8）
+- ×1.5 / ×0.7 是 Harbeth 血缘 aesthetic choice，**无文档化 user 验证**
+- shader 注释中原有 "perceptually-linear slider response" 宣称已删除（fabricated，违反 engineering-judgment §4）
+- **tech debt 状态**: 已知 empirical; 建议未来加 Tier 4 snapshot tracking 锁定当前值，避免悄悄漂移
 
 ---
 

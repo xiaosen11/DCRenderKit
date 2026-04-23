@@ -69,13 +69,13 @@ kernel void DCRClarityComputeBase(
 //
 // Positive: `output = original + detail · intensity · 1.5`
 //   — amplifies the mid-frequency component that was removed by the
-//   guided filter. ×1.5 gain compensates for intensity's product
-//   compression so the perceived effect tracks the slider linearly.
+//   guided filter. ×1.5 gain is Harbeth-inherited empirical; no
+//   independent Weber-Fechner measurement backs "perceptually-linear
+//   slider response". Documented as tech debt in docs/contracts/clarity.md.
 //
 // Negative: `output = mix(original, base, |intensity| · 0.7)`
-//   — blends toward the smooth edge-preserving base. ×0.7 keeps the
-//   extreme from fully flattening into the base (preserves some
-//   detail at slider = -100).
+//   — blends toward the smooth edge-preserving base. ×0.7 is similarly
+//   Harbeth-inherited empirical; keeps extreme from fully flattening.
 //
 // ## Color-space branching
 //

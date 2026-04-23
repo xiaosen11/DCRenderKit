@@ -64,11 +64,30 @@ Composite (Screen blend at strength):
   output   = mix(I, screened, strength)
 ```
 
-常数来源（`findings-and-plan.md` §8.1 A.2，commit `d5ea56a` FIXME）:
-- 金字塔深度 anchor `log2(shortSide / 135)` — Harbeth 血缘
-- strength 压缩 `× 0.35` — commit `eb606d8`（真机反馈太强 → 压缩）
-- smoothstep 宽度 `0.2` (threshold ± 0.1) — Harbeth 血缘
-- tent kernel `1-2-1 / 2-4-2 / 1-2-1 / 16` — 标准 Gaussian approx (binomial)
+常数来源与依据（§8.1 A.2 FIXME + B-series 反推 commit session B）:
+
+**Pyramid depth anchor `135` (B.3 derivation)**:
+- Formula: `levels = max(3, floor(log2(shortSide / 135)))`
+- 反算: 1080 / 2³ = 135 → "1080p 下 3 级 pyramid" 的反推常数
+- Industry 对照: 自适应 pyramid depth with resolution 是业界标准做法（否则"高分辨率下 bloom 显得小"，见 [Unity 社区讨论](https://discussions.unity.com/t/bloom-effect-requires-adjustments-for-any-supported-screen-resolution/805148)）。具体 level 数由产品决策，非感知 / PSF 定理
+- 用户真机反馈（2026-04-22 session A）确认当前 bloom 范围 "looks right"，证明 "3 levels @ 1080p" 是**用户验证过的美学选择**
+- **等价干净替代**: 常数改成 `128` (= 2⁷) 在 1080p / 4K 下行为**完全相同**（两者都 give 3 / 4 levels），但数学更整洁。后续 refactor 可采纳但不影响 1.0 行为
+- 替代 `256` 会让 4K 降到 3 levels（现 4 levels）— **功能性 break**，不建议
+
+**Strength 压缩 `× 0.35` (B.1 findings)**:
+- 来源: commit `eb606d8` (session A 2026-04-22) 真机反馈 "太强" → 压缩比例实测调到 0.35
+- **依据**: user-feedback-driven empirical tuning
+- **Weber-Fechner 推导尝试 (B.1)**: 失败 —— Weber-Fechner 给 qualitative log-linear 关系 + 1% JND，**不提供具体数值系数**。没有理论可导出 0.35 这个值
+- **相对最强 empirical evidence**: 三个 filter 里唯一有 session 真机反馈支持，比 HS × 0.35/0.50 (无用户反馈) 和 Clarity × 1.5/0.7 (shader 注释已移除 fabricated claim) 档次更高
+- **tech debt 状态**: user-validated empirical; 建议 Tier 4 snapshot tracking 锁定
+
+**Smoothstep 宽度 `± 0.1` (threshold ± 0.1 = 0.2-wide gate)**:
+- 来源: Harbeth 血缘，无独立 fit 过程
+- 依据: 未验证；可能是 "足够宽让过渡平滑，足够窄让 gate 有效果" 的 empirical 选择
+
+**Tent kernel `1-2-1 / 2-4-2 / 1-2-1 / 16`**:
+- 来源: 2D binomial Gaussian approximation (Pascal 三角行 `1 2 1`)。教科书标准 (e.g. Unity HDRP Gaussian filter 用 Pascal 第九行，本实现用第三行简化版)
+- 依据: **硬依据** (二项式分布 → 高斯近似，见 [Unity HDRP Bloom Gaussian 描述](https://docs.unity3d.com/Packages/com.unity.render-pipelines.high-definition@14.0/manual/Post-Processing-Bloom.html))
 
 ---
 
