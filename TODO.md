@@ -4,26 +4,27 @@
 
 完整 task 历史（含已完成）在 `~/.claude/tasks/<session-uuid>/*.json`（Claude Code 内部存储）。此文件是**人类可读快照**。
 
-**最后更新**: 2026-04-23（Session B 结束，commit `9b3aa50`，62 ahead of origin/main, 299 tests pass）
+**最后更新**: 2026-04-23（Session C 进行中，HEAD `b327214`，0 ahead of origin/main — Session B 后已 push，299 tests pass）
 
 ---
 
-## 已确认完成项（30 条，不再列 —— 见 git log）
+## 已确认完成项（31 条，不再列 —— 见 git log）
 
-Tier 3 五 filter 完整闭环（契约 → impl → 验证 → 算法/参数依据） · §8.1 A.1-A.7 · §8.2 A+.1-A+.5 · §8.3 A++.1-A++.5 · §8.4 Audit.1-7 全部 ✓ · B.1-B.4 参数级依据全部收尾
+Tier 3 五 filter 完整闭环（契约 → impl → 验证 → 算法/参数依据） · §8.1 A.1-A.7 · §8.2 A+.1-A+.5 · §8.3 A++.1-A++.5 · §8.4 Audit.1-7 全部 ✓ · B.1-B.4 参数级依据全部收尾 · **#74 typed Error enum hierarchy（Session C 代码审确认）**
 
 ---
 
 ## Pending 分类（按"是否改 SDK 功能代码" `Sources/DCRenderKit/**`）
 
-### 必定改 SDK 功能代码（4 条）
+### 必定改 SDK 功能代码（3 条）
 
 | ID | 任务 | Scope |
 |---|---|---|
 | #47 | 所有 public API 加 `@available` 标注 | 全 public 声明加属性 |
-| #73 | Package.swift dependencies 必须空验证 | 若发现非空需删 |
-| #74 | 错误类型 hierarchy 化（NSError → typed Error enum） | `Sources/DCRenderKit/Error/` 重构 |
+| #73 | Package.swift dependencies 必须空验证 | 守护测试（当前已空，不需删依赖） |
 | #75 | PortraitBlur 效果强度优化（真机 slider +100 过弱） | shader 参数 / 算法调整 |
+
+> **#74 typed Error enum hierarchy 已完成** — `Sources/DCRenderKit/Error/PipelineError.swift` 已是 5-domain typed enum（device / texture / pipelineState / filter / resource）。grep `NSError` 在 Sources/ 零结果。Session C (2026-04-23) 代码审确认无遗留，任务移除。
 
 ### 可能改 SDK 功能代码（investigation，发现问题才改，12 条）
 
