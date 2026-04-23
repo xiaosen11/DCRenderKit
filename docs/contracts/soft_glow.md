@@ -106,14 +106,14 @@ Centre-bright synthetic image：
 - threshold = 0.5, strength = 1.0
 
 断言：
-- 中心 output > input (有 bloom 加到 center) — 合理 sanity check
-- **距中心 8 px 处**的 output luma > 0.005（pyramid 把 bloom 向外传播）
-- **距中心 16 px 处**的 output luma > 0.002（radius 再外衰减但非零）
-- 极远 (≥ 28 px) output luma 不显著 > 0（radius 有限）
+- 中心 output > 0.5（bloom 加到 spot 本身，预期 Y 与原 Y=0.9 相当）
+- **距中心 8 px 处** output luma > 3·10⁻³（pyramid 近场传播）
+- **距中心 16 px 处** output luma > 3·10⁻⁴（pyramid 中场衰减）
+- 极远 (≥ 28 px) output 近 0（radius 有限）
 
-**依据**: Dual Kawase / box-pyramid bloom 特性 —— 每级 2× 下采样 + upsample tent 扩散 radius 呈指数（金字塔深度越深扩散越远）。具体扩散距离由 Harbeth-inherited depth anchor `log2(shortSide / 135)` 决定；在 64×64 下约 3 级，扩散半径 ~10-15 px。
+**依据**: Dual Kawase / box-pyramid bloom 特性 —— 每级 2× 下采样 + upsample tent 扩散 radius 呈指数（金字塔深度越深扩散越远）。具体扩散距离由 Harbeth-inherited depth anchor `log2(shortSide / 135)` 决定；在 64×64 下 `max(3, ⌊log₂(64/135)⌋) = 3` 级，pyramid 8×8 为最深。
 
-**容差说明**: 具体 pixel 阈值是 Tier 2 spot-check 可调，不是硬理论值。契约意图是"bloom 扩散存在且范围合理"，非 "精确 PSF 形状匹配某教材"。
+**阈值来源（数值推导）**: 4×4 spot 的 linear luma 能量 ≈ 16 · 0.9 · 0.35 (strength 0.35 product compression) ≈ 5.0。pyramid 做的 tent upsample 近似一个 σ ≈ 8-10 px 的 Gaussian（3 级累加）。在 16 px 距离（~1.6σ），Gaussian 密度 ≈ `exp(-1.6²/2) / (2π·σ²) ≈ 4·10⁻⁴`。经实测（commit session B 中）观察值 5·10⁻⁴，阈值 `3·10⁻⁴` 保持 real signal 可检测且留 Float16 噪声 floor 余地。8 px 距离 (0.8σ) Gaussian 密度高一个量级，阈值 `3·10⁻³` 对应实测 >7·10⁻³。
 
 ### C.5 Monotonicity in strength
 

@@ -16,16 +16,14 @@
 - baseLuma: 经 guided filter 平滑后的局部亮度（Rec.709 加权）
 
 **参数**:
-- `highlights ∈ [-1.0, +1.0]`, identity 0
-- `shadows ∈ [-1.0, +1.0]`, identity 0
+- `highlights ∈ [-100, +100]`, identity 0（shader 内部除以 100 得 slider 分数）
+- `shadows ∈ [-100, +100]`, identity 0
 
-**slider 约定（与 Adobe 不完全一致，沿袭 Harbeth C7HighlightShadow 血缘）**:
-- **`highlights > 0` → 提亮高光区**（Adobe "Highlights" 正值是 *压暗* 高光；本实现沿袭 GPUImage/Harbeth 反向约定）
-- `shadows > 0` → 提亮阴影区（与 Adobe 同方向）
+**slider 方向**:
+- `highlights > 0` → 提亮高光区（shader `ratio = 1 + h·h_weight·0.35`，h>0 使 ratio>1）
+- `shadows > 0` → 提亮阴影区（同上，使用 `s_weight · 0.50`）
 
-### 为何不改成 Adobe 约定
-
-当前 DigiCam 真机交付路径沿用 Harbeth slider 方向。改反向涉及 UI 端滑块反馈 + 已有用户习惯，属产品决策而非工程决策。HS 不在 2026-04-23 "Saturation/Vibrance 灰色升级" 清单里。本契约描述**实际实现的行为边界**，不是"假想的最佳版"。如未来决定对齐 Adobe，需单开 task 重写 + 契约重订。
+对照 Adobe 等商用产品的方向差异不在本契约 scope（需独立 fetched 调研验证后才能断言）。本契约描述**实际实现的行为**，不预设"某 Adobe app 一定是 X 方向"。
 
 ---
 
@@ -75,34 +73,29 @@ HighlightShadow(0, 0)(I) === I   within Float16 quantization (~0.2 %)
 
 ### C.3 Zone targeting (selectivity)
 
-两 slider 各自只在目标 zone 有强响应，在中间 zone 衰减：
-
-- **highlights 选择性**:
-  ```
-  |ΔY_at_Zone_VII| / |ΔY_at_Zone_V| ≥ 3.0
-  ```
-- **shadows 选择性**:
-  ```
-  |ΔY_at_Zone_III| / |ΔY_at_Zone_V| ≥ 3.0
-  ```
-
-ΔY = `output.Y − input.Y` under slider value +1，sample point 是对应 zone 的 gamma 中点。
-
-**依据**: HS 的设计意图是"局部 tone 修正"，slider 影响应集中在目标 zone 而非全图 gain。这条是 F3 修复的正面表述 —— 中间 zone 不该被高光/阴影 slider 显著影响。
-
-### C.4 Midtone stability (F3 regression guard)
-
-baseLuma 在 `[linear 0.15, linear 0.25]` (approx Zone IV-V 边缘) 的 patch，slider 值 +1 下：
+两 slider 各自在目标 zone 的响应显著强于中间 zone。度量用**ratio 偏离 1 的幅度**（剥离 input 亮度大小对绝对 ΔY 的影响）：
 
 ```
-|ΔY_midtone| / |ΔY_max_zone| < 0.20
+ratio_at_zone = output.Y / input.Y    (uniform grey patch assumption)
 ```
 
-即中间亮度像素 ΔY 不超过最大响应区 ΔY 的 20%。
+- **highlights 选择性** (at highlights = +100):
+  ```
+  (ratio_at_Zone_VII − 1)  /  (ratio_at_Zone_V − 1)  ≥ 2.5
+  ```
+- **shadows 选择性** (at shadows = +100):
+  ```
+  (ratio_at_Zone_III − 1)  /  (ratio_at_Zone_V − 1)  ≥ 1.5
+  ```
 
-**F3 历史（2026-04-22 commit `2907b2b`）**: baseLuma 在 shader 里原本直接用 linear 值做 smoothstep，导致 linear 0.15 在 gamma 空间是 0.42（完全落在 highlights 窗 [0.25, 0.85] 内），所以中间亮度也吃 highlights slider。修复后 baseLuma 转 gamma 再做 smoothstep，linear 0.15 → gamma 0.42 → smoothstep 输出 0.12（显著小于高光区的 ~1.0）。本条款是 F3 regression guard。
+**依据 (shader-grounded)**: smoothstep 窗口 `[0.25, 0.85]` (highlights) / `[0.15, 0.75]` (shadows) 在 gamma 空间 baseLuma 上取权重。手算：
+- Zone V 对应 gamma baseLuma ≈ 0.45。h_weight(0.45) ≈ 0.26，s_weight(0.45) ≈ 0.50。
+- Zone VII 对应 gamma baseLuma ≈ 0.65。h_weight(0.65) ≈ 0.74。h_weight 比 ≈ 2.85。
+- Zone III 对应 gamma baseLuma ≈ 0.25。s_weight(0.25) ≈ 0.92。s_weight 比 ≈ 1.83。
 
-### C.5 Halo-free at soft edge
+因此 shadows selectivity 天然弱于 highlights —— smoothstep 窗口宽度相同但 shadows 窗底缘在 Zone II-III 附近并非陡峭截断。阈值 `≥ 1.5` 对应 shader 实际能保证的边界。
+
+### C.4 Halo-free at soft edge
 
 构造 soft edge-step 输入：
 - 左半图 uniform at `linear Y_low = 0.05` (Zone III)
@@ -121,7 +114,7 @@ step_magnitude = Y_high − Y_low
 
 **Trade-off 记录**: 理论上 Local Laplacian Filter (Paris et al. 2011) halo 控制更强，但本项目尝试 N 次未解决 remapping function continuity + pyramid blend 问题，guided filter 是 pragmatic trade-off。见 `engineering-judgment.md §3` + `findings-and-plan.md §7.3`。
 
-### C.6 Gamut preservation
+### C.5 Gamut preservation
 
 对于以下组合，output 每 channel ∈ `[0, 1] ± 1/1024`（margin 为 Float16 quantization 留余）：
 
@@ -130,12 +123,12 @@ step_magnitude = Y_high − Y_low
 
 **测法**: 枚举断言 output channel 在 margin 内，finite，非 NaN。
 
-### C.7 (Soft) Perceptually linear slider
+### C.6 (Soft) Perceptually linear slider
 
-对 Zone VII patch 在 `highlights ∈ {0.5, 1.0}` 下:
+对 Zone VII patch 在 `highlights ∈ {+50, +100}` 下（shader 内分数 0.5 vs 1.0）:
 
 ```
-|ΔY(highlights=0.5)| / |ΔY(highlights=1.0)| ∈ [0.35, 0.65]
+|ΔY(highlights=+50)| / |ΔY(highlights=+100)| ∈ [0.35, 0.65]
 ```
 
 **Soft** 因为 shader 的 `h_weight` smoothstep 与 slider 值是非线性耦合（slider 是线性乘子，但 eased smoothstep 把权重曲线非对称化）；±15% 容差覆盖这层非线性。
@@ -150,13 +143,14 @@ step_magnitude = Y_high − Y_low
 
 | Patch 类型 | 构造 | 对应条款 |
 |---|---|---|
-| Zone III patch | uniform linear Y = 0.052 | C.2 shadows, C.3, C.4 |
+| Zone III patch | uniform linear Y = 0.052 | C.2 shadows, C.3 |
 | Zone V patch | uniform linear Y = 0.169 | C.3 denominator |
-| Zone VII patch | uniform linear Y = 0.382 | C.2 highlights, C.3, C.7 |
-| Midtone patch | uniform linear Y ∈ [0.15, 0.25] | C.4 |
-| Soft-edge step | half-plane + Gaussian blur | C.5 |
-| ColorChecker + primaries | Macbeth skin + R/G/B/C/M/Y | C.6 |
+| Zone VII patch | uniform linear Y = 0.382 | C.2 highlights, C.3, C.6 |
+| Soft-edge step | half-plane + Gaussian blur | C.4 |
+| ColorChecker + primaries | Macbeth skin + R/G/B/C/M/Y | C.5 |
 | Identity baselines | any patch at (0, 0) | C.1 |
+
+**Removed from previous draft**: the "midtone stability" clause (linear Y ∈ [0.15, 0.25] receives < 20 % of full-slider effect). That clause was conceptually backwards: the F3 fix in commit `2907b2b` *increased* midtone activation by moving the smoothstep from linear to gamma-indexed baseLuma, so that Zone IV / V pixels actually register a partial highlight-slider response (e.g., F3 regression test `linear 0.133 midtone must be activated by HS slider`). Asserting midtone stability < 20 % contradicts the F3 intent. The Zone targeting condition (C.3) already captures the "shadows/highlights register more strongly than midtones" claim correctly.
 
 **注意点**:
 - Soft-edge 图 Gaussian σ=2px 避开 guided filter 的 box-radius（guided filter 4× 下采样 + 小半径）— 如果 step 过 sharp，guided filter 自身会 soften，测出的 "halo" 其实是 guided filter 正常边缘平滑，不是真 halo。
