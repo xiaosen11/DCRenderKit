@@ -34,12 +34,48 @@ This project adheres to the [Contributor Covenant Code of Conduct](CODE_OF_CONDU
 
 ## Coding Standards
 
+### Environment
+
+- Swift 6.0 (strict concurrency) / Xcode 16+
+- iOS 18.0+ / macOS 15.0+ deployment targets
+- Zero external dependencies — any `.package(url:...)` in
+  `Package.swift.dependencies` fails `PackageManifestTests`
+
 ### Swift Style
 
 - Follow [Swift API Design Guidelines](https://www.swift.org/documentation/api-design-guidelines/)
 - Use meaningful names (`exposure` not `exp`, `filterChain` not `fc`)
 - Prefer value types (`struct`) over reference types (`class`) unless state sharing is required
 - Use `async`/`await` for asynchronous APIs, not completion handlers
+
+### Hard-coded rules
+
+The `.claude/rules/` directory formalises project-wide non-negotiables.
+Humans contributing PRs should read them too:
+
+- `commit-verification.md` — `swift build` + `swift test` before every
+  commit, no exceptions (including Demo-only / doc-only changes).
+- `engineering-judgment.md` — no "aggressive / conservative" framing;
+  external claims require a fetched URL, not memory; don't bypass
+  algorithm history when replacing a filter.
+- `testing.md` — assertion expected values must be derived and
+  commented; failing tests default to "implementation is wrong, not
+  the assertion"; follow the 3-way re-derivation protocol on failure.
+- `filter-development.md` — new filters follow the 4-step algorithm
+  selection gate (dimension classification → candidate list →
+  industry reference → `Model form justification` doc comment).
+  Empirical fitting is the last resort.
+- `spatial-params.md` — spatial parameters fall into three
+  categories (visual-texture / image-structure / per-pixel) with
+  three different adaptation strategies.
+
+### Filter contract requirements
+
+New Tier 3-style "perception-based" filters (local tone, effects)
+must ship with a contract in `docs/contracts/<filter>.md` declaring
+measurable clauses, plus a test in `Tests/DCRenderKitTests/Contracts/`
+verifying each clause. See existing contracts (Clarity, HighlightShadow,
+SoftGlow, Saturation, Vibrance) for the template.
 
 ### Metal Shaders
 
@@ -84,9 +120,20 @@ Closes #42
 - New filters MUST have at least:
   - Identity test (zero parameters = original image)
   - Extreme value test (±100 or max range doesn't crash or produce NaN)
-  - Reference image test (output compared to known-good output)
+  - Monotonicity test if the slider has an ordered axis
+  - For Tier 3 (perception-based) filters: a contract document plus
+    contract tests (see `docs/contracts/` + `Tests/DCRenderKitTests/
+    Contracts/`)
+  - For principled tone operators (Reinhard toe, log-slope, etc.):
+    hand-derived numerical-assertion tests that cite the operator's
+    formula (see `ToneAdjustmentFilterTests.swift` for the pattern)
 
-- New public APIs MUST have at least one integration test
+- New public APIs MUST have at least one integration test.
+
+- Regression-sensitive outputs (Tier 4 aesthetic filters) use
+  `SnapshotAssertion.assertMatchesBaseline` to freeze pixel-level
+  baselines. First-run writes the baseline; subsequent runs fail on
+  drift past tolerance.
 
 ## Pull Request Process
 
