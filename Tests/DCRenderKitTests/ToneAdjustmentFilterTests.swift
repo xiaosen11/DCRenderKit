@@ -404,82 +404,82 @@ final class ToneAdjustmentFilterTests: XCTestCase {
 
     // MARK: - Whites
     //
-    // WhitesFilter.metal shader contract:
-    //   Positive: y = x·(1 + k·x·(1-x)^b) where k = k100·t, t = whites ∈ [0, 1]
-    //   Negative: luma-ratio path with k_neg = -0.1995·t, a = 1.4628, b = 0.2094
-    //
-    // LUT anchors (WhitesFilter.swift lutMeans/lutK100/lutB):
-    //   lumaMean=0.2877 → k100=2.3215, b=1.3881
-    //   lumaMean=0.3995 → k100=5.4223, b=1.9729
-    //   lumaMean=0.6004 → k100=0.6251, b=0.9875
+    // WhitesFilter.metal shader contract (Filmic shoulder):
+    //   y = ε·x / ((1 − x) + ε·x),  ε = exp2(whites · 1.0)
+    //   slider 0    ⇒ ε = 1   ⇒ y = x (identity)
+    //   slider +100 ⇒ ε = 2   ⇒ highlight lift
+    //   slider -100 ⇒ ε = 0.5 ⇒ highlight crush
 
     func testWhitesIdentityAtZero() throws {
         let source = try makeToneSource(red: 0.6, green: 0.3, blue: 0.9)
-        let output = try runSingle(source, filter: WhitesFilter(whites: 0, lumaMean: 0.5))
+        let output = try runSingle(source, filter: WhitesFilter(whites: 0))
         let p = try readToneTexture(output)[4][4]
         XCTAssertEqual(p.r, 0.6, accuracy: 0.01)
         XCTAssertEqual(p.g, 0.3, accuracy: 0.01)
         XCTAssertEqual(p.b, 0.9, accuracy: 0.01)
     }
 
-    func testWhitesPositiveFullSliderLowLumaMeanAnchor() throws {
-        // Perceptual branch, LUT anchor 0 (lumaMean=0.2877, k100=2.3215, b=1.3881).
-        //   (0.3)^1.3881 ≈ 0.188
-        //   y = 0.7·(1 + 2.3215·0.7·0.188) ≈ 0.914
+    func testWhitesPositiveFullSliderOnMidtone() throws {
+        // Filmic shoulder, slider = +1, x = 0.7:
+        //   ε = exp2(+1) = 2
+        //   y = 2·0.7 / (0.3 + 2·0.7) = 1.4 / 1.7 ≈ 0.824
         let source = try makeToneSource(red: 0.7, green: 0.7, blue: 0.7)
         let output = try runSingle(
             source,
-            filter: WhitesFilter(whites: 100, lumaMean: 0.2877, colorSpace: .perceptual)
+            filter: WhitesFilter(whites: 100, colorSpace: .perceptual)
         )
         let p = try readToneTexture(output)[4][4]
-        XCTAssertEqual(p.r, 0.914, accuracy: 0.03)
+        XCTAssertEqual(p.r, 0.824, accuracy: 0.02)
     }
 
-    func testWhitesPositiveFullSliderBrightRegion() throws {
-        // Perceptual branch. (0.1)^1.3881 ≈ 0.0408; y ≈ 0.977.
+    func testWhitesPositiveFullSliderOnBrightRegion() throws {
+        // slider = +1, x = 0.9, ε = 2:
+        //   y = 2·0.9 / (0.1 + 2·0.9) = 1.8 / 1.9 ≈ 0.947
+        // Shoulder concentrates lift near 1 — midtone 0.7 lifted to
+        // 0.82 (+0.12), highlight 0.9 lifted to 0.95 (+0.05). The
+        // percentage *towards* 1 is larger, matching photographer
+        // intuition "Whites +100 pulls highlights toward white".
         let source = try makeToneSource(red: 0.9, green: 0.9, blue: 0.9)
         let output = try runSingle(
             source,
-            filter: WhitesFilter(whites: 100, lumaMean: 0.2877, colorSpace: .perceptual)
+            filter: WhitesFilter(whites: 100, colorSpace: .perceptual)
         )
         let p = try readToneTexture(output)[4][4]
-        XCTAssertEqual(p.r, 0.977, accuracy: 0.02)
+        XCTAssertEqual(p.r, 0.947, accuracy: 0.02)
     }
 
-    func testWhitesNegativeFullSliderGrayDarkens() throws {
-        // Perceptual branch. Luma-ratio on uniform 0.7 gray:
-        //   0.7^1.4628 ≈ 0.593; 0.3^0.2094 ≈ 0.777
-        //   y ≈ 0.7·(1 - 0.0919) ≈ 0.636
+    func testWhitesNegativeFullSliderHighlightCrush() throws {
+        // Filmic shoulder, slider = -1, x = 0.7:
+        //   ε = exp2(-1) = 0.5
+        //   y = 0.5·0.7 / (0.3 + 0.5·0.7) = 0.35 / 0.65 ≈ 0.538
         let source = try makeToneSource(red: 0.7, green: 0.7, blue: 0.7)
         let output = try runSingle(
             source,
-            filter: WhitesFilter(whites: -100, lumaMean: 0.5, colorSpace: .perceptual)
+            filter: WhitesFilter(whites: -100, colorSpace: .perceptual)
         )
         let p = try readToneTexture(output)[4][4]
-        XCTAssertEqual(p.r, 0.636, accuracy: 0.02)
-        XCTAssertEqual(p.g, 0.636, accuracy: 0.02)
-        XCTAssertEqual(p.b, 0.636, accuracy: 0.02)
+        XCTAssertEqual(p.r, 0.538, accuracy: 0.02)
+        XCTAssertEqual(p.g, 0.538, accuracy: 0.02)
+        XCTAssertEqual(p.b, 0.538, accuracy: 0.02)
     }
 
     func testWhitesLinearPositiveMatchesPerceptualViaGammaWrap() throws {
-        // Parity for Whites positive branch. lumaMean in perceptual mode
-        // is a gamma-space value (0.2877); the equivalent in linear mode
-        // is srgbToLinear(0.2877) = 0.2877^2.2 ≈ 0.0665.
+        // Parity: linear-mode shader un-linearizes then applies the
+        // shoulder, so `re-gammad linear output` must match
+        // `perceptual output` within tolerance.
         let gammaX: Float = 0.7
-        let gammaLumaMean: Float = 0.2877
         let sourceGamma = try makeToneSource(red: gammaX, green: gammaX, blue: gammaX)
         let sourceLinear = try makeToneSource(
             red: powf(gammaX, 2.2), green: powf(gammaX, 2.2), blue: powf(gammaX, 2.2)
         )
-        let linearLumaMean = powf(gammaLumaMean, 2.2)
 
         let pOut = try runSingle(
             sourceGamma,
-            filter: WhitesFilter(whites: 100, lumaMean: gammaLumaMean, colorSpace: .perceptual)
+            filter: WhitesFilter(whites: 100, colorSpace: .perceptual)
         )
         let lOut = try runSingle(
             sourceLinear,
-            filter: WhitesFilter(whites: 100, lumaMean: linearLumaMean, colorSpace: .linear)
+            filter: WhitesFilter(whites: 100, colorSpace: .linear)
         )
         let yp = try readToneTexture(pOut)[4][4].r
         let yl = try readToneTexture(lOut)[4][4].r
@@ -492,7 +492,6 @@ final class ToneAdjustmentFilterTests: XCTestCase {
     }
 
     func testWhitesLinearNegativeMatchesPerceptualViaGammaWrap() throws {
-        // Parity for negative branch too.
         let gammaX: Float = 0.7
         let sourceGamma = try makeToneSource(red: gammaX, green: gammaX, blue: gammaX)
         let sourceLinear = try makeToneSource(
@@ -501,11 +500,11 @@ final class ToneAdjustmentFilterTests: XCTestCase {
 
         let pOut = try runSingle(
             sourceGamma,
-            filter: WhitesFilter(whites: -100, lumaMean: 0.5, colorSpace: .perceptual)
+            filter: WhitesFilter(whites: -100, colorSpace: .perceptual)
         )
         let lOut = try runSingle(
             sourceLinear,
-            filter: WhitesFilter(whites: -100, lumaMean: powf(0.5, 2.2), colorSpace: .linear)
+            filter: WhitesFilter(whites: -100, colorSpace: .linear)
         )
         let yp = try readToneTexture(pOut)[4][4].r
         let yl = try readToneTexture(lOut)[4][4].r
@@ -517,16 +516,32 @@ final class ToneAdjustmentFilterTests: XCTestCase {
         )
     }
 
-    func testWhitesLUTInterpolationEdgeClamp() {
-        let lowEnd = WhitesFilter.lutInterpolate(lumaMean: 0.1)
-        let lowAnchor = WhitesFilter.lutInterpolate(lumaMean: 0.2877)
-        XCTAssertEqual(lowEnd.k100, lowAnchor.k100, accuracy: 1e-6)
-        XCTAssertEqual(lowEnd.b, lowAnchor.b, accuracy: 1e-6)
+    /// Whites and Blacks toe/shoulder are algebraic mirrors: applying
+    /// Whites(+s) to a mid-grey x should give the same deviation-from-
+    /// mid-grey *towards white* that Blacks(-s) gives *towards black*.
+    /// The pair forms a symmetric filmic S-curve when used together
+    /// at matching slider magnitudes.
+    func testWhitesBlacksMirror() throws {
+        let source = try makeToneSource(red: 0.5, green: 0.5, blue: 0.5)
 
-        let highEnd = WhitesFilter.lutInterpolate(lumaMean: 0.9)
-        let highAnchor = WhitesFilter.lutInterpolate(lumaMean: 0.6004)
-        XCTAssertEqual(highEnd.k100, highAnchor.k100, accuracy: 1e-6)
-        XCTAssertEqual(highEnd.b, highAnchor.b, accuracy: 1e-6)
+        // Whites +100: ε=2 → y = 2·0.5/(0.5+1.0) = 1.0/1.5 = 0.6667
+        let whitesOut = try runSingle(
+            source, filter: WhitesFilter(whites: 100, colorSpace: .perceptual)
+        )
+        let wP = try readToneTexture(whitesOut)[4][4].r
+
+        // Blacks +100: ε=0.5 → y = 0.5/(0.5 + 0.5·0.5) = 0.5/0.75 = 0.6667
+        // (same!). At mid-grey with x=1-x, Blacks-lift and Whites-lift
+        // give identical output — both operators pull mid-grey toward 1
+        // by the same distance because the mid-grey is equidistant from
+        // both endpoints.
+        let blacksOut = try runSingle(
+            source, filter: BlacksFilter(blacks: 100, colorSpace: .perceptual)
+        )
+        let bP = try readToneTexture(blacksOut)[4][4].r
+
+        XCTAssertEqual(wP, bP, accuracy: 0.01,
+                       "At mid-grey, Whites(+s) and Blacks(+s) must coincide (mirror symmetry)")
     }
 
     // MARK: - Blacks

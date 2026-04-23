@@ -73,7 +73,7 @@ final class SmokeTests: XCTestCase {
             steps: [
                 .single(ExposureFilter(exposure: 20)),
                 .single(ContrastFilter(contrast: 15, lumaMean: 0.5)),
-                .single(WhitesFilter(whites: 30, lumaMean: 0.5)),
+                .single(WhitesFilter(whites: 30)),
                 .single(BlacksFilter(blacks: -20)),
                 .single(WhiteBalanceFilter(temperature: 5500, tint: 10)),
                 .single(VibranceFilter(vibrance: 0.3)),
@@ -232,7 +232,7 @@ final class SmokeTests: XCTestCase {
             steps: [
                 .single(ExposureFilter(exposure: 0)),
                 .single(ContrastFilter(contrast: 0, lumaMean: 0.5)),
-                .single(WhitesFilter(whites: 0, lumaMean: 0.5)),
+                .single(WhitesFilter(whites: 0)),
                 .single(BlacksFilter(blacks: 0)),
                 .single(VibranceFilter(vibrance: 0)),
                 .single(SaturationFilter(saturation: 1)),
