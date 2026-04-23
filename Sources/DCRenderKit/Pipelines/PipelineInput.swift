@@ -12,11 +12,9 @@ import CoreVideo
 
 #if canImport(UIKit)
 import UIKit
-#elseif canImport(AppKit)
-import AppKit
 #endif
 
-/// Any of the four input types `Pipeline` can consume.
+/// Any of the input types `Pipeline` can consume.
 ///
 /// Each case corresponds to a path in `TextureLoader`. The pipeline calls
 /// the loader once at the start of processing to obtain a concrete
@@ -31,6 +29,12 @@ import AppKit
 /// // From a Core Video pixel buffer (camera frame):
 /// let p = Pipeline(input: .pixelBuffer(buffer), steps: [...])
 /// ```
+///
+/// Platform note: DCRenderKit targets iOS (and any UIKit-derived
+/// platform such as Catalyst or visionOS when those are explicitly
+/// added). macOS is retained as a `swift test` host for the Metal
+/// compute kernels but is not a business-layer target — the
+/// `.uiImage` case is only compiled under `canImport(UIKit)`.
 public enum PipelineInput: @unchecked Sendable {
 
     /// A Metal texture ready for use. Zero-cost path.
@@ -46,9 +50,6 @@ public enum PipelineInput: @unchecked Sendable {
     #if canImport(UIKit)
     /// A UIImage (iOS). Extracts the backing CGImage.
     case uiImage(UIImage)
-    #elseif canImport(AppKit)
-    /// An NSImage (macOS). Extracts the backing CGImage.
-    case nsImage(NSImage)
     #endif
 }
 
@@ -68,9 +69,6 @@ extension PipelineInput {
             return try loader.makeTexture(from: buffer)
         #if canImport(UIKit)
         case .uiImage(let image):
-            return try loader.makeTexture(from: image)
-        #elseif canImport(AppKit)
-        case .nsImage(let image):
             return try loader.makeTexture(from: image)
         #endif
         }

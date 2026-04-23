@@ -2,11 +2,11 @@
 //  TextureLoader.swift
 //  DCRenderKit
 //
-//  Converts the four supported input types into `MTLTexture`:
-//    - MTLTexture       (passthrough)
-//    - CGImage          (via MTKTextureLoader — hardware-accelerated decode)
-//    - UIImage/NSImage  (extracts CGImage then same path)
-//    - CVPixelBuffer    (via CVMetalTextureCache — zero-copy for BGRA)
+//  Converts the supported input types into `MTLTexture`:
+//    - MTLTexture    (passthrough)
+//    - CGImage       (via MTKTextureLoader — hardware-accelerated decode)
+//    - UIImage       (extracts CGImage then same path)
+//    - CVPixelBuffer (via CVMetalTextureCache — zero-copy for BGRA)
 //
 
 import Foundation
@@ -17,9 +17,6 @@ import CoreVideo
 #if canImport(UIKit)
 import UIKit
 public typealias DCRImage = UIImage
-#elseif canImport(AppKit)
-import AppKit
-public typealias DCRImage = NSImage
 #endif
 
 /// Entry point for creating `MTLTexture` from any supported source type.
@@ -30,11 +27,17 @@ public typealias DCRImage = NSImage
 /// |--------|------|-------|
 /// | `MTLTexture` | passthrough | zero cost |
 /// | `CGImage` | `MTKTextureLoader` | hardware-accelerated decode |
-/// | `DCRImage` (UIImage on iOS, NSImage on macOS) | extract CGImage → MTKTextureLoader | |
+/// | `DCRImage` (UIImage) | extract CGImage → MTKTextureLoader | iOS-only |
 /// | `CVPixelBuffer` (BGRA32) | `CVMetalTextureCache` | zero-copy |
 ///
+/// Platform note: DCRenderKit is an iOS-only SDK. macOS is retained as
+/// a `swift test` host for Metal compute kernels — the UIImage path is
+/// compiled only under `canImport(UIKit)`. The core Metal paths
+/// (CGImage / CVPixelBuffer / passthrough) work on any platform with
+/// Metal support, but no NSImage shim is shipped.
+///
 /// YUV multi-plane `CVPixelBuffer` support is deferred until video capture
-/// workflows require it (Round 10+).
+/// workflows require it.
 public final class TextureLoader: @unchecked Sendable {
 
     // MARK: - Shared instance
@@ -104,7 +107,7 @@ public final class TextureLoader: @unchecked Sendable {
         }
     }
 
-    // MARK: - DCRImage (UIImage / NSImage)
+    // MARK: - DCRImage (UIImage)
 
     #if canImport(UIKit)
     /// Create a `MTLTexture` from a `UIImage`.
@@ -116,22 +119,6 @@ public final class TextureLoader: @unchecked Sendable {
     ) throws -> MTLTexture {
         guard let cgImage = image.cgImage else {
             throw PipelineError.texture(.imageDecodeFailed(format: "UIImage (no backing CGImage)"))
-        }
-        return try makeTexture(
-            from: cgImage, usage: usage, storageMode: storageMode, colorSpace: colorSpace
-        )
-    }
-    #elseif canImport(AppKit)
-    /// Create a `MTLTexture` from an `NSImage`.
-    public func makeTexture(
-        from image: NSImage,
-        usage: MTLTextureUsage = [.shaderRead],
-        storageMode: MTLStorageMode = .private,
-        colorSpace: DCRColorSpace = DCRenderKit.defaultColorSpace
-    ) throws -> MTLTexture {
-        var rect = CGRect(origin: .zero, size: image.size)
-        guard let cgImage = image.cgImage(forProposedRect: &rect, context: nil, hints: nil) else {
-            throw PipelineError.texture(.imageDecodeFailed(format: "NSImage (no backing CGImage)"))
         }
         return try makeTexture(
             from: cgImage, usage: usage, storageMode: storageMode, colorSpace: colorSpace

@@ -86,7 +86,7 @@ must be coherent enough that consumers can start depending on it.
 
 ### Code-quality polish (can land before v0.1.0)
 
-- [ ] **`@available(iOS 18.0, macOS 15.0, *)` annotation sweep** (#47)
+- [ ] **`@available(iOS 18.0, *)` annotation sweep** (#47)
       across every top-level `public` declaration (44 types / enums /
       classes / extensions). Redundant with Package.swift platform
       constraints for now, but makes future per-API deprecation easy.
@@ -130,12 +130,11 @@ must be coherent enough that consumers can start depending on it.
 
 ### Platform validation
 
-- [ ] **macOS path completeness** (#44). Demo is iOS-only today; at
-      minimum verify the SDK's `NSImage`-path compiles and produces
-      a sensible output on macOS.
-- [ ] **Catalyst compatibility** (#45). Conditional-compilation check
-      (does the SDK build under Mac Catalyst?) + decision to support
-      it officially or declare it out of scope.
+iOS-only at the business layer; macOS retained as a `swift test`
+host. Cross-platform expansion tasks (#44 macOS / #45 Catalyst /
+#46 tvOS/visionOS) were dropped at Session C convergence, and the
+NSImage / AppKit code paths were stripped from the SDK. No
+additional platform-validation work is required for v0.1.0.
 
 ---
 

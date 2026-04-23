@@ -15,8 +15,6 @@ import CoreGraphics
 
 #if canImport(UIKit)
 import UIKit
-#elseif canImport(AppKit)
-import AppKit
 #endif
 
 // MARK: - MultiPassExecutor
@@ -389,16 +387,6 @@ final class TextureLoaderTests: XCTestCase {
         let cgImage = try makeTestCGImage(width: 8, height: 8)
         let uiImage = UIImage(cgImage: cgImage)
         let texture = try loader.makeTexture(from: uiImage)
-        XCTAssertEqual(texture.width, 8)
-    }
-    #elseif canImport(AppKit)
-    func testNSImageLoad() throws {
-        let cgImage = try makeTestCGImage(width: 8, height: 8)
-        let nsImage = NSImage(
-            cgImage: cgImage,
-            size: CGSize(width: 8, height: 8)
-        )
-        let texture = try loader.makeTexture(from: nsImage)
         XCTAssertEqual(texture.width, 8)
     }
     #endif

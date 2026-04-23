@@ -77,6 +77,19 @@ until `v1.0.0`. Each breaking change is flagged explicitly below.
   protection. Already-saturated pixels get less boost than the prior curve;
   warm skin (≈ 45°±25° on OKLCh hue) is protected.
 
+### Removed (breaking)
+
+- **macOS business-layer support.** DCRenderKit is now iOS-only at
+  the API surface. macOS 15 is retained in `Package.swift` as a
+  `swift test` host (so the 300+ shader-driven tests can run against
+  a real Metal GPU on CI), but no macOS business APIs are shipped:
+  - `PipelineInput.nsImage(_:)` case removed.
+  - `TextureLoader.makeTexture(from: NSImage, ...)` overload removed.
+  - `typealias DCRImage = NSImage` branch removed.
+  - `PortraitBlurMaskGenerator` `@available(iOS 17.0, macOS 14.0, *)`
+    annotations tightened to `@available(iOS 17.0, *)`.
+  - CI matrix no longer builds the AppKit framework configuration.
+
 ### Removed
 
 - `dcr_{filter}LinearToGamma` / `dcr_{filter}GammaToLinear` per-shader

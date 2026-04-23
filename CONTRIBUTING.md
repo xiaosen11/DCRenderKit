@@ -37,7 +37,8 @@ This project adheres to the [Contributor Covenant Code of Conduct](CODE_OF_CONDU
 ### Environment
 
 - Swift 6.0 (strict concurrency) / Xcode 16+
-- iOS 18.0+ / macOS 15.0+ deployment targets
+- iOS 18.0+ deployment target (macOS 15 kept only as a `swift test`
+  host for Metal compute kernels; no macOS business APIs)
 - Zero external dependencies — any `.package(url:...)` in
   `Package.swift.dependencies` fails `PackageManifestTests`
 

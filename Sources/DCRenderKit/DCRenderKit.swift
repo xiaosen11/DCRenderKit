@@ -1,6 +1,8 @@
 // DCRenderKit
 //
-// A commercial-grade Metal-based image processing SDK for iOS and macOS.
+// A commercial-grade Metal-based image processing SDK for iOS.
+// (macOS 15 is retained only as a `swift test` host for the Metal
+// compute kernels; no macOS business-layer APIs are shipped.)
 //
 // Public API surface — everything the consumer ever imports. See
 // `docs/metal-engine-plan.md` for the architecture, and the per-type

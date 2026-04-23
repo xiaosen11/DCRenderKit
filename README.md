@@ -1,11 +1,11 @@
 # DCRenderKit
 
 [![Swift](https://img.shields.io/badge/Swift-6.0-F05138?logo=swift)](https://swift.org)
-[![Platforms](https://img.shields.io/badge/Platforms-iOS%2018%2B%20%7C%20macOS%2015%2B-lightgrey)](https://developer.apple.com/)
+[![Platforms](https://img.shields.io/badge/Platforms-iOS%2018%2B-lightgrey)](https://developer.apple.com/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-> A commercial-grade Metal-based image processing SDK for iOS and macOS.
-> 专为 iOS 与 macOS 打造的商用级 Metal 图像处理 SDK。
+> A commercial-grade Metal-based image processing SDK for iOS.
+> 专为 iOS 打造的商用级 Metal 图像处理 SDK。
 
 ---
 
@@ -112,9 +112,13 @@ reference (paper / open-source implementation / industry presentation) — no un
 
 ### Requirements
 
-- iOS 18.0+ / macOS 15.0+
+- iOS 18.0+
 - Swift 6.0 (strict concurrency)
 - Xcode 16+
+
+(macOS 15 is retained as a `swift test` host for the Metal compute
+kernels; no business-layer macOS target — the SDK ships no `NSImage`
+loader and imports UIKit-only paths under `#if canImport(UIKit)`.)
 
 ### Documentation
 
@@ -230,9 +234,12 @@ func draw(in view: MTKView) {
 
 ### 环境要求
 
-- iOS 18.0+ / macOS 15.0+
+- iOS 18.0+
 - Swift 6.0（严格并发）
 - Xcode 16+
+
+（macOS 15 仅作 `swift test` 宿主运行 Metal compute 单元测试，不对外发布 macOS 业务 API —
+SDK 不含 `NSImage` loader，UIKit 相关路径都在 `#if canImport(UIKit)` 下。）
 
 ### 文档
 

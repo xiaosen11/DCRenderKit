@@ -12,36 +12,31 @@ concurrency:
 
 jobs:
   # ═══════════════════════════════════════════════════════════════
-  # Build & test the SDK itself
+  # Build & test the SDK
   # ═══════════════════════════════════════════════════════════════
-  # Two jobs:
-  #   - macOS:  swift build + swift test (drives the 300+ unit tests
-  #             + self-test suites; Metal device available on macos-15
-  #             runners so all shader kernels actually execute).
-  #   - iOS:    xcodebuild against an iPhone Simulator destination —
-  #             catches iOS-only code-path regressions (UIKit-guarded
-  #             sections, iOS 18 API availability, etc.). We don't
-  #             run `xcodebuild test` on the simulator because the
-  #             simulator has no real Metal GPU; the macOS job covers
-  #             all the Metal-heavy tests.
+  # DCRenderKit is an iOS-only SDK at the business layer; macOS is
+  # retained as a swift-test host purely because macos-15 runners
+  # give us a real Metal GPU so the 300+ shader-driven unit tests
+  # actually execute. We don't ship any macOS business APIs
+  # (no NSImage path), so only the `swift test` runner is useful —
+  # a macOS-framework build in CI would be dead weight.
+  #
+  # iOS coverage: xcodebuild builds the SDK scheme and the Demo
+  # project against an iPhone Simulator destination. The simulator
+  # has no real Metal GPU so we don't run `xcodebuild test` there;
+  # the macOS `swift test` covers all Metal-heavy assertions.
   # ═══════════════════════════════════════════════════════════════
-  build-and-test:
-    name: Build & Test (${{ matrix.platform }})
+  test:
+    name: swift test (Metal)
     runs-on: macos-15
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [iOS, macOS]
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Select Xcode
-        # DCRenderKit targets Swift 6.0 / iOS 18.0+ / macOS 15.0+
-        # ⇒ Xcode 16+ is the minimum. macos-15 runners default to
-        # Xcode 16.x; the explicit select guards against
-        # GitHub-infra version drift.
+        # DCRenderKit targets Swift 6.0 / iOS 18.0+ ⇒ Xcode 16+ is
+        # the minimum. macos-15 runners default to Xcode 16.x; the
+        # explicit select guards against GitHub-infra version drift.
         run: sudo xcode-select -s /Applications/Xcode_16.app
 
       - name: Show environment
@@ -52,16 +47,22 @@ jobs:
       - name: Resolve dependencies
         run: swift package resolve
 
-      - name: Build (macOS)
-        if: matrix.platform == 'macOS'
+      - name: swift build
         run: swift build -v
 
-      - name: Test (macOS)
-        if: matrix.platform == 'macOS'
+      - name: swift test
         run: swift test -v
 
-      - name: Build (iOS Simulator)
-        if: matrix.platform == 'iOS'
+  ios-build:
+    name: Build (iOS Simulator)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.app
+
+      - name: Build SDK (iOS Simulator)
         run: |
           xcodebuild build \
             -scheme DCRenderKit \
@@ -69,7 +70,6 @@ jobs:
             -skipPackagePluginValidation
 
       - name: Build Demo (iOS Simulator)
-        if: matrix.platform == 'iOS'
         run: |
           xcodebuild build \
             -project Examples/DCRDemo/DCRDemo.xcodeproj \
