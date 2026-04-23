@@ -27,6 +27,25 @@
 
 ---
 
+## 业界对照 (§8.4 Audit.5，commit session B)
+
+local tone mapping 家族里 "edge-preserving base + region-gated tone curve" 是标准范式（[Eilertsen et al. 2017 TMO survey](https://www.cl.cam.ac.uk/~rkm38/pdfs/eilertsen2017tmo_star.pdf)；[Edge-preserving smoothing survey arXiv 1503.07297](https://arxiv.org/abs/1503.07297)）。具体 base extractor 选择:
+
+| 实现 | Edge-preserving smoother | 源 |
+|---|---|---|
+| **DCR HS (本实现)** | Fast Guided Filter (He & Sun 2015) | Harbeth-inherited |
+| darktable "local contrast" | **Local Laplacian Filter** (Paris 2011) 或 unnormalized bilateral | [darktable manual](https://docs.darktable.org/usermanual/4.6/en/module-reference/processing-modules/local-contrast/) |
+| Drago / Durand / Reinhard-local (classic TMO) | Bilateral / anisotropic diffusion | Eilertsen 2017 survey §4 |
+| Hu 2024 近期工作 | "improved guided filter + adaptive gamma" | [Hu IET 2024](https://ietresearch.onlinelibrary.wiley.com/doi/full/10.1049/ipr2.12978) |
+
+**诚实结论**:
+- ✓ 算法族（edge-preserving base + region-gated tone curve）是业界标准
+- ⚠ 具体滤镜选择 —— LLF 是 darktable default 被认为是**halo 最可控**的选项；bilateral 是经典选项；guided filter 是更新的高效选项，有已知 halo 局限
+- ✓ DCR 的 guided filter + gamma-window smoothstep + linear apply-ratio 路径在学术上合法（Hu 2024 为近期代表）
+- **trade-off 记录**: LLF 本项目多次尝试失败（见 `engineering-judgment.md §3`），guided filter 是 pragmatic 非 optimal 的合法 fallback。契约 C.4 halo 阈值 3% 对应 Trentacoste 2012 感知阈值，把 guided filter halo 局限**转为可测条款**。
+
+---
+
 ## 2. 算法形式（对应 shader 契约，F3 修复后）
 
 ```
@@ -174,6 +193,9 @@ step_magnitude = Y_high − Y_low
 - [Weber–Fechner law — Wikipedia](https://en.wikipedia.org/wiki/Weber%E2%80%93Fechner_law)
 - [Trentacoste et al. 2012 — Unsharp Masking, Countershading and Halos: Enhancements or Artifacts?](https://onlinelibrary.wiley.com/doi/abs/10.1111/j.1467-8659.2012.03056.x) (Computer Graphics Forum)
 - [He & Sun 2015 — Fast Guided Filter](https://arxiv.org/abs/1505.00996)
+- [Eilertsen et al. 2017 — A Comparative Review of Tone-Mapping Algorithms for HDR](https://www.cl.cam.ac.uk/~rkm38/pdfs/eilertsen2017tmo_star.pdf) (local TMO 家族综述 — §8.4 Audit.5)
+- [arXiv 1503.07297 — A Brief Survey of Recent Edge-Preserving Smoothing Algorithms](https://arxiv.org/abs/1503.07297) (bilateral / guided / LLF 对比)
+- [Hu 2024 — Natureness-preserving TMO based on improved guided filter + adaptive Gamma](https://ietresearch.onlinelibrary.wiley.com/doi/full/10.1049/ipr2.12978) (近期 guided filter TMO 论文，证明该路径学术活跃)
 - F3 修复 commit: `2907b2b` (baseLuma gamma-wrap)
 - LLF 考察失败记录: `findings-and-plan.md` §7.3, `engineering-judgment.md` §3
 

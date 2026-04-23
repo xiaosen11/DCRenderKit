@@ -22,10 +22,20 @@
 - 发光经金字塔向外传播（半径随 radius 参数扩张）
 - Screen-blend 合成，自动避免高光 clip
 
-**业界对照**:
-- Unity HDRP Bloom / Unreal Engine 用类似 Dual Kawase 或 downsample-upsample 金字塔（[Masaki Kawase 2003 GDC talk](https://github.com/QianMo/Unreal-Engine-4-Rendering)，[Jorge Jimenez 2014 SIGGRAPH Advances](http://www.iryoku.com/next-generation-post-processing-in-call-of-duty-advanced-warfare)）
-- darktable 无直接 "soft glow" 对照 (bloom 属 effects module，scene-referred 做法不同)
-- **Tier 3 不锚定外部 app**；本契约只锚 SoftGlow 的可测边界
+**业界对照**（§8.4 Audit.1 调研 commit session B）:
+
+DCR SoftGlow 属**pyramid bloom 族**（downsample → pyramid → upsample 累加），但**不是** Marius Bjørge 2015 的 Dual Kawase。具体差异：
+
+| 实现 | 下采样 | 上采样 | 来源 |
+|---|---|---|---|
+| **DCR (本实现)** | 2×2 box (4-tap, 均权 1/4) | 9-tap tent (1-2-1/2-4-2/1-2-1 / 16) | Harbeth-inherited 血缘 |
+| Dual Kawase (Bjørge 2015) | 5-tap (center×4 + 4 corners ±1 texel ×1) | 8-tap (4 cardinal ±1 ×1/12 + 4 diagonal ±0.5 ×2/12) | [Bjørge SIGGRAPH 2015](https://community.arm.com/cfs-file/__key/communityserver-blogs-components-weblogfiles/00-00-00-20-66/siggraph2015_2D00_mmg_2D00_marius_2D00_notes.pdf) |
+| Unreal Engine / COD AW (Jimenez 2014) | 13-tap custom | 9-tap custom + firefly fix | [Jimenez iryoku.com](http://www.iryoku.com/next-generation-post-processing-in-call-of-duty-advanced-warfare/) |
+| Unity HDRP (default Gaussian) | pyramid + 9×9 Pascal binomial Gaussian | same | [Unity HDRP Bloom](https://docs.unity3d.com/Packages/com.unity.render-pipelines.high-definition@14.0/manual/Post-Processing-Bloom.html) |
+
+**诚实结论**: DCR 的 kernel 是 pyramid bloom 族中相对**简单**的变体 —— 4-tap box 下采样弱于 Dual Kawase 的 5-tap 和 UE 的 13-tap；9-tap tent 上采样接近 Unity HDRP Gaussian 质量。**pyramid bloom 作为算法类是业界标准**，具体 kernel 选择属 engineering-judgment §6 "pragmatic trade-off"，满足契约 C.4 扩散范围即可，不需要为"升级到 Dual Kawase"而重写。
+
+**Tier 3 不锚定外部 app** — 不追精确 PSF 或 bloom shape 匹配。
 
 ---
 
@@ -178,8 +188,10 @@ Dual Kawase PSF 理论上是 binomial approximation to Gaussian。但 shader 里
 
 ## 7. 参考
 
-- [Masaki Kawase 2003 GDC — "Frame Buffer Postprocessing Effects in DOUBLE-S.T.E.A.L"](https://community.khronos.org/t/frame-buffer-postprocessing-effects-in-double-s-t-e-a-l/49125) (original Dual Kawase concept; PDF archives vary)
-- [Jorge Jimenez 2014 SIGGRAPH Advances — "Next Generation Post Processing in Call of Duty: Advanced Warfare"](http://www.iryoku.com/next-generation-post-processing-in-call-of-duty-advanced-warfare) (production Dual Kawase)
+- [Marius Bjørge SIGGRAPH 2015 — "Bandwidth-Efficient Rendering"](https://community.arm.com/cfs-file/__key/communityserver-blogs-components-weblogfiles/00-00-00-20-66/siggraph2015_2D00_mmg_2D00_marius_2D00_notes.pdf) (definitive Dual Kawase kernel spec; DCR uses simpler box + tent variant)
+- [Jorge Jimenez 2014 SIGGRAPH Advances — "Next Generation Post Processing in Call of Duty: Advanced Warfare"](http://www.iryoku.com/next-generation-post-processing-in-call-of-duty-advanced-warfare/) (production pyramid bloom inspiring UE approach)
+- [Unity HDRP Bloom documentation](https://docs.unity3d.com/Packages/com.unity.render-pipelines.high-definition@14.0/manual/Post-Processing-Bloom.html) (supports Gaussian / Kawase / Dual filter options)
+- [Dual Kawase Blur kernel implementation (Medium article extraction)](https://medium.com/@uwa4d/dual-blur-and-its-implementation-in-unity-c2cd77c90771) (5-tap down / 8-tap up with exact weights, matches Bjørge 2015)
 - `findings-and-plan.md` §7.2 A (SoftGlow 在 `.linear` 下更好 — 用户 2026-04-22 真机反馈)
 - `findings-and-plan.md` §8.1 A.2 (FIXME 常数溯源)
 - `ede4361` commit — threshold default 50 → 0 (maximally permissive)

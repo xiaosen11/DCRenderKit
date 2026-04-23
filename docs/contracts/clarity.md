@@ -19,7 +19,22 @@
 - **正向 intensity**: 放大中频 detail（guided filter 移除的那部分），视觉上 "局部对比度上升、纹理更锐利"
 - **负向 intensity**: 输出混向 edge-preserving base，视觉上 "平滑化、保留大尺度结构去除纹理"
 
-**与 Lightroom "Clarity" 的关系**: 行为语义接近但实现不同。Lightroom Clarity 是闭源 adaptive local contrast (参考 [ExpertPhotography](https://expertphotography.com/clarity-tool/) / [digital-photography-school](https://digital-photography-school.com/lightrooms-clarity-slider-what-does-it-do/))；darktable "local contrast" 模块用 Local Laplacian Filter 或 bilateral filter ([darktable 4.6 manual](https://docs.darktable.org/usermanual/4.6/en/module-reference/processing-modules/local-contrast/))。本实现沿袭 Harbeth 的 guided filter residual 路径，是一个 pragmatic edge-preserving local contrast，非 Lightroom/darktable 精确克隆。Tier 3 不锚定外部 app；锚契约即可。
+**业界对照**（§8.4 Audit.2 调研 commit session B）:
+
+| 实现 | 边缘保持滤镜 | 源 |
+|---|---|---|
+| **DCR (本实现)** | Fast Guided Filter (He & Sun 2015) | Harbeth-inherited 血缘 |
+| Adobe ACR / Lightroom Clarity | 闭源专有算法，Adobe 从 Pixmantec 收购后并入 ACR；社区描述为 "large-radius unsharp mask-like" | [Adobe community 讨论](https://community.adobe.com/t5/photoshop/what-exactly-is-clarity/m-p/8957985) |
+| darktable "local contrast" | **Local Laplacian Filter (default)** 或 unnormalized bilateral filter；工作在 Lab L 通道 | [darktable 4.6 manual](https://docs.darktable.org/usermanual/4.6/en/module-reference/processing-modules/local-contrast/) |
+| RawTherapee local adjustments | Laplacian operator + Poisson equation 迭代 | [RawPedia Local Adjustments](https://rawpedia.rawtherapee.com/Local_Adjustments) |
+
+**诚实结论**:
+- ✓ **算法族**（"detail = orig − smooth_base, 放大 detail" unsharp-mask-like 路径）和 Adobe Clarity 的社区描述匹配
+- ⚠ **具体滤镜**（guided filter）**不是业界首选** —— darktable 用 LLF default，RawTherapee 用 Laplacian。Adobe 保密，但 Adobe 收购 Pixmantec 时机和社区描述暗示也是 Laplacian-family
+- ✓ **Guided filter 用于图像 contrast 增强是学术公认方法** —— 多篇论文 (e.g. [ResearchGate: Effective Guided Image Filtering for Contrast Enhancement](https://www.researchgate.net/publication/327333001)，[arXiv 2310.10387 Enhanced Edge-Perceptual GIF](https://arxiv.org/abs/2310.10387))
+- ⚠ Guided filter 的**已知局限是 halo artifacts near edges**（"weighted guided filter" 是学术变体 addressing that）—— 对应契约 C.5 设 5% 阈值的合理性
+
+**trade-off 记录**: 本项目 LLF 考察 N 次失败（见 `findings-and-plan.md` §7.3 + `engineering-judgment.md` §3），guided filter 是 engineering-judgment §6 "pragmatic 而非 optimal" 的合法选择。Tier 3 不锚定外部 app —— 契约 (C.1-C.7) 可测行为 + LLF 失败文档 = 完整 trade-off 记录。
 
 ---
 
@@ -160,10 +175,14 @@ max(output.luma) − min(output.luma)
 
 ## 6. 参考
 
-- [He & Sun 2015 — Fast Guided Filter](https://arxiv.org/abs/1505.00996)
+- [He & Sun 2015 — Fast Guided Filter](https://arxiv.org/abs/1505.00996) (算法主源)
+- [ResearchGate — Effective Guided Image Filtering for Contrast Enhancement (2018)](https://www.researchgate.net/publication/327333001) (guided filter 用于 contrast 学术路径)
+- [arXiv 2310.10387 — Enhanced Edge-Perceptual Guided Image Filtering](https://arxiv.org/abs/2310.10387) (weighted guided filter 对 halo 改进)
 - [Trentacoste et al. 2012 — Unsharp Masking, Countershading and Halos](https://onlinelibrary.wiley.com/doi/abs/10.1111/j.1467-8659.2012.03056.x)
 - [Gibbs phenomenon — Wikipedia](https://en.wikipedia.org/wiki/Gibbs_phenomenon)
-- [darktable local contrast module (4.6)](https://docs.darktable.org/usermanual/4.6/en/module-reference/processing-modules/local-contrast/)
+- [darktable local contrast module (4.6)](https://docs.darktable.org/usermanual/4.6/en/module-reference/processing-modules/local-contrast/) (业界 LLF-first 对照)
+- [darktable local laplacian pyramids blog (2017)](https://www.darktable.org/2017/11/local-laplacian-pyramids/)
+- [Adobe Community — "What exactly is Clarity"](https://community.adobe.com/t5/photoshop/what-exactly-is-clarity/m-p/8957985) (Adobe 社区对 Clarity 行为描述)
 - [Lightroom Clarity behavior — ExpertPhotography](https://expertphotography.com/clarity-tool/)
 - F3 修复 commit `2907b2b` (baseLuma gamma-wrap 在 HS + Clarity 同批)
 - FIXME at `ClarityFilter.metal:143` (product compression 常数 Harbeth 血缘记录)
