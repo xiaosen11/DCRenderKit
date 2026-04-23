@@ -67,10 +67,17 @@
 - **硬依据**: 设计意图是 "base 只抓大尺度结构，让更多中频 detail 留在 residual 给 amplify"。较小 ε 正好服务此意图。对比 HS (ε=0.01) 也合逻辑 —— HS 要 broader base，Clarity 要 sharper base
 - 此值在论文推荐范围内，语义正向
 
-**Guided filter radius `p = 0.019` (fraction of quarter-res short side)**:
-- 比 HS (0.012) 稍大 — 配合 Clarity 的 "broader textured-patch base" 意图
-- 仍在论文推荐范围内，但**具体值 Harbeth-inherited，无独立 derivation**。可视为 empirical 偏工程判断
-- 1080p quarter-res 270 px → 5.1 px radius → ~20 px full-res radius → 1.9% 短边
+**Guided filter radius `p = 0.019` (fraction of quarter-res short side) (B.4 findings)**:
+- 1080p → ~20 px full-res radius → 1.9% 短边
+- 4K → ~40 px full-res → 1.9% 同
+- 8K → ~80 px full-res → 1.9% 同
+- **分辨率自适应**，同 HS radius 但比例更大
+- **硬依据**: Cambridge in Colour 给出的 "local contrast enhancement radius **30-100 pixels**" 经验范围 ([Cambridge Local Contrast Enhancement](https://www.cambridgeincolour.com/tutorials/local-contrast-enhancement.htm))。DCR Clarity 映射如下：
+  - 1080p: 20 px —— 低于 Cambridge 30 px 下限，属 "tight Clarity"
+  - 4K: 40 px —— 落入 30-100 范围，standard local contrast
+  - 8K: 80 px —— 在 range 内
+- **为什么比 HS (1.2%) 大**: Clarity 要 "broader base / 更大 residual detail" 以获取 mid-freq 成分；HS 要 "tighter base 做 local tone correction"。两个 radius 的相对大小关系有明确设计 rationale
+- **trade-off 记录**: 1080p 下 20 px 低于 Cambridge 经验下限，可能视觉上偏 "subtle Clarity"。若未来觉得 1080p 手机相机场景不够强，可将 p 提升至 0.028（给 30 px@1080p），但会破坏契约 C.3-C.4 的当前测量基线，需重跑验证
 
 **Product compression `× 1.5 positive` / `× 0.7 negative` (B.1 findings)**:
 - **Weber-Fechner** ([Wikipedia](https://en.wikipedia.org/wiki/Weber%E2%80%93Fechner_law)) 给 qualitative log-linear 关系 + 1% JND，**不提供具体数值系数推导**
