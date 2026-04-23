@@ -546,35 +546,42 @@ final class ToneAdjustmentFilterTests: XCTestCase {
     }
 
     func testBlacksPositiveFullSliderOnDeepShadow() throws {
-        // Perceptual-branch derivation. k=0.6312, a=2.1857.
-        //   (0.9)^2.1857 ≈ 0.795
-        //   y = 0.1·(1 + 0.6312·0.795) ≈ 0.150
+        // Reinhard toe, slider = +1, x = 0.1:
+        //   ε = exp2(-1) = 0.5
+        //   y = 0.1 / (0.1 + 0.5·0.9) = 0.1 / 0.55 ≈ 0.182
         let source = try makeToneSource(red: 0.1, green: 0.1, blue: 0.1)
         let output = try runSingle(
             source, filter: BlacksFilter(blacks: 100, colorSpace: .perceptual)
         )
         let p = try readToneTexture(output)[4][4]
-        XCTAssertEqual(p.r, 0.150, accuracy: 0.02)
+        XCTAssertEqual(p.r, 0.182, accuracy: 0.02)
     }
 
     func testBlacksPositiveFullSliderOnMidtone() throws {
-        // Perceptual branch. (0.5)^2.1857 ≈ 0.220; y ≈ 0.569.
+        // Reinhard toe, slider = +1, x = 0.5, ε = 0.5:
+        //   y = 0.5 / (0.5 + 0.5·0.5) = 0.5 / 0.75 ≈ 0.667.
+        // Midtones drift mildly — the toe asymptotes past ~0.7, so
+        // highlights are essentially untouched.
         let source = try makeToneSource(red: 0.5, green: 0.5, blue: 0.5)
         let output = try runSingle(
             source, filter: BlacksFilter(blacks: 100, colorSpace: .perceptual)
         )
         let p = try readToneTexture(output)[4][4]
-        XCTAssertEqual(p.r, 0.569, accuracy: 0.02)
+        XCTAssertEqual(p.r, 0.667, accuracy: 0.02)
     }
 
     func testBlacksNegativeFullSliderCrushesShadow() throws {
-        // Perceptual branch. k=-1.5515, a=2.3236. y ≈ 0.015.
+        // Reinhard toe, slider = -1, x = 0.2:
+        //   ε = exp2(+1) = 2.0
+        //   y = 0.2 / (0.2 + 2·0.8) = 0.2 / 1.8 ≈ 0.111
+        // Soft crush: never reaches zero, but darkens shadows
+        // substantially from 0.2 → 0.11.
         let source = try makeToneSource(red: 0.2, green: 0.2, blue: 0.2)
         let output = try runSingle(
             source, filter: BlacksFilter(blacks: -100, colorSpace: .perceptual)
         )
         let p = try readToneTexture(output)[4][4]
-        XCTAssertEqual(p.r, 0.015, accuracy: 0.02)
+        XCTAssertEqual(p.r, 0.111, accuracy: 0.02)
     }
 
     func testBlacksMonotonicInSliderForShadow() throws {

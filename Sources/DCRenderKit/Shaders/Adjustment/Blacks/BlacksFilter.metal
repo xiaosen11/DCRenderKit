@@ -6,23 +6,25 @@
 #include <metal_stdlib>
 using namespace metal;
 
-// ── BlacksFilter — shadow-concentrated multiplicative curve ──
+// ── BlacksFilter — Reinhard toe with scale (Filmic toe) ──
 //
-// Model: y = x * (1 + k * (1-x)^a)
-//   Positive: k =  0.6312 * t, a = 2.1857 (lift shadows)
-//   Negative: k = -1.5515 * t, a = 2.3236 (crush shadows)
-// Cross-scene fit spread on k: 4%, on a: 1% → fixed parameters. Fitted in
-// gamma (sRGB) space against ±100 exports from a consumer photo-editing
-// app.
+// Model: y = x / (x + ε · (1 − x)),  ε = exp2(−slider · 1.0)
+//   ε = 1 at slider = 0 ⇒ identity.
+//   ε < 1 (slider > 0) ⇒ shadows lift (y(0.1) = 0.182 at ε=0.5).
+//   ε > 1 (slider < 0) ⇒ shadows crush (y(0.1) = 0.053 at ε=2).
+// Reference: Reinhard et al. *Photographic Tone Reproduction* (SIGGRAPH
+// 2002), toe segment `C/(1+C)` generalised with an ε scale on the
+// (1-x) term. Same form used by Blender AgX toe and Hable Filmic toe.
 //
 // ## Color-space branching (u.isLinearSpace)
 //
-//   0 → gamma input, apply curve directly (DigiCam parity).
-//   1 → linear input; un-linearize to gamma → apply fitted curve →
-//       re-linearize. Visual parity with the perceptual branch at the
-//       cost of two extra pow()s per channel.
+//   0 → gamma input, apply curve directly.
+//   1 → linear input; un-linearize to gamma → apply toe → re-linearize.
+//   The toe is conceptually shape-agnostic so applying in either space
+//   is valid, but gamma-space application matches the photographer's
+//   intuition of "Blacks acts on perceived shadow brightness".
 //
-// Identity at blacks = 0 is exact in both branches.
+// Identity at blacks = 0 is exact: ε = 2^0 = 1 ⇒ y = x.
 
 struct BlacksUniforms {
     float blacks;         // -1.0 ... +1.0
@@ -67,16 +69,11 @@ kernel void DCRBlacksFilter(
     const float blacks = clamp(u.blacks, -1.0f, 1.0f);
     const bool isLinear = (u.isLinearSpace != 0u);
 
-    float k = 0.0f;
-    float a = 1.0f;
+    // Reinhard toe scale. slider = 0 ⇒ ε = 1 ⇒ identity.
+    // slider > 0 ⇒ ε < 1 ⇒ shadow lift; slider < 0 ⇒ ε > 1 ⇒ shadow crush.
+    const float eps = exp2(-blacks * 1.0f);
 
-    if (blacks > 0.001f) {
-        k = 0.6312f * blacks;
-        a = 2.1857f;
-    } else if (blacks < -0.001f) {
-        k = -1.5515f * (-blacks);
-        a = 2.3236f;
-    } else {
+    if (abs(blacks) <= 0.001f) {
         output.write(original, gid);
         return;
     }
@@ -84,7 +81,13 @@ kernel void DCRBlacksFilter(
     for (int ch = 0; ch < 3; ch++) {
         float c = float(color[ch]);
         float c_gamma = isLinear ? DCRSRGBLinearToGamma(c) : c;
-        float y = c_gamma * (1.0f + k * pow(max(1.0f - c_gamma, 1e-6f), a));
+        // Reinhard toe with scale: y = x / (x + ε · (1 − x)).
+        // Denominator is strictly positive for x ∈ [0, 1] and ε > 0
+        // (ε = exp2(±1) ∈ [0.5, 2] here), so no guard is needed —
+        // but we clamp y to [0, 1] anyway against Float16 rounding
+        // nudging the asymptote one ULP past 1.
+        float denom = c_gamma + eps * (1.0f - c_gamma);
+        float y = c_gamma / max(denom, 1e-6f);
         float y_clamped = clamp(y, 0.0f, 1.0f);
         color[ch] = half(isLinear ? DCRSRGBGammaToLinear(y_clamped) : y_clamped);
     }
