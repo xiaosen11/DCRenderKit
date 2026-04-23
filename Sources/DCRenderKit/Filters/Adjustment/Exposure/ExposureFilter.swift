@@ -7,31 +7,63 @@
 
 import Foundation
 
-/// Exposure adjustment with commercial-grade tone mapping on the positive
-/// side and display-space power curve on the negative side.
+/// Exposure adjustment — symmetric linear-gain operator with Reinhard
+/// highlight roll-off on the positive branch.
 ///
 /// ## Model form justification
 ///
 /// - Type: 1D per-pixel (tone adjustment)
-/// - Positive direction: Extended Reinhard in linear (gamma 2.2) space
-///   - Reference: Reinhard et al., *Photographic Tone Reproduction for
-///     Digital Images*, SIGGRAPH 2002
-///   - Why Reinhard: preserves highlight rolloff rather than clipping,
-///     which matches the consumer-app reference's exposure behavior on
-///     bright regions
-///   - Alternative considered: pure linear gain (too harsh, clips highlights
-///     above +0.5 EV)
-/// - Negative direction: `A * x^gamma + B * x` in display space
-///   - Why compound: a pure power curve under-compensated the dark tones
-///     compared to the consumer-app reference's S-curve shoulder; adding
-///     a linear term models the shoulder lift. MSE dropped 10.53 → 2.82
-///     over three reference scenes exported in gamma space.
+/// - Physical basis: `Exposure` is radiometrically just a linear
+///   multiplication by `gain = exp2(ev)`. Doubling exposure = adding
+///   one stop = one f-stop aperture change. Both branches start from
+///   this primitive.
+/// - **Positive direction**: Extended Reinhard tonemap around the
+///   linear gain.
+///   - Reference: Reinhard et al., *Photographic Tone Reproduction
+///     for Digital Images*, SIGGRAPH 2002.
+///     http://www.cs.utah.edu/~reinhard/cdrom/
+///   - Without Reinhard, `x · gain` overshoots `1.0` for bright
+///     input pixels at positive EV — visible as hard-clipped
+///     highlights. The Reinhard map preserves highlight detail as
+///     a soft roll-off toward the clip point.
+///   - Whitepoint `w = 0.95 · gain` sets the "clip" anchor
+///     just below the gain-scaled maximum, yielding a gentle
+///     overshoot curve rather than an instant clip.
+/// - **Negative direction**: pure linear gain `y = clamp(x · gain,
+///   0, 1)`.
+///   - Principled choice: at `ev < 0`, `gain < 1`, so `x · gain` is
+///     strictly bounded by `gain ≤ 1`. There is no overshoot to
+///     protect against, and inserting a tone-mapper on top of the
+///     linear gain adds shaping that has no photographic
+///     interpretation (Reinhard's whole purpose is overshoot
+///     protection).
+///   - Replaces the prior `A · x^γ + B · x` compound fit — that
+///     form tried to model "consumer-app-reference darkening curve"
+///     with a fitted polynomial + linear shoulder (MSE 2.82). Pure
+///     linear gain is the physically exact "less light arrives at
+///     the sensor" operation; any deviation from linear in the
+///     darkening direction is a grading decision, not an exposure
+///     one, and should live in Contrast / Blacks / WhiteBalance
+///     rather than be bundled into the Exposure slider.
 ///
 /// ## Parameter range
 ///
-/// `exposure` is a slider value in `-100 ... +100`. Internally compressed
-/// by 0.7 so the perceptual extreme matches the product decision (slider
-/// ±100 represents 70% of the raw fit). Identity at 0.
+/// `exposure` is a slider value in `-100 ... +100`, compressed by
+/// `0.7` so slider ±100 produces `±0.7 · EV_RANGE = ±2.975 EV`
+/// (with `EV_RANGE = 4.25`). Identity at 0 via dead-zone.
+///
+/// ## Breaking change from pre-Session-C fitted negative curve
+///
+/// Negative-EV response shape changed from `A · x^γ + B · x` to
+/// `x · gain`. Both agree at `ev = 0` (identity) and at `ev → −∞`
+/// (both approach 0). Mid-ev behaviour drifts: the old compound
+/// fit had a shoulder that lifted dark tones slightly; pure linear
+/// gain darkens proportionally. This is intentional per Tier 2
+/// "replace fitted curves with principled operators"
+/// (findings-and-plan §8.5 B.1). If consumer presets relied on
+/// the shadow-lift shoulder, that work belongs to ``BlacksFilter``
+/// now — which itself is a Reinhard toe and addresses the same
+/// shadow-lift intent with a grading-primitive.
 public struct ExposureFilter: FilterProtocol {
 
     /// Exposure slider in stops-like units. Range `-100 ... +100`.

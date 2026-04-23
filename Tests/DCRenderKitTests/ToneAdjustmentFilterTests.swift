@@ -216,25 +216,30 @@ final class ToneAdjustmentFilterTests: XCTestCase {
     }
 
     func testExposureNegativeFullSliderOnMidHigh() throws {
-        // Perceptual branch. slider=-100, c=0.7:
-        //   A = 0.189, γ = 2.743, B = 0.391
-        //   result ≈ 0.189·0.376 + 0.391·0.7 ≈ 0.345
+        // Pure linear gain, slider=-100 (0.7 compression × 4.25 EV range
+        // ⇒ gain = exp2(-2.975) ≈ 0.1272), perceptual branch x=0.7:
+        //   linearize(0.7)  = (0.7+0.055)/1.055)^2.4      ≈ 0.4479
+        //   gained          = 0.4479 · 0.1272             ≈ 0.05697
+        //   re-gamma        = 1.055·0.05697^(1/2.4)−0.055 ≈ 0.265
         let source = try makeToneSource(red: 0.7, green: 0.7, blue: 0.7)
         let output = try runSingle(
             source, filter: ExposureFilter(exposure: -100, colorSpace: .perceptual)
         )
         let p = try readToneTexture(output)[4][4]
-        XCTAssertEqual(p.r, 0.345, accuracy: 0.02)
+        XCTAssertEqual(p.r, 0.265, accuracy: 0.02)
     }
 
     func testExposureNegativeFullSliderOnShadow() throws {
-        // Perceptual branch. slider=-100, c=0.3: result ≈ 0.124.
+        // Pure linear gain, slider=-100, x=0.3:
+        //   linearize(0.3) ≈ 0.0732
+        //   gained         ≈ 0.0732 · 0.1272 ≈ 0.00931
+        //   re-gamma       ≈ 0.095
         let source = try makeToneSource(red: 0.3, green: 0.3, blue: 0.3)
         let output = try runSingle(
             source, filter: ExposureFilter(exposure: -100, colorSpace: .perceptual)
         )
         let p = try readToneTexture(output)[4][4]
-        XCTAssertEqual(p.r, 0.124, accuracy: 0.02)
+        XCTAssertEqual(p.r, 0.095, accuracy: 0.02)
     }
 
     func testExposureMonotonicAcrossSliderRange() throws {

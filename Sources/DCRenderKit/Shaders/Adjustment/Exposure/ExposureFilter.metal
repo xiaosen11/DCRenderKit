@@ -6,47 +6,40 @@
 #include <metal_stdlib>
 using namespace metal;
 
-// ── ExposureFilter ──
+// ── ExposureFilter — symmetric linear gain with Reinhard rolloff ──
 //
-// Positive: linear-space Extended Reinhard tonemap
-//   Reinhard et al., SIGGRAPH 2002 "Photographic Tone Reproduction".
-//   Slider +1 maps to ≈ +4.25 EV; white point at 0.95 × gain.
+// gain = exp2(exposure · 0.7 · EV_RANGE),  EV_RANGE = 4.25
 //
-// Negative: display-space A*pow(x,gamma) + B*x
-//   A*x^gamma gives dark-region contrast, B*x is the linear shoulder term
-//   that matches the consumer-app reference's S-curve shoulder lift.
-//   A = 0.270, gamma = 3.49, B = 0.130 at slider = -1.
+// Positive (exposure > 0, gain > 1):
+//   Extended Reinhard tonemap prevents highlight overshoot.
+//   Reference: Reinhard et al., SIGGRAPH 2002
+//   "Photographic Tone Reproduction". Whitepoint w = 0.95·gain.
+//   mapped = x·gain · (1 + x·gain / w²) / (1 + x·gain)
 //
-// Identity at exposure = 0 is exact (both branches gated by dead-zone).
+// Negative (exposure < 0, gain < 1):
+//   Pure linear gain y = clamp(x · gain, 0, 1).
+//   gain < 1 ⇒ x·gain ≤ gain ≤ 1: no overshoot to protect against,
+//   so no tone-mapper is warranted. This is the physically exact
+//   "less light reaches the sensor" operation. The prior
+//   `A·x^γ + B·x` fitted curve was polynomial shaping bolted on
+//   the same primitive; replaced with the linear form.
+//
+// Identity at exposure = 0 (both branches gated by dead-zone).
 //
 // ## Color-space branching
 //
-// The positive branch runs Reinhard in linear-light space, which is the
-// mathematically correct domain for radiometric tone-mapping. How it
-// gets there depends on whether the SDK is configured as perceptual
-// or linear:
+// Both branches are defined in linear-light. How the shader gets
+// there depends on SDK configuration:
 //
 //   u.isLinearSpace == 0 (perceptual mode):
-//     The input texture stores sRGB-gamma encoded floats. The shader
-//     explicitly linearizes with `pow(c, 2.2)`, tonemaps, then
-//     re-encodes with `pow(c, 1/2.2)`. Output is gamma-encoded,
-//     matching intermediate/drawable conventions for this mode.
+//     Input texture stores sRGB-gamma encoded floats. Shader
+//     linearizes with the canonical IEC 61966-2-1 piecewise helper
+//     (MIRROR of Foundation/SRGBGamma.metal), applies the branch,
+//     then re-encodes. Output stays gamma-encoded.
 //
 //   u.isLinearSpace == 1 (linear mode):
-//     The input texture is already linear (either loaded with
-//     `.SRGB: true` so the GPU sampler auto-linearizes on read, or
-//     produced by upstream filters that also operate on linear
-//     values). The shader skips the explicit linearize/de-linearize
-//     and tonemaps in-place. Output stays linear; the drawable
-//     (`.bgra8Unorm_srgb`) will handle gamma encoding on final write.
-//
-// The negative branch's compound curve `A·x^γ + B·x` was fit against
-// gamma-space reference exports from a consumer photo-editing app and is
-// applied to whatever numeric distribution the input carries. In `.linear` mode
-// the curve hits a different portion of the effective tonal range —
-// the "feel" drifts vs. the DigiCam baseline, but the output stays
-// finite and in-gamut. Refit is a future-work item tracked in the
-// findings-and-plan doc.
+//     Input texture is already linear; the branches run directly.
+//     Output stays linear (drawable bgra8Unorm_srgb handles encoding).
 
 struct ExposureUniforms {
     float exposure;       // -1.0 ... +1.0
@@ -121,24 +114,21 @@ kernel void DCRExposureFilter(
                                       : DCRSRGBLinearToGamma(clamped));
         }
     } else if (exposure < -0.001f) {
-        // Negative: display-space compound curve.
-        //   f(x) = A · x^γ + B · x
-        // fit against gamma-space JPEG exports from a consumer photo-editing
-        // app. Interpolated so identity at exposure = 0 (A=0, γ=1, B=1).
-        // In .linear mode we
-        // wrap with linearize/delinearize so the fit hits the same tonal
-        // location — visual parity with perceptual mode.
-        const float absExp = fabs(exposure);
-        const float A = 0.270f * absExp;
-        const float gamma = 1.0f + absExp * 2.49f;
-        const float B = 1.0f - absExp * 0.870f;
+        // Negative: pure linear gain in linear-light space.
+        // gain < 1 ⇒ x·gain ∈ [0, gain) ⊂ [0, 1): no overshoot to
+        // protect against, so no tone-mapper needed. "Less light
+        // reaches the sensor" in physical terms.
+        const float EV_RANGE = 4.25f;
+        const float gain = pow(2.0f, exposure * EV_RANGE);
 
         for (int ch = 0; ch < 3; ch++) {
             float c = float(color[ch]);
-            float c_gamma = isLinear ? DCRSRGBLinearToGamma(c) : c;
-            float result = A * pow(max(c_gamma, 0.0f), gamma) + B * c_gamma;
-            float clamped = clamp(result, 0.0f, 1.0f);
-            color[ch] = half(isLinear ? DCRSRGBGammaToLinear(clamped) : clamped);
+            float linear = isLinear ? max(c, 0.0f)
+                                    : DCRSRGBGammaToLinear(c);
+            float gained = linear * gain;
+            float clamped = clamp(gained, 0.0f, 1.0f);
+            color[ch] = half(isLinear ? clamped
+                                      : DCRSRGBLinearToGamma(clamped));
         }
     }
 
