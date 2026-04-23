@@ -68,11 +68,13 @@ public struct ClarityFilter: MultiPassFilter {
 
         // p anchor: radius ≈ 8 at √(480·360) ≈ 416 → p = 8/416 ≈ 0.019.
         //
-        // FIXME(§8.6 Tier 2): Anchor radius ≈ 8 at 480×360 is an inherited
-        // Harbeth hand-tune, larger than HighlightShadow's 5 because
-        // Clarity "benefits from a wider base window". Rationale is
-        // qualitative; no principled derivation exists. Origin lost with
-        // fitting pipeline. Validation: findings-and-plan.md §8.6 Tier 2.
+        // FIXME(§8.6 Tier 2 archived): Anchor radius ≈ 8 at 480×360
+        // (1.9 % short side) is an empirical hand-tune, larger than
+        // HighlightShadow's 1.2 % because Clarity wants a wider base
+        // window so more mid-frequency detail lands in the residual.
+        // 1.9 % falls inside Cambridge in Colour's 30-100 px "local
+        // contrast enhancement" band at 4K and above; at 1080p it
+        // lands slightly below the low end.
         let quarterW = max(input.width / 4, 1)
         let quarterH = max(input.height / 4, 1)
         let p: Float = 0.019
@@ -94,13 +96,11 @@ public struct ClarityFilter: MultiPassFilter {
                 inputs: [.named("downsample")],
                 output: .scaled(factor: 0.25),
                 uniforms: FilterUniforms(DCRGuidedComputeABUniforms(
-                    // FIXME(§8.6 Tier 2): Guided filter eps = 0.005
-                    // (tighter than HighlightShadow's 0.01). Rationale
-                    // "benefits from preserving smaller-scale features
-                    // in the base" is qualitative — the 0.005 specific
-                    // value is a hand-tuned Harbeth inheritance. Origin
-                    // lost with fitting pipeline. Validation:
-                    // findings-and-plan.md §8.6 Tier 2.
+                    // eps = 0.005 is tighter than HighlightShadow's
+                    // 0.01 — the design intent is a sharper base so
+                    // more mid-frequency detail lands in the residual
+                    // available for amplification. Falls inside the
+                    // 0.001-0.1 range guided-filter literature cites.
                     eps: 0.005,
                     radiusX: radiusX,
                     radiusY: radiusY

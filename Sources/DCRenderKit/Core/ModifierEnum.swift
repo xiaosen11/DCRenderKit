@@ -12,8 +12,8 @@ import Foundation
 /// The pipeline dispatcher examines this value to route execution to the
 /// appropriate dispatcher (`ComputeDispatcher`, `RenderDispatcher`, etc).
 ///
-/// Unlike Harbeth, DCRenderKit supports only four backends that we actively
-/// need. Core Image is intentionally excluded to avoid GPU-CPU synchronization
+/// DCRenderKit supports only four backends that we actively need. Core
+/// Image is intentionally excluded to avoid GPU-CPU synchronization
 /// overhead and Apple-specific dependencies.
 public enum ModifierEnum: Sendable {
 

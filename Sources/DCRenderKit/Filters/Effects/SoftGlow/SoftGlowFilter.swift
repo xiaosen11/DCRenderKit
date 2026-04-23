@@ -3,8 +3,8 @@
 //  DCRenderKit
 //
 //  Pro Mist / soft glow via Dual Kawase Bloom with resolution-adaptive
-//  pyramid depth. Ported from DigiCam — replaces the Harbeth fixed-depth
-//  7-dispatch imperative pipeline with a dynamic MultiPassFilter graph.
+//  pyramid depth. Declarative MultiPassFilter graph with adaptive pass
+//  count driven by input short side.
 //
 
 import Foundation
@@ -77,14 +77,12 @@ public struct SoftGlowFilter: MultiPassFilter {
     public func passes(input: TextureInfo) -> [Pass] {
         guard strength > 0.001 else { return [] }
 
-        // FIXME(§8.6 Tier 2 + §8.2 A+.3): Threshold mapping `0.3 + slider ·
+        // FIXME(§8.6 Tier 2 archived): Threshold mapping `0.3 + slider ·
         // 0.6` (slider 0→100 maps to smoothstep center [0.3, 0.9]) and
         // offsetRatio mapping `0.002 + slider · 0.004` (slider 0→100 maps
-        // to short-side fraction [0.002, 0.006]) are inherited empirical
-        // ranges from the Harbeth lineage. Neither was derived from an
-        // optical PSF target or bloom physics. Original fit pipeline lost.
-        // Validation: findings-and-plan.md §8.6 Tier 2 + §8.2 A+.3
-        // (additivity contract: bloom(a+b) == bloom(a) + bloom(b)).
+        // to short-side fraction [0.002, 0.006]) are empirical hand-tuned
+        // ranges. Neither was derived from an optical PSF target or bloom
+        // physics; locked by Tier 4 snapshot approval once recorded.
         let thresholdMapped = 0.3 + (threshold / 100.0) * 0.6
         let offsetRatio = 0.002 + (bloomRadius / 100.0) * 0.004
 

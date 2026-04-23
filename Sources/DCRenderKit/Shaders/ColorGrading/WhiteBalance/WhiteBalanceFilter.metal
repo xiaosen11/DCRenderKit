@@ -13,8 +13,7 @@ struct WhiteBalanceUniforms {
 };
 
 // HDR-safe Overlay blend: linear extrapolation outside [0, 1] instead
-// of the standard piecewise formula's undefined behaviour. Matches
-// Harbeth C7WhiteBalance for pixel parity.
+// of the standard piecewise formula's undefined behaviour.
 inline half dcr_whiteBalanceOverlay(half v, half w) {
     if (v < 0.0h) {
         return v * (2.0h * w);

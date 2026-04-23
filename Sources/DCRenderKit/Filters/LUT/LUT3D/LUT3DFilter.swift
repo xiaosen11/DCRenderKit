@@ -4,9 +4,9 @@
 //
 //  3D LUT colour transform using a genuine `texture3d` Metal texture and
 //  software trilinear sampling (chosen over hardware `filter::linear` to
-//  sidestep normalized-coord float truncation on small LUTs). Ported from
-//  DigiCam, which originally replaced Harbeth's `C7ColorCube` (a 2D
-//  flattened LUT with a known G/B channel swap).
+//  sidestep normalized-coord float truncation on small LUTs). Accepts
+//  standard `.cube` files produced by pro tools (DaVinci Resolve,
+//  Lightroom, FilmLight Baselight) without intermediate conversion.
 //
 
 import Foundation

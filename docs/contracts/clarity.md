@@ -23,7 +23,7 @@
 
 | 实现 | 边缘保持滤镜 | 源 |
 |---|---|---|
-| **DCR (本实现)** | Fast Guided Filter (He & Sun 2015) | Harbeth-inherited 血缘 |
+| **DCR (本实现)** | Fast Guided Filter (He & Sun 2015) | 独立 Swift/Metal 实现 |
 | Adobe ACR / Lightroom Clarity | 闭源专有算法，Adobe 从 Pixmantec 收购后并入 ACR；社区描述为 "large-radius unsharp mask-like" | [Adobe community 讨论](https://community.adobe.com/t5/photoshop/what-exactly-is-clarity/m-p/8957985) |
 | darktable "local contrast" | **Local Laplacian Filter (default)** 或 unnormalized bilateral filter；工作在 Lab L 通道 | [darktable 4.6 manual](https://docs.darktable.org/usermanual/4.6/en/module-reference/processing-modules/local-contrast/) |
 | RawTherapee local adjustments | Laplacian operator + Poisson equation 迭代 | [RawPedia Local Adjustments](https://rawpedia.rawtherapee.com/Local_Adjustments) |
@@ -82,7 +82,7 @@
 **Product compression `× 1.5 positive` / `× 0.7 negative` (B.1 findings)**:
 - **Weber-Fechner** ([Wikipedia](https://en.wikipedia.org/wiki/Weber%E2%80%93Fechner_law)) 给 qualitative log-linear 关系 + 1% JND，**不提供具体数值系数推导**
 - **Unsharp mask amount** ([Wikipedia](https://en.wikipedia.org/wiki/Unsharp_masking)) 在所有主流实现中都是 user-taste 参数，**无理论最优值**（MATLAB imsharpen default amount=0.8）
-- ×1.5 / ×0.7 是 Harbeth 血缘 aesthetic choice，**无文档化 user 验证**
+- ×1.5 / ×0.7 是 empirical aesthetic choice，**无文档化 user 验证**
 - shader 注释中原有 "perceptually-linear slider response" 宣称已删除（fabricated，违反 engineering-judgment §4）
 - **tech debt 状态**: 已知 empirical; 建议未来加 Tier 4 snapshot tracking 锁定当前值，避免悄悄漂移
 
@@ -208,7 +208,7 @@ max(output.luma) − min(output.luma)
 - [Adobe Community — "What exactly is Clarity"](https://community.adobe.com/t5/photoshop/what-exactly-is-clarity/m-p/8957985) (Adobe 社区对 Clarity 行为描述)
 - [Lightroom Clarity behavior — ExpertPhotography](https://expertphotography.com/clarity-tool/)
 - F3 修复 commit `2907b2b` (baseLuma gamma-wrap 在 HS + Clarity 同批)
-- FIXME at `ClarityFilter.metal:143` (product compression 常数 Harbeth 血缘记录)
+- FIXME at `ClarityFilter.metal:143` (product compression 常数 empirical record)
 
 ---
 

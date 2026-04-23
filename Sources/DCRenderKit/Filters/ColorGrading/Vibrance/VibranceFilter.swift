@@ -56,16 +56,17 @@ import Foundation
 /// - Negative = selective desaturation (low-C pulled toward grey,
 ///   high-C and skin largely unchanged)
 ///
-/// ## Breaking change from pre-#14 implementation
+/// ## Breaking change from pre-Session-C implementation
 ///
 /// The prior implementation `mix(rgb, vec3(max), (max − mean) · −3·vib)`
-/// inherited from GPUImage / Harbeth C7Vibrance behaved as a non-Adobe
-/// "max-anchor saturation" — already-saturated pixels received *more*
-/// boost rather than less, and no skin protection existed. The new
-/// implementation flips that to Adobe semantics. Slider handfeel and
-/// visual response differ noticeably; existing presets that depend on
-/// the old curve will need retuning. See the #14 commit message for
-/// migration notes.
+/// (a GPUImage-family max-anchor saturation) behaved as a non-Adobe
+/// "all pixels scale toward their max channel" operator — already-
+/// saturated pixels received *more* boost rather than less, and no
+/// skin protection existed. The current implementation implements the
+/// Adobe Vibrance semantics (selective low-chroma boost + warm-skin-
+/// hue protection). Slider handfeel and visual response differ
+/// noticeably; existing presets that depend on the old curve will
+/// need retuning. See CHANGELOG.md `[Unreleased]` for migration notes.
 public struct VibranceFilter: FilterProtocol {
 
     /// Vibrance slider. Range `-1 ... +1`; identity at `0`. Positive

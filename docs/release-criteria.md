@@ -179,14 +179,12 @@ compiles + contracts pass" quality first.
       DigiCam call-site updates. This is a downstream concern — v0.1.0
       can ship first and DigiCam upgrades as part of adopting it.
 
-### Third-party comparison (optional)
+### Third-party comparison
 
-- [ ] **#50 Harbeth diff audit** — line-level comparison against every
-      Harbeth filter to catch any semantic divergence we didn't notice
-      during the OKLCh / principled-operator sweep. Not a release
-      blocker; more "due diligence" to write down.
-- [ ] **#51 Harbeth feature gap list** — filters Harbeth ships that
-      DCR doesn't. Not a release blocker; more "future roadmap input".
+Dropped at Session C convergence. DCRenderKit is an independent
+principled-operators codebase; no external-library parity is
+pursued. The per-filter `Model form justification` blocks + the
+per-contract clauses in `docs/contracts/` are the commitment.
 
 ---
 

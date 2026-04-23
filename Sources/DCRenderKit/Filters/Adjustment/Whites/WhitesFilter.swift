@@ -36,10 +36,10 @@ import Foundation
 /// - Why **not** the prior LUT-driven fitted form: the old weighted
 ///   parabola (positive) + luma-ratio (negative) with per-scene
 ///   LUT-interpolated `k100`, `b` was a 3-anchor polynomial fit,
-///   parameter-heavy and Harbeth-lineage only. The shoulder primitive
-///   is closed-form, single-parameter (`ε`), and symmetric with the
-///   Blacks toe — the pair now forms a coherent filmic curve the way
-///   professional grading tools expose it.
+///   parameter-heavy and with no closed-form backing. The shoulder
+///   primitive is closed-form, single-parameter (`ε`), and symmetric
+///   with the Blacks toe — the pair now forms a coherent filmic
+///   curve the way professional grading tools expose it.
 ///
 /// ## API change from the prior implementation
 ///

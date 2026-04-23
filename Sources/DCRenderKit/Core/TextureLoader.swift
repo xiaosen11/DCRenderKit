@@ -90,7 +90,7 @@ public final class TextureLoader: @unchecked Sendable {
         // `.SRGB: true` asks MTKTextureLoader to mark the resulting texture
         // as sRGB-encoded on disk, so shader reads auto-linearize via the
         // hardware sampler. `.SRGB: false` keeps raw values — the right
-        // default for Harbeth/DigiCam-parity perceptual mode.
+        // default for the DigiCam-parity perceptual mode.
         let options: [MTKTextureLoader.Option: Any] = [
             .textureUsage: NSNumber(value: usage.rawValue),
             .textureStorageMode: NSNumber(value: storageMode.rawValue),
@@ -143,7 +143,7 @@ public final class TextureLoader: @unchecked Sendable {
     /// so in `.linear` mode we return a `.bgra8Unorm_srgb`-formatted
     /// view of the same memory — the GPU sampler then linearizes on read.
     /// In `.perceptual` mode we return a `.bgra8Unorm` view so the bytes
-    /// flow through unchanged (Harbeth / DigiCam parity).
+    /// flow through unchanged (DigiCam parity).
     ///
     /// Before this parameter existed, the camera path silently used
     /// `.bgra8Unorm` regardless of SDK color space, which in `.linear`

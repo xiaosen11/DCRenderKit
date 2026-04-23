@@ -2,9 +2,10 @@
 //  WhiteBalanceFilter.swift
 //  DCRenderKit
 //
-//  Kelvin-driven white balance via YIQ tint + Overlay warm-mix. Port of
-//  Harbeth's C7WhiteBalance — behaviour-for-behaviour compatible so
-//  consumers migrating off Harbeth see the same pixels.
+//  Kelvin-driven white balance via YIQ tint axis + Kelvin piecewise
+//  warm Overlay blend. YIQ is a linear transform of RGB; editing Q
+//  alone is the defining property of a correct tint control (no luma
+//  shift on skin).
 //
 
 import Foundation
@@ -27,8 +28,13 @@ import Foundation
 ///   than the same step above:
 ///     - below 5000 K: `0.0004 · (K - 5000)`
 ///     - above 5000 K: `0.00006 · (K - 5000)`
-/// - Reference: the exact formulation ships in Harbeth's C7WhiteBalance.
-///   We preserve it byte-for-byte to provide a drop-in replacement.
+///
+/// The slope constants (0.0004 / 0.00006) and the warm target triple
+/// are empirical product-feel settings and are preserved at their
+/// current values rather than redescribed in terms of CIE illuminant
+/// chromaticities — the YIQ-plus-Overlay architecture itself is
+/// principled (Q-axis edit + piecewise non-linearity on Kelvin), the
+/// specific magnitudes are tuned for UI feel.
 ///
 /// ## Parameter ranges
 ///

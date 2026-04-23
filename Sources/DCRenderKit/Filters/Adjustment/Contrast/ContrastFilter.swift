@@ -61,11 +61,10 @@ import Foundation
 /// shape across all slider positions. The curves agree at `contrast =
 /// 0` (both pass through y = x) and at the tonal endpoints, but the
 /// midtone region behaves more like a DaVinci slope control and less
-/// like the Harbeth-lineage cubic. Existing presets that depended on
-/// the cubic's exact midtone curvature need retuning; this is
-/// intentional per the Tier 2 "replace Harbeth-fitted curves with
-/// principled operators" decision. findings-and-plan §8.5 B.1 tracks
-/// the full switchover across fitted filters.
+/// like the prior cubic. Existing presets that depended on the cubic's
+/// exact midtone curvature need retuning; this is intentional per the
+/// Session C "replace fitted tone curves with principled operators"
+/// decision.
 public struct ContrastFilter: FilterProtocol {
 
     /// Contrast slider. Range `-100 ... +100`.

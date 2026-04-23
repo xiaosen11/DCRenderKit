@@ -33,11 +33,11 @@ import Metal
 ///
 /// ## Design philosophy
 ///
-/// Unlike Harbeth's `factors: [Float]` contract (which requires each value to
-/// bind to a separate Metal buffer index), DCRenderKit uses a single typed
-/// `FilterUniforms` struct that maps to a single `buffer(0)` in the shader.
-/// This eliminates per-frame `setBytes` overhead and provides compile-time
-/// type safety.
+/// DCRenderKit uses a single typed `FilterUniforms` struct that maps to
+/// a single `buffer(0)` in the shader, rather than a loose
+/// `factors: [Float]` array with per-value buffer-index binding. The
+/// single-struct approach eliminates per-frame `setBytes` overhead and
+/// provides compile-time type safety against uniform-layout drift.
 public protocol FilterProtocol: Sendable {
 
     /// Routes execution to the appropriate backend dispatcher.

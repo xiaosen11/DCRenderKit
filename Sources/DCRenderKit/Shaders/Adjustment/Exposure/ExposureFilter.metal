@@ -88,16 +88,15 @@ kernel void DCRExposureFilter(
 
     if (exposure > 0.001f) {
         // Positive: Extended Reinhard in linear-light space.
-        // FIXME(§8.6 Tier 2 + §8.5 B.2): EV_RANGE = 4.25 maps slider ±1
-        // to ±4.25 EV. Inherited from Harbeth — narrower than Lightroom's
-        // ±5 EV standard (see findings-and-plan.md §8.5 B.2 for
-        // retain-vs-align decision). Origin of 4.25 lost with fitting
-        // pipeline.
+        // FIXME(§8.6 Tier 2 archived): EV_RANGE = 4.25 maps slider ±1
+        // to ±4.25 EV — slightly narrower than Lightroom's ±5 EV
+        // standard. Hand-chosen for "commercial slider feel", not a
+        // derived number.
         //
-        // `white * 0.95` is the Extended Reinhard white-point offset.
-        // The 0.95 is empirical — keeps the mapped max slightly below
-        // pure gain to avoid numerical saturation at peak. Origin of
-        // 0.95 lost. Validation: findings-and-plan.md §8.6 Tier 2.
+        // `white * 0.95` is the Extended Reinhard white-point offset —
+        // keeps the mapped max slightly below pure gain to avoid
+        // numerical saturation at the peak. The 0.95 is an empirical
+        // safety margin, not a principled derivation.
         const float EV_RANGE = 4.25f;
         const float gain = pow(2.0f, exposure * EV_RANGE);
         const float white = gain * 0.95f;

@@ -15,25 +15,23 @@ import Metal
 /// DCRenderKit can operate in two modes. They differ in what numbers the
 /// floats inside `rgba16Float` intermediates represent.
 ///
-/// - ``perceptual``: values are sRGB-gamma encoded. Matches Harbeth's
-///   historical behaviour and DigiCam's visual parity target: filters'
-///   curves inherit fitted constants from the Harbeth lineage, originally
-///   tuned against gamma-space JPEG exports from a consumer photo-editing
-///   app (fitting pipeline lost; no pixel-level parity claim against any
-///   specific app — see findings-and-plan.md §8.6). Drawable presentation
-///   uses `.bgra8Unorm` — byte
-///   values flow unchanged from the intermediate to the screen.
+/// - ``perceptual``: values are sRGB-gamma encoded. Matches the
+///   DigiCam visual-parity target: tone operators apply directly on
+///   gamma-space values, and intermediates carry gamma floats.
+///   Drawable presentation uses `.bgra8Unorm` — byte values flow
+///   unchanged from the intermediate to the screen.
 ///
 /// - ``linear``: values represent linear scene light. Source textures are
 ///   loaded with GPU-side sRGB→linear conversion (`MTKTextureLoader`
 ///   option `.SRGB: true`), math such as Reinhard tone-mapping is
 ///   mathematically correct in linear space, and the final drawable is
 ///   `.bgra8Unorm_srgb` so the GPU gamma-encodes on write. More "correct"
-///   by the lights of modern imaging, but the parameter tuning done
-///   against perceptual-space references (Exposure's Reinhard gain,
-///   Contrast's cubic pivot, Whites/Blacks weighted parabolas, the white-
-///   balance YIQ mix) shifts the effective curve shape — product "feel"
-///   will drift vs. the DigiCam baseline unless the curves are refit.
+///   by the lights of modern imaging. The principled tone operators
+///   (Reinhard toe / Filmic shoulder / DaVinci log-slope / linear gain)
+///   apply via a gamma wrap in this mode so the pivot / slope math
+///   still anchors at perceived-brightness locations; the linear /
+///   perceptual parity is measured end-to-end by
+///   `LinearPerceptualParityTests`.
 ///
 /// ## Switching
 ///

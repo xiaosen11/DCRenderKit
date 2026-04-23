@@ -2,11 +2,10 @@
 //  MultiPassFilter.swift
 //  DCRenderKit
 //
-//  Declarative multi-pass filter API. Replaces Harbeth's imperative
-//  `C7CombinationBase.prepareIntermediateTextures` pattern with a DAG
-//  specification that the framework executes and optimizes automatically.
-//
-//  See `docs/harbeth-architecture-audit.md` §13.4 for design details.
+//  Declarative multi-pass filter API. Filters describe a pass DAG that
+//  the framework executes and optimises automatically, rather than
+//  having each multi-pass filter manually manage intermediate textures,
+//  kernel schedules, and cleanup in its own imperative code.
 //
 
 import Metal

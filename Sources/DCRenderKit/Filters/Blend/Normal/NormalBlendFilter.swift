@@ -3,10 +3,10 @@
 //  DCRenderKit
 //
 //  "Normal" (source-over) blend between the pipeline input and a
-//  consumer-supplied overlay texture, with an intensity mix. Port of
-//  Harbeth's C7Blend(with: .normal) — the only blend mode currently
-//  used by DigiCam. Other blend modes (multiply, screen, overlay, etc.)
-//  will be added on demand rather than shipping untested stubs.
+//  consumer-supplied overlay texture, with an intensity mix. Only
+//  blend mode currently shipped. Other blend modes (multiply, screen,
+//  overlay, etc.) will be added on demand rather than shipping
+//  untested stubs.
 //
 
 import Foundation
@@ -21,7 +21,7 @@ import Metal
 ///   `rgb = overlay.rgb + input.rgb · input.a · (1 - overlay.a)`
 ///   `a   = overlay.a   + input.a               · (1 - overlay.a)`
 /// then mix back toward the original by `1 - intensity` for slider-
-/// driven partial overlays. Matches Harbeth's C7BlendNormal.
+/// driven partial overlays.
 ///
 /// Bilinear resampling is done inline so the overlay texture can be any
 /// resolution — the consumer isn't required to pre-resize.

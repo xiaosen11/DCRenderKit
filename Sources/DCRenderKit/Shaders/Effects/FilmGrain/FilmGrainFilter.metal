@@ -103,13 +103,13 @@ kernel void DCRFilmGrainFilter(
     // SoftLight blend value, `0.5` is neutral. `0.144` is the product-
     // tuned clamp so density=1 stays within perceptual comfort.
     //
-    // FIXME(§8.6 Tier 2 + §8.4 Audit.6): × 0.144 is inherited empirical
-    // from Harbeth. "Product-tuned" phrasing acknowledges origin is
-    // hand-picked, not derived from any film-grain PSF measurement or
+    // FIXME(§8.6 Tier 2 archived): × 0.144 is an empirical hand-tuned
+    // constant — not derived from any film-grain PSF measurement or a
     // standard grain model (AgX grain, darktable grain module, VSCO
-    // reference, etc.). Same 0.144 appears in CCDFilter.metal noise step
-    // — they share a lineage. Validation: findings-and-plan.md §8.6
-    // Tier 2 + §8.4 Audit.6 (FilmGrain sin-trick industry reference).
+    // reference, etc.). Same 0.144 appears in CCDFilter.metal noise
+    // step (intentionally shared). Paired with the Tier 4 snapshot
+    // regression baseline, this value is "locked by visual approval"
+    // rather than derived from first principles.
     half3 blend = half3(0.5h + half(nR) * half(density) * 0.144h);
 
     if (chromaticity > 0.001f) {

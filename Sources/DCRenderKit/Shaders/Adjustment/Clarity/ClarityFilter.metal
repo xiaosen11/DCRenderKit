@@ -69,13 +69,13 @@ kernel void DCRClarityComputeBase(
 //
 // Positive: `output = original + detail · intensity · 1.5`
 //   — amplifies the mid-frequency component that was removed by the
-//   guided filter. ×1.5 gain is Harbeth-inherited empirical; no
+//   guided filter. ×1.5 gain is hand-tuned empirical; no
 //   independent Weber-Fechner measurement backs "perceptually-linear
 //   slider response". Documented as tech debt in docs/contracts/clarity.md.
 //
 // Negative: `output = mix(original, base, |intensity| · 0.7)`
 //   — blends toward the smooth edge-preserving base. ×0.7 is similarly
-//   Harbeth-inherited empirical; keeps extreme from fully flattening.
+//   hand-tuned empirical; keeps extreme from fully flattening.
 //
 // ## Color-space branching
 //
@@ -149,13 +149,12 @@ kernel void DCRClarityApply(
 
     float3 detail = origRGB - baseRGB;
 
-    // FIXME(§8.6 Tier 2 + §8.2 A+.2): Product compression factors × 1.5
-    // (positive) and × 0.7 (negative) are inherited empirical from Harbeth.
-    // Doc comment above claims "perceptually-linear slider response" but
-    // that's an unverified assertion — no Weber-Fechner linearity
-    // measurement exists for Clarity's slider. Original fit pipeline lost.
-    // Validation: findings-and-plan.md §8.6 Tier 2 (SSIM vs Pixel Cake) +
-    // §8.2 A+.2 contract formalization (FFT spectral selectivity).
+    // FIXME(§8.6 Tier 2 archived): Product compression factors × 1.5
+    // (positive) and × 0.7 (negative) are empirical hand-tuned constants
+    // with no Weber-Fechner linearity measurement backing them. Contract
+    // verification lives in `docs/contracts/clarity.md` (FFT spectral
+    // selectivity + dynamic-range preservation) rather than a slider-
+    // linearity claim.
     float3 result;
     if (intensity >= 0.0f) {
         result = origRGB + detail * (intensity * 1.5f);

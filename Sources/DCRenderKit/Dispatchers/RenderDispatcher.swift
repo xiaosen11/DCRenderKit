@@ -2,10 +2,10 @@
 //  RenderDispatcher.swift
 //  DCRenderKit
 //
-//  Encodes render pipeline dispatches (vertex + fragment). The commercial-
-//  grade replacement for Harbeth's 75-line toy render backend — supports
+//  Encodes render pipeline dispatches (vertex + fragment). Supports
 //  custom vertex buffers, blend modes, sampler state, load actions, and
-//  batched multi-draw passes.
+//  batched multi-draw passes — the feature set real render workloads
+//  (stickers, distortion meshes, lens correction) require.
 //
 
 import Foundation
@@ -14,12 +14,12 @@ import Metal
 /// Encodes render (rasterization) pipeline dispatches with a fixed binding
 /// convention shared across all DCRenderKit render shaders.
 ///
-/// ## Why this is more than Harbeth's render backend
+/// ## Why not a minimal full-screen-quad backend
 ///
-/// Harbeth's `Rendering.drawing()` hard-codes a full-screen quad,
-/// `bgra8Unorm`, a `.clear` load action, and no blend or sampler state. That
-/// works for post-effects that just re-run a fragment shader on a texture,
-/// but it makes real render workloads impossible:
+/// A naive render backend hard-codes a full-screen quad, `bgra8Unorm`, a
+/// `.clear` load action, and no blend or sampler state. That works for
+/// post-effects that just re-run a fragment shader on a texture, but it
+/// makes real render workloads impossible:
 ///
 /// - **Stickers** need custom geometry (positioned quads with MVP transforms),
 ///   alpha blending, and the ability to draw multiple stickers into the

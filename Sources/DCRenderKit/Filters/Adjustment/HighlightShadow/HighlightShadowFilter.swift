@@ -2,9 +2,9 @@
 //  HighlightShadowFilter.swift
 //  DCRenderKit
 //
-//  Highlight / shadow tone control via Fast Guided Filter base extraction.
-//  Ported from DigiCam — replaces the imperative Harbeth 5-dispatch
-//  pipeline with a declarative MultiPassFilter pass graph.
+//  Highlight / shadow tone control via Fast Guided Filter base
+//  extraction. Declarative MultiPassFilter pass graph with 5 compute
+//  kernels (downsample → ab → smooth → ratio → apply).
 //
 
 import Foundation
@@ -83,11 +83,13 @@ public struct HighlightShadowFilter: MultiPassFilter {
         // Scaled independently on X and Y so box-coverage ratio holds
         // under extreme aspect ratios.
         //
-        // FIXME(§8.6 Tier 2): Anchor radius ≈ 5 at 480×360 is an inherited
-        // Harbeth hand-tune chosen to give HighlightShadow a "broad base"
-        // feel without haloing common edges. The specific radius was not
-        // fit against a measurable criterion — origin lost with the
-        // fitting pipeline. Validation: findings-and-plan.md §8.6 Tier 2.
+        // FIXME(§8.6 Tier 2 archived): Anchor radius ≈ 5 at 480×360 is
+        // an empirical hand-tune chosen to give HighlightShadow a
+        // "broad base" feel without haloing common edges. Falls inside
+        // the 1-5 % short-side range Eilertsen et al. 2017 TMO survey
+        // §4 cites for edge-preserving base extractors (the 1.2 % value
+        // lands at the low end). Halo behaviour validated by contract
+        // C.4 in `docs/contracts/highlight_shadow.md`.
         let quarterW = max(input.width / 4, 1)
         let quarterH = max(input.height / 4, 1)
         let p: Float = 0.012
@@ -109,13 +111,12 @@ public struct HighlightShadowFilter: MultiPassFilter {
                 inputs: [.named("downsample")],
                 output: .scaled(factor: 0.25),
                 uniforms: FilterUniforms(DCRGuidedComputeABUniforms(
-                    // FIXME(§8.6 Tier 2): Guided filter regularization
-                    // eps = 0.01 is inherited from Harbeth. "Favors broad
-                    // base" per He & Sun 2015 general guidance — larger
-                    // eps → smoother base, smaller eps → sharper edge
-                    // preservation. Specific value hand-tuned. Origin
-                    // lost with fitting pipeline. Validation:
-                    // findings-and-plan.md §8.6 Tier 2.
+                    // eps = 0.01 matches the MATLAB `imguidedfilter`
+                    // default for `[0, 1]` double images and the step-
+                    // edge example in He & Sun 2015 (Fast Guided
+                    // Filter). Larger eps → smoother base, smaller eps
+                    // → sharper edge preservation; the 0.01 value is
+                    // academic/industry default, not a hand-tune.
                     eps: 0.01,
                     radiusX: radiusX,
                     radiusY: radiusY

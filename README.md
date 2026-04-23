@@ -15,13 +15,14 @@
 
 DCRenderKit is a high-precision, zero-external-dependency Metal image-processing SDK. Built for
 consumer photo-editing apps and camera pipelines that want Lightroom-grade filter quality without
-Core Image's performance overhead or Harbeth's closed-loop eight-bit precision loss.
+Core Image's synchronization overhead or the accumulated 8-bit quantisation of ad-hoc Metal
+filter chains.
 
 Highlights:
 
 - **Principled tone operators.** Every tone curve (Exposure / Contrast / Blacks / Whites) is a
   documented grading primitive (Reinhard / DaVinci log-slope / Filmic toe / Filmic shoulder) with
-  a fetched reference — no "Harbeth-inherited MSE-bakeoff" coefficients in the codepath.
+  a fetched reference — no opaque "best-MSE polynomial fit" coefficients in the codepath.
 - **Principled color operators.** Saturation and Vibrance both operate in OKLCh (Ottosson 2020 /
   CSS Color Level 4), with a bi-directional gamut clamp that preserves lightness and hue.
 - **Declarative multi-pass filters.** SoftGlow, HighlightShadow, Clarity, and PortraitBlur
@@ -34,8 +35,8 @@ Highlights:
   (DigiCam parity) with a single line of config.
 
 Status: **pre-1.0**, targeting `v0.1.0` first public release. The filter-correctness foundation
-is complete; performance benchmarks, Harbeth-parity audits, and the public API freeze are the
-remaining gates — see [TODO.md](TODO.md).
+is complete; the public API freeze and release-plumbing are the remaining gates — see
+[TODO.md](TODO.md) and [docs/release-criteria.md](docs/release-criteria.md).
 
 ### Quick Start
 
@@ -140,13 +141,13 @@ MIT — see [LICENSE](LICENSE).
 ### 概述
 
 DCRenderKit 是高精度、零外部依赖的 Metal 图像处理 SDK。为希望取得 Lightroom 级滤镜质量，又不想承担
-Core Image 性能开销或 Harbeth 族 8-bit 累积色带的消费级修图 app 与相机管线设计。
+Core Image 同步开销或手写 Metal 滤镜链在多 pass 中累积 8-bit 量化色带的消费级修图 app 与相机管线设计。
 
 核心价值：
 
 - **曲线滤镜原理派实现。** 每一条 tone curve（Exposure / Contrast / Blacks / Whites）都是一个
   有论文或开源工程出处的调色原语（Reinhard / DaVinci 对数斜率 / Filmic 趾 / Filmic 肩），代码路径里
-  不存在"Harbeth 血缘 MSE-bakeoff 拟合系数"。
+  没有不透明的"最低 MSE 多项式拟合"系数。
 - **色彩滤镜原理派实现。** Saturation 与 Vibrance 均工作在 OKLCh（Ottosson 2020 / CSS Color
   Level 4）空间，配合双向色域夹紧保留感知亮度与色相。
 - **声明式多 pass 滤镜。** SoftGlow / HighlightShadow / Clarity / PortraitBlur 声明一个 pass
@@ -157,8 +158,9 @@ Core Image 性能开销或 Harbeth 族 8-bit 累积色带的消费级修图 app 
 - **完整 Swift 6 严格并发遵从。**
 - **色彩空间感知。** 一行配置切换 `.linear`（物理辐射正确）与 `.perceptual`（DigiCam parity）。
 
-状态：**pre-1.0**，正在冲刺 `v0.1.0` 首个公开版本。滤镜正确性基础已完整，剩下的发布门槛是性能基线、
-Harbeth parity 审计、public API 冻结 —— 详见 [TODO.md](TODO.md)。
+状态：**pre-1.0**，正在冲刺 `v0.1.0` 首个公开版本。滤镜正确性基础已完整，剩下的发布门槛是
+public API 冻结和发布管线 —— 详见 [TODO.md](TODO.md) 与
+[docs/release-criteria.md](docs/release-criteria.md)。
 
 ### 快速上手
 

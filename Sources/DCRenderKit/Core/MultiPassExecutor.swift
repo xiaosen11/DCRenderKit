@@ -19,15 +19,15 @@ import Metal
 ///
 /// ## Why this exists
 ///
-/// Harbeth's `C7CombinationBase.prepareIntermediateTextures()` requires every
-/// multi-pass filter (SoftGlow, Clarity, HighlightShadow, etc) to manually:
+/// Without a framework-level executor, every multi-pass filter (SoftGlow,
+/// Clarity, HighlightShadow, etc.) would have to manually:
 /// 1. Allocate each intermediate texture
 /// 2. Schedule each sub-kernel
 /// 3. Track texture lifetimes and release manually
-/// 4. Handle cleanup in `combinationAfter`
+/// 4. Handle cleanup at the end of the dispatch
 ///
-/// This is ~80 lines of boilerplate per filter, error-prone (leaks are easy),
-/// and prevents dynamic pass counts (e.g. adaptive pyramid depth).
+/// That is ~80 lines of boilerplate per filter, error-prone (leaks are
+/// easy), and prevents dynamic pass counts (e.g. adaptive pyramid depth).
 ///
 /// `MultiPassExecutor` lifts all of that into the framework. Filters declare
 /// `passes(input:) -> [Pass]` and the framework handles the rest.

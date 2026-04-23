@@ -22,18 +22,16 @@
 //
 // - `.perceptual`: Textures load as-is (sRGB-gamma encoded values),
 //   intermediates carry gamma floats, drawable uses `.bgra8Unorm`.
-//   This is the Harbeth / DigiCam parity mode — the product curves
-//   (Contrast / Whites / Blacks / WhiteBalance / Exposure) inherit fitted
-//   constants from the Harbeth lineage, originally tuned against
-//   gamma-space JPEG exports from a consumer photo-editing app (fitting
-//   pipeline lost; no pixel-level parity claim against any specific app).
-//   See docs/findings-and-plan.md §8.6 for the Tier 2 spot-check
-//   validation roadmap.
+//   This is the DigiCam parity mode. Tone operators (Contrast /
+//   Whites / Blacks / Exposure) are principled primitives (DaVinci
+//   log-slope / Filmic shoulder / Reinhard toe / Reinhard tonemap)
+//   that apply in whichever numeric domain the intermediate carries.
 //
 // Switching requires a single line change to `DCRenderKit.defaultColorSpace`
-// + rebuild. No refit is required; parameter curves retain their
-// coefficients and the "feel" shifts with the space. If the `.linear`
-// feel is unacceptable on device, flip back to `.perceptual`.
+// + rebuild. No refit is required; the principled operators retain
+// their closed-form coefficients and the "feel" shifts with the
+// space. If the `.linear` feel is unacceptable on device, flip back
+// to `.perceptual`.
 
 import Foundation
 
@@ -59,7 +57,7 @@ public enum DCRenderKit {
     ///     `DCRColorSpace.recommendedDrawablePixelFormat`
     ///
     /// Change this to `.perceptual` at compile time to revert to the
-    /// Harbeth / DigiCam parity pipeline. The rebuild is the flip — no
-    /// code elsewhere needs to change.
+    /// DigiCam parity pipeline. The rebuild is the flip — no code
+    /// elsewhere needs to change.
     public static let defaultColorSpace: DCRColorSpace = .linear
 }

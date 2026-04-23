@@ -72,10 +72,10 @@ until `v1.0.0`. Each breaking change is flagged explicitly below.
 - **OKLCh Saturation** — operates in OKLab perceptual-lightness-preserving
   space (Ottosson 2020). At `saturation = 0` the result is OKLab-L-preserving
   gray, not Rec.709-Y-preserving. Typical difference < 0.05 in linear units.
-- **Adobe-semantic Vibrance** — switched from the prior GPUImage / Harbeth
+- **Adobe-semantic Vibrance** — switched from a GPUImage-family
   max-anchor saturation to OKLCh low-chroma boost + warm-skin-hue
-  protection. Already-saturated pixels get less boost than the prior curve;
-  warm skin (≈ 45°±25° on OKLCh hue) is protected.
+  protection. Already-saturated pixels get less boost than the prior
+  curve; warm skin (≈ 45°±25° on OKLCh hue) is protected.
 
 ### Removed (breaking)
 
