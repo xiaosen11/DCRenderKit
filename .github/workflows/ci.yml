@@ -11,9 +11,23 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # ═══════════════════════════════════════════════════════════════
+  # Build & test the SDK itself
+  # ═══════════════════════════════════════════════════════════════
+  # Two jobs:
+  #   - macOS:  swift build + swift test (drives the 300+ unit tests
+  #             + self-test suites; Metal device available on macos-15
+  #             runners so all shader kernels actually execute).
+  #   - iOS:    xcodebuild against an iPhone Simulator destination —
+  #             catches iOS-only code-path regressions (UIKit-guarded
+  #             sections, iOS 18 API availability, etc.). We don't
+  #             run `xcodebuild test` on the simulator because the
+  #             simulator has no real Metal GPU; the macOS job covers
+  #             all the Metal-heavy tests.
+  # ═══════════════════════════════════════════════════════════════
   build-and-test:
     name: Build & Test (${{ matrix.platform }})
-    runs-on: macos-14
+    runs-on: macos-15
     strategy:
       fail-fast: false
       matrix:
@@ -24,7 +38,11 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_15.4.app
+        # DCRenderKit targets Swift 6.0 / iOS 18.0+ / macOS 15.0+
+        # ⇒ Xcode 16+ is the minimum. macos-15 runners default to
+        # Xcode 16.x; the explicit select guards against
+        # GitHub-infra version drift.
+        run: sudo xcode-select -s /Applications/Xcode_16.app
 
       - name: Show environment
         run: |
@@ -47,25 +65,66 @@ jobs:
         run: |
           xcodebuild build \
             -scheme DCRenderKit \
-            -destination 'platform=iOS Simulator,name=iPhone 15,OS=latest' \
+            -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' \
             -skipPackagePluginValidation
 
-      - name: Test (iOS Simulator)
+      - name: Build Demo (iOS Simulator)
         if: matrix.platform == 'iOS'
         run: |
-          xcodebuild test \
-            -scheme DCRenderKit \
-            -destination 'platform=iOS Simulator,name=iPhone 15,OS=latest' \
-            -skipPackagePluginValidation
+          xcodebuild build \
+            -project Examples/DCRDemo/DCRDemo.xcodeproj \
+            -scheme DCRDemo \
+            -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' \
+            -configuration Debug
 
+  # ═══════════════════════════════════════════════════════════════
+  # Source hygiene
+  # ═══════════════════════════════════════════════════════════════
+  # Enforces two rules human reviewers can miss:
+  #
+  #   1. No unreferenced FIXME / TODO. The project convention is that
+  #      every FIXME / TODO must be annotated with either a plan-
+  #      section reference like `(§8.6 Tier 2)` or an issue number
+  #      like `(#42)`. That keeps the codebase's outstanding tech
+  #      debt explicitly linked to the place where the resolution
+  #      is tracked. A bare `// TODO: …` always indicates that the
+  #      author lost track of the follow-up.
+  #
+  #   2. No `.package(url:` anywhere in Package.swift. This is the
+  #      zero-external-dependency contract, also enforced at swift-
+  #      test time by PackageManifestTests.testPackageHasNoExternal-
+  #      Dependencies. The CI check is redundant with the test but
+  #      catches the violation without even needing to compile.
+  # ═══════════════════════════════════════════════════════════════
   lint:
     name: Lint
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-      - name: Check for TODOs
+
+      - name: No unreferenced FIXME / TODO / HACK
         run: |
-          if grep -rn "TODO\|FIXME\|HACK" Sources/ Tests/ 2>/dev/null; then
-            echo "::error::Found TODO/FIXME/HACK in source code. These must be resolved before merge."
+          # Find FIXME/TODO/HACK markers that lack a `(§…)` or `(#…)`
+          # reference inside the same line. grep -P available via
+          # Homebrew `grep` if system grep lacks it; on runner
+          # images `grep -E` is enough when combined with a second
+          # negated grep.
+          BAD=$(grep -rn -E "FIXME|TODO|HACK" Sources/ Tests/ 2>/dev/null \
+                | grep -v -E "\(§[0-9]|\(#[0-9]|// MARK:" || true)
+          if [ -n "$BAD" ]; then
+            echo "::error::Found unreferenced FIXME / TODO / HACK marker(s)."
+            echo "Every FIXME / TODO must link to a plan section (§X.Y)"
+            echo "or issue number (#NNN) so the follow-up is tracked."
+            echo ""
+            echo "$BAD"
+            exit 1
+          fi
+
+      - name: Zero external dependencies
+        run: |
+          if grep -E "\.package\(" Package.swift 2>/dev/null; then
+            echo "::error::Package.swift contains .package(...)."
+            echo "DCRenderKit is a zero-external-dependency SDK; see"
+            echo "CONTRIBUTING.md and PackageManifestTests."
             exit 1
           fi

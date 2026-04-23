@@ -1,0 +1,59 @@
+name: Feature request
+description: Suggest a new filter, new API, or improvement to an existing one.
+title: "[Feature] "
+labels: ["enhancement"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template for concrete feature proposals. For broad, open-ended discussion
+        (e.g. "should the SDK support tvOS?") prefer opening a
+        [Discussion](https://github.com/xiaosen11/DCRenderKit/discussions) instead.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / Motivation
+      description: |
+        What user-facing problem does this feature solve? Concrete scenarios are more
+        convincing than abstract appeals to generality.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: |
+        What should DCRenderKit add or change? For new filters, include the algorithmic
+        reference (paper / open-source implementation / industry report) following
+        the project's `Model form justification` convention — see
+        `.claude/rules/filter-development.md` and
+        `CONTRIBUTING.md` § "Filter contract requirements".
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: |
+        Adjacent approaches and why they are less suitable. For new filter algorithms,
+        which candidate families were considered and why the proposal wins.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - New filter
+        - New public API
+        - Behavioral change to existing filter (would require a breaking-change entry in CHANGELOG)
+        - Performance improvement
+        - Documentation / examples
+        - Build / CI / tooling
+    validations:
+      required: true

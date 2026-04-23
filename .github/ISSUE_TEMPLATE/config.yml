@@ -1,0 +1,9 @@
+blank_issues_enabled: false
+
+contact_links:
+  - name: General discussion
+    url: https://github.com/xiaosen11/DCRenderKit/discussions
+    about: |
+      Open-ended questions, design discussions, or "should DCRenderKit do X"
+      brainstorming. For concrete bugs / features, please use the issue
+      templates on the left.

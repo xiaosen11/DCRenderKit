@@ -1,0 +1,88 @@
+name: Bug report
+description: Report a reproducible bug in DCRenderKit.
+title: "[Bug] "
+labels: ["bug"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for filing a bug report — please provide the details below so we can
+        reproduce and investigate quickly.
+
+  - type: input
+    id: sdk-version
+    attributes:
+      label: DCRenderKit version
+      description: |
+        Commit SHA (`git rev-parse HEAD`) or tag (e.g. `v0.1.0`).
+      placeholder: "v0.1.0-dev"
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: OS / device
+      description: |
+        iOS version + device model, or macOS version + chip (Apple Silicon generation matters
+        for shader-precision questions).
+      placeholder: "iOS 18.1, iPhone 15 Pro (A17 Pro)"
+    validations:
+      required: true
+
+  - type: input
+    id: xcode
+    attributes:
+      label: Xcode / Swift version
+      placeholder: "Xcode 16.1, Swift 6.0"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug description
+      description: |
+        What is the observed behaviour and what was expected?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: |
+        Shortest possible code snippet (or a link to a sample project) that reproduces the
+        bug. Include the filter configuration, input source, and any expected output you
+        can screenshot / compare against.
+      render: swift
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual output
+      description: |
+        Screenshot, pixel-level diff, error log, stack trace, or saved baseline PNG if this
+        is a snapshot-regression failure.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Filter output (wrong pixel values)
+        - Filter crash (GPU exception / out-of-bounds read / NaN output)
+        - Pipeline API (Swift concurrency / builder semantics)
+        - Texture loading (CGImage / CVPixelBuffer / file formats)
+        - Shader compilation (PSO / library loading)
+        - Memory / texture pool (leak / pressure)
+        - Performance regression
+        - Documentation error
+        - Other
+    validations:
+      required: true
