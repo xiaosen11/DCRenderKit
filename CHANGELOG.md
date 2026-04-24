@@ -123,6 +123,20 @@ until `v1.0.0`. Each breaking change is flagged explicitly below.
 
 ### Internal / docs
 
+- **Architecture narrative document**
+  (`docs/architecture.md`, #58). Distils the "why" behind 13
+  cross-cutting architectural decisions from session handoffs into
+  a permanent artifact: rgba16Float intermediates, .linear vs
+  .perceptual mode toggle, typed error hierarchy, principled Tier 2
+  tone operators, Tier 3 contracts, canonical IEC sRGB with the
+  MIRROR pattern, cross-CB deferred texture enqueue, CB-fenced
+  uniform pool, dual-path shader library loading,
+  `PassInput.additional(_:)` routing, Fast Guided Filter shared
+  primitives, OKLCh for chroma, and Tier 4 snapshot regression.
+  Each entry carries choice / rejected / why / origin. Pairs with
+  `foundation-capability-baseline.md` (capabilities) and
+  `api-freeze-review.md` (surface commitments) as the three
+  architecture-truth documents.
 - **`@available(iOS 18.0, *)` sweep** (#47). Every top-level public
   declaration now carries the annotation — 64 types across Sources/
   (enums, structs, classes, protocols, typealiases). The SDK
