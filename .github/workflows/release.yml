@@ -1,0 +1,96 @@
+name: Release
+
+# Fires when a version tag is pushed to the repository.
+#
+# The workflow:
+#   1. Validates the tag format (`vX.Y.Z` or `vX.Y.Z-<suffix>`).
+#   2. Runs the full `swift test` suite on the tagged commit so we
+#      never publish a tag whose baseline is red.
+#   3. Extracts the matching section from CHANGELOG.md.
+#   4. Creates a GitHub Release with the extracted section as the
+#      body, marking pre-1.0 tags as prereleases.
+#
+# Tags are created by the maintainer (see docs/maintainer-sop.md
+# §2 for the step-by-step release-cut sequence). This workflow
+# only reacts to the push; it does not tag on its own.
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Publish GitHub Release
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.app
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          # Pre-1.0 or explicit -suffix tags are prereleases.
+          if [[ "$VERSION" == 0.* ]] || [[ "$VERSION" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Sanity — swift build + swift test at the tagged commit
+        run: |
+          swift build -Xswiftc -warnings-as-errors
+          swift test -Xswiftc -warnings-as-errors
+
+      - name: Extract CHANGELOG section
+        id: changelog
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          # Read the block under `## [VERSION]` up to but not
+          # including the next `## [` heading. If the tag's version
+          # section doesn't exist in CHANGELOG.md we fail loudly so
+          # the maintainer can add it and re-push the tag.
+          awk -v version="[$VERSION]" '
+            $0 ~ "^## " version {found=1; next}
+            found && /^## \[/ {exit}
+            found {print}
+          ' CHANGELOG.md > release-body.md
+
+          if [ ! -s release-body.md ]; then
+            echo "::error::No CHANGELOG entry for version $VERSION."
+            echo "CHANGELOG.md must contain a '## [$VERSION] - YYYY-MM-DD' heading."
+            exit 1
+          fi
+
+          # Prepend a brief header so the release body is self-contained.
+          {
+            echo "# DCRenderKit v$VERSION"
+            echo ""
+            cat release-body.md
+          } > release-body-final.md
+          mv release-body-final.md release-body.md
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          PRERELEASE_FLAG=""
+          if [ "${{ steps.version.outputs.prerelease }}" = "true" ]; then
+            PRERELEASE_FLAG="--prerelease"
+          fi
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes-file release-body.md \
+            $PRERELEASE_FLAG

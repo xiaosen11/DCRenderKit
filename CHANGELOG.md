@@ -123,6 +123,16 @@ until `v1.0.0`. Each breaking change is flagged explicitly below.
 
 ### Internal / docs
 
+- **Release-automation workflow** (`.github/workflows/release.yml`,
+  #62). Triggers on `v*` tags pushed to the repository; runs a
+  `swift build -Xswiftc -warnings-as-errors` + `swift test`
+  verification pass on the tagged commit, extracts the matching
+  `## [X.Y.Z]` section from `CHANGELOG.md`, and publishes a GitHub
+  Release with the section as the body. Pre-1.0 or suffixed tags
+  (`v0.*`, `v1.0.0-rc.1`) are automatically marked as prereleases.
+  Tags themselves are created by the maintainer per
+  `docs/maintainer-sop.md` §2 — the workflow only reacts to the
+  push.
 - **DocC catalog + GitHub Pages deploy workflow** (#57 / #61).
   `Sources/DCRenderKit/DCRenderKit.docc/` contains three articles:
   `DCRenderKit.md` (landing page with full topic taxonomy),
