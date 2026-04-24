@@ -99,16 +99,13 @@ final class Phase5PipelineIntegrationTests: XCTestCase {
         XCTAssertLessThanOrEqual(px.r, 1.0001)
     }
 
-    /// A three-filter pixel-local chain run through Phase-5 step 5.1
-    /// (no optimiser-driven fusion yet — each filter dispatches
-    /// independently) compiles three distinct uber kernels, one per
-    /// body function.
-    ///
-    /// Cross-filter fusion is introduced in step 5.3, at which point
-    /// this test's expected delta will drop to 1 (the cluster uber
-    /// kernel) and this file's assertion will be updated alongside
-    /// that change.
-    func testThreeFilterChainCompilesThreeUberKernels() throws {
+    /// With `.full` optimisation (the default), a three-filter
+    /// pixel-local chain of matching signature shape runs through
+    /// `VerticalFusion` and collapses into a single
+    /// `.fusedPixelLocalCluster` node — therefore a single uber
+    /// kernel at runtime. This is the flagship perf claim: "no matter
+    /// how many filters you stack, the cost scales like one filter."
+    func testThreeFilterChainFusesIntoOneClusterUnderFull() throws {
         let source = try makeSolidTexture(width: 16, height: 16, red: 0.5)
         let pipeline = makePipeline(
             input: .texture(source),
@@ -116,7 +113,8 @@ final class Phase5PipelineIntegrationTests: XCTestCase {
                 .single(ExposureFilter(exposure: 10)),
                 .single(ContrastFilter(contrast: 10, lumaMean: 0.5)),
                 .single(SaturationFilter(saturation: 1.2)),
-            ]
+            ],
+            optimization: .full
         )
 
         let before = UberKernelCache.shared.cachedPipelineCount
@@ -124,12 +122,38 @@ final class Phase5PipelineIntegrationTests: XCTestCase {
         let after = UberKernelCache.shared.cachedPipelineCount
 
         XCTAssertEqual(
-            after - before, 3,
-            "Expected three distinct uber kernels (Exposure / Contrast / Saturation) after a three-filter chain; got Δ=\(after - before)."
+            after - before, 1,
+            "VerticalFusion should collapse the three pixel-local filters into one cluster uber kernel; got Δ=\(after - before)."
         )
 
         let px = try readFirstPixel(output)
         XCTAssertTrue(px.r.isFinite && px.g.isFinite && px.b.isFinite)
+    }
+
+    /// With `.none` the optimiser is bypassed and each filter
+    /// dispatches through its own uber kernel. Same chain, same
+    /// output (modulo Float16 rounding), but three PSOs land in the
+    /// cache instead of one.
+    func testThreeFilterChainStaysSeparateUnderNone() throws {
+        let source = try makeSolidTexture(width: 16, height: 16, red: 0.5)
+        let pipeline = makePipeline(
+            input: .texture(source),
+            steps: [
+                .single(ExposureFilter(exposure: 10)),
+                .single(ContrastFilter(contrast: 10, lumaMean: 0.5)),
+                .single(SaturationFilter(saturation: 1.2)),
+            ],
+            optimization: .none
+        )
+
+        let before = UberKernelCache.shared.cachedPipelineCount
+        _ = try pipeline.outputSync()
+        let after = UberKernelCache.shared.cachedPipelineCount
+
+        XCTAssertEqual(
+            after - before, 3,
+            "With optimisation disabled, the three filters must each compile their own uber kernel; got Δ=\(after - before)."
+        )
     }
 
     /// A filter whose `fusionBody` is `.unsupported` — modelled here
@@ -179,37 +203,113 @@ final class Phase5PipelineIntegrationTests: XCTestCase {
         XCTAssertEqual(pipeline.optimization, .full)
     }
 
-    /// `.none` and `.full` produce bit-identical output for a chain
-    /// whose graph the optimiser has nothing to merge (step 5.3
-    /// flips this: `.full` will collapse a 3-filter pixel-local
-    /// chain into one cluster uber kernel while `.none` keeps three
-    /// independent dispatches).
-    func testOptimizationNoneProducesSameOutputAsFullToday() throws {
+    /// Fusion must preserve the per-pixel semantics of the chain.
+    /// A three-filter chain under `.full` (collapsed to one cluster)
+    /// and the same chain under `.none` (three independent
+    /// dispatches feeding through rgba16Float intermediates) should
+    /// produce bit-close output. The margin covers the Float16
+    /// rounding that the independent-dispatch path incurs at each
+    /// intermediate texture write, which the fused cluster avoids
+    /// by keeping values in shader-local registers.
+    func testFullAndNoneProduceBitCloseOutput() throws {
         let source = try makeSolidTexture(width: 8, height: 8, red: 0.4)
+        let steps: [AnyFilter] = [
+            .single(ExposureFilter(exposure: 15)),
+            .single(ContrastFilter(contrast: 20, lumaMean: 0.5)),
+            .single(SaturationFilter(saturation: 1.1)),
+        ]
 
-        let fullPipeline = makePipeline(
-            input: .texture(source),
-            steps: [.single(ExposureFilter(exposure: 15))],
-            optimization: .full
-        )
-        let nonePipeline = makePipeline(
-            input: .texture(source),
-            steps: [.single(ExposureFilter(exposure: 15))],
-            optimization: .none
-        )
-
-        let fullOut = try fullPipeline.outputSync()
-        let noneOut = try nonePipeline.outputSync()
+        let fullOut = try makePipeline(
+            input: .texture(source), steps: steps, optimization: .full
+        ).outputSync()
+        let noneOut = try makePipeline(
+            input: .texture(source), steps: steps, optimization: .none
+        ).outputSync()
 
         let fullPx = try readFirstPixel(fullOut)
         let nonePx = try readFirstPixel(noneOut)
 
-        // Both paths go through the same single-filter codegen today.
-        // Tolerance covers Float16 rounding across the two separate
-        // command buffers.
-        XCTAssertEqual(fullPx.r, nonePx.r, accuracy: 0.002)
-        XCTAssertEqual(fullPx.g, nonePx.g, accuracy: 0.002)
-        XCTAssertEqual(fullPx.b, nonePx.b, accuracy: 0.002)
+        // Tolerance: 3 filters × Float16 round on the intermediate
+        // write ≈ 0.003 channel, padded to 0.005 for safety.
+        XCTAssertEqual(fullPx.r, nonePx.r, accuracy: 0.005)
+        XCTAssertEqual(fullPx.g, nonePx.g, accuracy: 0.005)
+        XCTAssertEqual(fullPx.b, nonePx.b, accuracy: 0.005)
+    }
+
+    /// A chain containing a multi-pass filter must fall back to the
+    /// per-step loop because `MultiPassExecutor` owns the pass graph
+    /// of `HighlightShadowFilter` / `ClarityFilter` / `SoftGlowFilter`
+    /// / `PortraitBlurFilter`. The compiler path rejects graphs
+    /// containing `.nativeCompute` nodes (emitted for each pass of a
+    /// multi-pass filter) so the legacy dispatch handles the
+    /// multi-pass filter while the single-pass filters adjacent to
+    /// it still route through the codegen path — their step loop
+    /// iterations individually invoke `ComputeBackend` via the
+    /// `dispatchThroughComputeBackend` hook.
+    func testMixedChainFallsBackToPerStepDispatch() throws {
+        let source = try makeSolidTexture(width: 32, height: 32, red: 0.5)
+        let pipeline = makePipeline(
+            input: .texture(source),
+            steps: [
+                .single(ExposureFilter(exposure: 10)),
+                .multi(HighlightShadowFilter(highlights: 20)),
+                .single(SaturationFilter(saturation: 1.1)),
+            ]
+        )
+
+        let before = UberKernelCache.shared.cachedPipelineCount
+        let output = try pipeline.outputSync()
+        let after = UberKernelCache.shared.cachedPipelineCount
+
+        // Exposure + Saturation each compile their own uber kernel
+        // via the per-step codegen path (step 5.1). Two uber kernels
+        // total; HighlightShadow dispatches its passes through
+        // `MultiPassExecutor` with zero uber-kernel compilation.
+        XCTAssertEqual(
+            after - before, 2,
+            "Mixed chain should compile one uber kernel per adjacent single-pass filter and leave the multi-pass filter on the legacy path; got Δ=\(after - before)."
+        )
+
+        let px = try readFirstPixel(output)
+        XCTAssertTrue(px.r.isFinite && px.g.isFinite && px.b.isFinite)
+    }
+
+    /// LUT3D is a pixel-local filter but its signature shape is
+    /// `.pixelLocalWithLUT3D`, not `.pixelLocalOnly`. VerticalFusion
+    /// only merges members of matching signature shape (Phase 3
+    /// step 3c lock), so a chain `[Exposure, LUT3D, Saturation]`
+    /// stays as three independent nodes — not one cluster — under
+    /// `.full`. All three land in the compiler path (eligible
+    /// kinds), just as separate dispatches.
+    func testLUT3DBreaksVerticalFusion() throws {
+        // Minimal identity 2³ LUT cube payload.
+        let identity2Cube: [Float] = [
+            0, 0, 0, 1,  1, 0, 0, 1,
+            0, 1, 0, 1,  1, 1, 0, 1,
+            0, 0, 1, 1,  1, 0, 1, 1,
+            0, 1, 1, 1,  1, 1, 1, 1,
+        ]
+        let cubeData = identity2Cube.withUnsafeBufferPointer { Data(buffer: $0) }
+
+        let source = try makeSolidTexture(width: 16, height: 16, red: 0.5)
+        let pipeline = makePipeline(
+            input: .texture(source),
+            steps: [
+                .single(ExposureFilter(exposure: 10)),
+                .single(try LUT3DFilter(cubeData: cubeData, dimension: 2, intensity: 1.0)),
+                .single(SaturationFilter(saturation: 1.1)),
+            ],
+            optimization: .full
+        )
+
+        let before = UberKernelCache.shared.cachedPipelineCount
+        _ = try pipeline.outputSync()
+        let after = UberKernelCache.shared.cachedPipelineCount
+
+        XCTAssertEqual(
+            after - before, 3,
+            "LUT3D's distinct signature shape should stop VerticalFusion — expected three uber kernels in the chain, got Δ=\(after - before)."
+        )
     }
 
     // MARK: - Fixtures

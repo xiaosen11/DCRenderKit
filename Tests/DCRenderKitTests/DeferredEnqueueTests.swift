@@ -61,11 +61,19 @@ final class DeferredEnqueueTests: XCTestCase {
         // Isolated pool so its state is observable.
         let pool = TexturePool(device: device, maxBytes: 64 * 1024 * 1024)
 
+        // Three `.neighborRead` filters defeat every Phase-5 optimiser
+        // pass: VerticalFusion only collapses `.pixelLocal` runs,
+        // KernelInlining requires a `.pixelLocal` predecessor, and
+        // TailSink requires a `.pixelLocal` consumer. The resulting
+        // 3-node graph allocates 3 buckets (2 intermediates + 1 final)
+        // so the pool's post-completion flow mirrors the pre-compiler
+        // behaviour this deferral contract was written against.
+        // Different `amount` per filter keeps CSE inert too.
         let source = try makeSource(width: 32, height: 32)
         let pipeline = makePipeline(pool: pool, source: source, steps: [
-            .single(ExposureFilter(exposure: 30)),
-            .single(ContrastFilter(contrast: 20, lumaMean: 0.5)),
-            .single(BlacksFilter(blacks: 20)),
+            .single(SharpenFilter(amount: 30, step: 1)),
+            .single(SharpenFilter(amount: 10, step: 1)),
+            .single(SharpenFilter(amount: 20, step: 1)),
         ])
 
         XCTAssertEqual(pool.cachedTextureCount, 0, "Pool starts empty")
@@ -86,9 +94,17 @@ final class DeferredEnqueueTests: XCTestCase {
         cb.commit()
         cb.waitUntilCompleted()
 
+        // Post Phase-5: the compiler path's
+        // LifetimeAwareTextureAllocator ping-pong-aliases sibling
+        // intermediates into the fewest physical textures (interval-
+        // graph optimal), so a 3-node linear chain now reuses a single
+        // intermediate bucket plus the final-output bucket. The
+        // deferral contract still holds — we just expect ≥1
+        // intermediate to land in the pool post-completion, not ≥2
+        // as in the pre-aliasing era.
         XCTAssertTrue(
-            waitForPoolCount(pool, atLeast: 2, timeout: 1.0),
-            "Pool must receive ≥2 intermediate textures after CB completes; got \(pool.cachedTextureCount)"
+            waitForPoolCount(pool, atLeast: 1, timeout: 1.0),
+            "Pool must receive ≥1 intermediate texture after CB completes; got \(pool.cachedTextureCount)"
         )
     }
 
@@ -138,15 +154,22 @@ final class DeferredEnqueueTests: XCTestCase {
         let pool = TexturePool(device: device, maxBytes: 256 * 1024 * 1024)
         let queue = try XCTUnwrap(device.metalDevice.makeCommandQueue())
 
+        // Two `.neighborRead` filters keep the Phase-5 compiler's
+        // KernelInlining and TailSink passes inert — there is no
+        // `.pixelLocal` to inline or sink. VerticalFusion is also
+        // inert because it only collapses `.pixelLocal` runs. The
+        // resulting 2-node graph produces one intermediate per
+        // pipeline, so two concurrent pipelines refill the pool with
+        // the ≥2 intermediates the assertion below requires.
         let sourceA = try makeSource(width: 32, height: 32)
         let sourceB = try makeSource(width: 32, height: 32)
         let pipelineA = makePipeline(pool: pool, source: sourceA, steps: [
-            .single(ExposureFilter(exposure: 30)),
-            .single(ContrastFilter(contrast: 20, lumaMean: 0.5)),
+            .single(SharpenFilter(amount: 20, step: 1)),
+            .single(SharpenFilter(amount: 15, step: 1)),
         ])
         let pipelineB = makePipeline(pool: pool, source: sourceB, steps: [
-            .single(ExposureFilter(exposure: -30)),
-            .single(ContrastFilter(contrast: -20, lumaMean: 0.5)),
+            .single(SharpenFilter(amount: 30, step: 1)),
+            .single(SharpenFilter(amount: 10, step: 1)),
         ])
 
         // Encode pipeline A into cbA, don't commit yet.

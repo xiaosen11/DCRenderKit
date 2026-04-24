@@ -250,35 +250,11 @@ public final class Pipeline: @unchecked Sendable {
             return sourceTexture
         }
 
-        var currentInput = sourceTexture
-        var finalOutput: MTLTexture?
-        var pendingEnqueue: [MTLTexture] = []
-
-        for (index, step) in optimizedSteps.enumerated() {
-            let isLastStep = (index == optimizedSteps.count - 1)
-            let output = try executeStep(
-                step,
-                sourceTexture: currentInput,
-                commandBuffer: commandBuffer
-            )
-
-            if currentInput !== sourceTexture, currentInput !== output {
-                pendingEnqueue.append(currentInput)
-            }
-
-            currentInput = output
-            if isLastStep {
-                finalOutput = output
-            }
-        }
-
-        scheduleDeferredEnqueue(
-            textures: pendingEnqueue,
-            pool: texturePool,
+        return try executeChain(
+            steps: optimizedSteps,
+            source: sourceTexture,
             commandBuffer: commandBuffer
         )
-
-        return finalOutput ?? sourceTexture
     }
 
     /// Encode the filter chain into `commandBuffer`, writing the final
@@ -337,7 +313,9 @@ public final class Pipeline: @unchecked Sendable {
         // 1. Resolve source
         let sourceTexture = try source.resolve(using: textureLoader)
 
-        // 2. Optimize filter chain
+        // 2. Optimize filter chain (legacy FilterGraphOptimizer — currently
+        //    passthrough; the compiler path in `executeChain` runs the
+        //    Phase-2 optimiser on its own lowered IR).
         let optimizedSteps = optimizer.optimize(steps)
 
         // 3. Allocate command buffer from the pool (also enforces in-flight cap)
@@ -348,13 +326,57 @@ public final class Pipeline: @unchecked Sendable {
             return (commandBuffer, sourceTexture)
         }
 
-        // 5. Execute steps, chaining outputs as inputs.
-        var currentInput = sourceTexture
+        let finalTexture = try executeChain(
+            steps: optimizedSteps,
+            source: sourceTexture,
+            commandBuffer: commandBuffer
+        )
+        return (commandBuffer, finalTexture)
+    }
+
+    // MARK: - Internal: chain execution (compiler path + per-step fallback)
+
+    /// Execute `steps` in the given command buffer, preferring the
+    /// graph-level pipeline-compiler path (Phase 5 step 5.3) when the
+    /// lowered chain contains only `ComputeBackend`-dispatchable nodes.
+    /// Falls back to the per-step loop for chains with multi-pass
+    /// filters (whose passes lower to `.nativeCompute` nodes the
+    /// backend does not generate code for) or with render / blit / MPS
+    /// modifiers that `Lowering` cannot translate.
+    private func executeChain(
+        steps: [AnyFilter],
+        source: MTLTexture,
+        commandBuffer: MTLCommandBuffer
+    ) throws -> MTLTexture {
+        if let finalTexture = try tryCompilerPath(
+            steps: steps,
+            source: source,
+            commandBuffer: commandBuffer
+        ) {
+            return finalTexture
+        }
+        return try executePerStepFallback(
+            steps: steps,
+            source: source,
+            commandBuffer: commandBuffer
+        )
+    }
+
+    /// Per-step dispatch. The original Phase-1 implementation of the
+    /// chain loop; still used for chains the compiler path can't cover
+    /// today (multi-pass filters, non-compute single-pass modifiers,
+    /// filters without a `fusionBody`).
+    private func executePerStepFallback(
+        steps: [AnyFilter],
+        source: MTLTexture,
+        commandBuffer: MTLCommandBuffer
+    ) throws -> MTLTexture {
+        var currentInput = source
         var finalOutput: MTLTexture?
         var pendingEnqueue: [MTLTexture] = []
 
-        for (index, step) in optimizedSteps.enumerated() {
-            let isLastStep = (index == optimizedSteps.count - 1)
+        for (index, step) in steps.enumerated() {
+            let isLastStep = (index == steps.count - 1)
             let output = try executeStep(
                 step,
                 sourceTexture: currentInput,
@@ -364,7 +386,7 @@ public final class Pipeline: @unchecked Sendable {
             // Intermediate inputs can be returned to the pool once the CB
             // has finished executing on the GPU, but NOT earlier — see
             // `scheduleDeferredEnqueue` for the rationale.
-            if currentInput !== sourceTexture, currentInput !== output {
+            if currentInput !== source, currentInput !== output {
                 pendingEnqueue.append(currentInput)
             }
 
@@ -380,7 +402,184 @@ public final class Pipeline: @unchecked Sendable {
             commandBuffer: commandBuffer
         )
 
-        return (commandBuffer, finalOutput ?? sourceTexture)
+        return finalOutput ?? source
+    }
+
+    /// Attempt to dispatch the entire chain through the pipeline
+    /// compiler: `Lowering` → `Optimizer` (skipped in `.none`) →
+    /// `LifetimeAwareTextureAllocator` → one `ComputeBackend.execute`
+    /// call per resulting node. Returns `nil` and leaves no partial
+    /// work in the command buffer when any lowered node is not a
+    /// backend-dispatchable shape; the caller then falls back to the
+    /// per-step loop.
+    ///
+    /// Eligibility rules for the compiler path:
+    ///
+    /// 1. `Lowering.lower(_:source:)` must succeed. It returns `nil`
+    ///    for chains containing render / blit / MPS single-pass
+    ///    filters or multi-pass filters whose passes use a modifier
+    ///    other than `.compute`.
+    /// 2. After `Optimizer.optimize` (when `optimization == .full`)
+    ///    every node must be one of `.pixelLocal`, `.neighborRead`,
+    ///    or `.fusedPixelLocalCluster`. `.nativeCompute` nodes —
+    ///    emitted today for each `Pass` of a multi-pass filter —
+    ///    drop the chain back to the per-step loop so
+    ///    `MultiPassExecutor` handles the filter, preserving the
+    ///    multi-pass contract.
+    ///
+    /// Cross-filter fusion (pixel-local cluster) lands through
+    /// `VerticalFusion` inside `Optimizer.optimize`, so a 3-filter
+    /// tone chain (`[Exposure, Contrast, Saturation]`) collapses to
+    /// a single cluster node — and therefore a single uber-kernel
+    /// dispatch — under `.full`.
+    private func tryCompilerPath(
+        steps: [AnyFilter],
+        source: MTLTexture,
+        commandBuffer: MTLCommandBuffer
+    ) throws -> MTLTexture? {
+        let sourceInfo = TextureInfo(
+            width: source.width,
+            height: source.height,
+            pixelFormat: source.pixelFormat
+        )
+        guard let lowered = Lowering.lower(steps, source: sourceInfo) else {
+            return nil
+        }
+
+        let graph: PipelineGraph
+        switch optimization {
+        case .full:
+            graph = Optimizer.optimize(lowered)
+        case .none:
+            graph = lowered
+        }
+
+        for node in graph.nodes {
+            switch node.kind {
+            case .pixelLocal, .neighborRead, .fusedPixelLocalCluster:
+                continue
+            default:
+                return nil
+            }
+        }
+
+        let destInfo = TextureInfo(
+            width: source.width,
+            height: source.height,
+            pixelFormat: intermediatePixelFormat
+        )
+        let allocator = LifetimeAwareTextureAllocator(pool: texturePool)
+        let allocation = try allocator.allocate(
+            graph: graph,
+            sourceInfo: destInfo
+        )
+
+        let globalAdditional = collectGlobalAdditionalInputs(from: steps)
+
+        for node in graph.nodes {
+            try dispatchCompilerNode(
+                node: node,
+                source: source,
+                allocation: allocation,
+                globalAdditional: globalAdditional,
+                commandBuffer: commandBuffer
+            )
+        }
+
+        allocator.scheduleRelease(allocation, commandBuffer: commandBuffer)
+
+        guard let finalTexture = allocation.mapping[graph.finalID] else {
+            throw PipelineError.filter(.invalidPassGraph(
+                filterName: "Pipeline",
+                reason: "allocator produced no texture for final node \(graph.finalID)"
+            ))
+        }
+        return finalTexture
+    }
+
+    /// Dispatch a single compiler-path node via `ComputeBackend`.
+    /// Resolves the node's primary texture input through the
+    /// allocator's NodeID→MTLTexture map (for `.node(_)` refs), the
+    /// pipeline's source (for `.source`), or the graph-global
+    /// additional-inputs array (for `.additional(_)`).
+    private func dispatchCompilerNode(
+        node: Node,
+        source: MTLTexture,
+        allocation: LifetimeAwareTextureAllocator.Allocation,
+        globalAdditional: [MTLTexture],
+        commandBuffer: MTLCommandBuffer
+    ) throws {
+        let primaryRef = node.inputs.first ?? .source
+        let primaryInput = try resolveCompilerInput(
+            ref: primaryRef,
+            source: source,
+            allocation: allocation,
+            globalAdditional: globalAdditional,
+            context: node.debugLabel
+        )
+
+        guard let destination = allocation.mapping[node.id] else {
+            throw PipelineError.filter(.invalidPassGraph(
+                filterName: node.debugLabel,
+                reason: "allocator has no destination texture for node \(node.id)"
+            ))
+        }
+
+        try ComputeBackend.execute(
+            node: node,
+            source: primaryInput,
+            destination: destination,
+            additionalInputs: globalAdditional,
+            commandBuffer: commandBuffer,
+            uniformPool: uniformPool
+        )
+    }
+
+    /// Translate a `NodeRef` carried inside a compiler-path node into
+    /// a concrete `MTLTexture`.
+    private func resolveCompilerInput(
+        ref: NodeRef,
+        source: MTLTexture,
+        allocation: LifetimeAwareTextureAllocator.Allocation,
+        globalAdditional: [MTLTexture],
+        context: String
+    ) throws -> MTLTexture {
+        switch ref {
+        case .source:
+            return source
+        case .node(let id):
+            guard let tex = allocation.mapping[id] else {
+                throw PipelineError.filter(.invalidPassGraph(
+                    filterName: context,
+                    reason: "allocator has no texture for node \(id)"
+                ))
+            }
+            return tex
+        case .additional(let i):
+            guard i >= 0, i < globalAdditional.count else {
+                throw PipelineError.filter(.invalidPassGraph(
+                    filterName: context,
+                    reason: ".additional(\(i)) out of range of \(globalAdditional.count) graph-global inputs"
+                ))
+            }
+            return globalAdditional[i]
+        }
+    }
+
+    /// Flatten every step's `additionalInputs` array into a single
+    /// graph-global list matching the indices `Lowering` assigns to
+    /// `.additional(_)` references.
+    private func collectGlobalAdditionalInputs(
+        from steps: [AnyFilter]
+    ) -> [MTLTexture] {
+        var result: [MTLTexture] = []
+        for step in steps {
+            switch step {
+            case .single(let f): result.append(contentsOf: f.additionalInputs)
+            case .multi(let f):  result.append(contentsOf: f.additionalInputs)
+            }
+        }
+        return result
     }
 
     // MARK: - Internal: step dispatch
