@@ -348,6 +348,11 @@ Commit: `173ff17`。`kDCRPortraitBlurCoef = 0.030` 旁已写 doc comment: 真机
   - #70 `docs/maintainer-sop.md` + `SECURITY.md`
   - #69 `docs/discussions-guide.md`
   - `docs/foundation-capability-baseline.md`（约 15 条基座能力 checklist，用于自证"基座 ≥ 任何继承源"）
+- **Test 覆盖 by-design gap（Session C 末 audit 发现）**:
+  - **PortraitBlur 无 contract**（Session C 决策 "Tier 4 用 snapshot 代契约"，by design，不是缺漏）
+  - **CCD 单测偏薄**（仅 2 个 identity+clamping，比 FilmGrain/PortraitBlur 都少）→ 新 task #93，低优不 block
+  - **PipelineError 无专门 error case test 文件** → 新 task #94，低优不 block；当前 error path 在各 dispatcher/loader test 里 implicit 覆盖
+  - **#37/#38/#39 snapshot baseline 未 freeze** — framework ready，first-run `XCTSkip`，需真机 approve 后 PNG 入 repo
 
 ---
 
@@ -594,6 +599,25 @@ foundation-capability-baseline)，再继续 Tier 6 收尾。
 | Parity sweep Contrast 43 个 fail | commit `6256d9a` | 两个 color-space mode 传同一 `lumaMean=0.5` 但 pipeline-space 不同，必须各自 `gammaToLinear(0.5)` 转换 |
 | `PassGraphVisualizer` exhaustive switch 漏 case | commit `173ff17` 修 `PassInput.additional(Int)` 新 case | 新 enum case 必须遍历所有 switch；Swift 6 默认开 exhaustive |
 | `SourceKit IDE 错报` 误导 | (本 session 反复出现) | SourceKit 诊断 "Cannot find type X" 是 workspace 索引错（打开的是 wayshot repo 不是 DCR）；**以 swift build 为权威**，忽略 SourceKit |
+
+#### 8.4.C.2.a — Session C 末 Test Coverage Audit 结论（2026-04-24）
+
+Session C 最终 user 问"单测和 smoke 全覆盖吗"触发的系统 audit，结论：
+
+| 维度 | 状态 |
+|---|---|
+| **16 个 filter 源文件** | 16/16 有单测（Tone/ColorGrading/Effects/LUT/Blend/Adjustment 分类全覆盖） |
+| **Tier 3 contract test** | 5/5（Vibrance 7 / Saturation 7 / HS 8 / Clarity 7 / SoftGlow 6 = 35 条款） |
+| **SmokeTests** | 11 个（realistic edit chain / stacked multi-pass / mask-driven blur+sharpen / async=sync 等价 / pool release / empty+zero identity / fuse group 声明） |
+| **Infra 覆盖** | Pipeline 14 / Infrastructure 20 / ResourceManagement 27 / MultiPassAndLoader 20 + 各 Dispatcher + Session C 新增 basic infra self-test（Snapshot 6 / Benchmark 4 / ParitySweep 5 / PackageManifest 1 / SRGBGamma 12 / OKLab）|
+
+**by-design gap**（不是遗漏）：
+- PortraitBlur / CCD Tier 4 **用 snapshot 代契约**，不写 contract。是 Session C 明确决策
+- Tier 4 snapshot baseline #37/#38/#39 first-run `XCTSkip`，需真机 approve 后 PNG 入 repo
+
+**可补强 gap**（低优，不 block release，已登记 TODO.md）:
+- **#93**：CCD 单测偏薄（仅 2 个 identity + clamping），候选补 mosaic pattern orientation / vignette 半径比例 / step ordering 不变性
+- **#94**：`PipelineErrorTests.swift` 专门 error case file（当前 error path 散布 implicit 覆盖）
 
 #### 8.4.C.3 — 行为 / 交互错误
 

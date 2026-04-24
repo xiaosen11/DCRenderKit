@@ -53,6 +53,13 @@ Session C：#74 typed Error enum hierarchy · #73 Package.swift 空依赖守护 
 | #71 | 零 TODO/FIXME 审（全部 resolve 或 link issue） |
 | #72 | 零 warning 审（`swift build -warnings-as-errors`） |
 
+### Test 覆盖补强（Session C 末 test coverage audit 发现，2 条，低优，不 block release）
+
+| ID | 任务 | 背景 |
+|---|---|---|
+| #93 | CCD 结构性单测补 3-5 个（当前仅 2 个 identity + clamping） | Tier 4 by design 用 snapshot 代契约，但 CCD 单测比 FilmGrain/PortraitBlur 都薄。候选方向：mosaic pattern orientation / vignette 半径 × 分辨率比例 / filter step ordering 不变性 |
+| #94 | `PipelineErrorTests.swift` 专门 error case 覆盖 | 当前 `PipelineError` typed enum 的 error path test 是 implicit 散布在各 dispatcher/loader/filter test 里，没有专门 error file 系统枚举所有 case |
+
 ### 真机阻塞项（3 条）— 需要你在 iPhone 上真机评估后我才能关
 
 | ID | 任务 |
