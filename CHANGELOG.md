@@ -114,6 +114,16 @@ until `v1.0.0`. Each breaking change is flagged explicitly below.
 
 ### Internal / docs
 
+- **Zero unreferenced FIXME / TODO / HACK marker audit**. The CI
+  lint rule that every marker carry a `(§…)` or `(#…)` reference
+  catches contributor misses; this pass closed two false positives
+  in the existing code (a `FIXME` keyword quoted as prose inside
+  `CCDFilter.metal`'s comment, and a `TODO.md` filename reference
+  inside `PackageManifestTests`'s XCTAssert message). The 19
+  surviving `FIXME` markers — all tagged
+  `(§8.6 Tier 2 [archived])` or `(§8.4 Audit.* [archived])` —
+  denote empirical magic-number constants accepted as tier-2 tech
+  debt pending the Tier 4 snapshot-freeze step (TODO #37/#38/#39).
 - **Zero-warning audit across SDK + test targets**, locked as a CI
   gate via `-Xswiftc -warnings-as-errors` on both `swift build` and
   `swift test` steps. Fixed one Swift-6 Sendable-capture warning in

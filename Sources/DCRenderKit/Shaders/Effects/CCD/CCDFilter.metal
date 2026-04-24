@@ -151,7 +151,7 @@ kernel void DCRCCDFilter(
         half4 top   = dcr_ccdSafeRead(input, pos + int2( 0, -sharpStep));
         half4 bot   = dcr_ccdSafeRead(input, pos + int2( 0,  sharpStep));
         // FIXME(§8.6 Tier 2): × 0.96 = 60% of SharpenFilter's × 1.6 product
-        // compression (see SharpenFilter.swift FIXME). Derivation chain:
+        // compression (see SharpenFilter.swift's ×1.6 block). Derivation chain:
         // sharpAmount slider → SharpenFilter would apply × 1.6 → CCD uses
         // 60% of that = × 0.96. The 60% ratio itself is empirical
         // (hand-tuned balance of sharp vs CA vs noise). Transitively

@@ -46,7 +46,7 @@ final class PackageManifestTests: XCTestCase {
             DCRenderKit must keep `Package.swift.dependencies` empty. \
             The manifest contains a `.package(` invocation — an external \
             dependency was added. This breaks the SDK's zero-dependency \
-            contract (see TODO.md #73 + CLAUDE.md architecture rules). \
+            contract (#73; the repo root's TODO.md and CLAUDE.md cover the rules). \
             Either remove the dependency, or explicitly amend this test \
             and the zero-dependency claim in the docs before merging.
             """
