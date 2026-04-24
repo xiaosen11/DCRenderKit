@@ -97,11 +97,16 @@ enum LegacyKernelFixture {
     private static let registrationQueue = DispatchQueue(
         label: "com.dcrenderkit.tests.legacy-kernel-fixture"
     )
-    nonisolated(unsafe) private static var registered = false
 
     /// Register every legacy kernel library with
-    /// `ShaderLibrary.shared`. Safe to call from any thread; runs
-    /// its work exactly once across the life of the test-process.
+    /// `ShaderLibrary.shared`. Safe to call from any thread. The
+    /// helper is **dynamically** idempotent: it checks whether the
+    /// shared `ShaderLibrary` currently resolves the first legacy
+    /// kernel name, and only re-registers if it doesn't. This
+    /// handles the test-ordering case where another test's
+    /// `setUp` calls `ShaderLibrary.shared.unregisterAll()` between
+    /// legacy-using runs — each call re-registers if needed rather
+    /// than assuming a process-wide one-shot.
     ///
     /// - Parameter device: Metal device to compile against. Defaults
     ///   to the system default. Tests running on a device-less CI
@@ -112,7 +117,12 @@ enum LegacyKernelFixture {
         device: MTLDevice? = MTLCreateSystemDefaultDevice()
     ) throws {
         try registrationQueue.sync {
-            guard !registered else { return }
+            // Probe: if the first legacy kernel resolves, all of
+            // them do (they register as a single batch); skip.
+            if ShaderLibrary.shared.contains(functionNamed: legacyKernelNames[0]) {
+                return
+            }
+
             guard let device else {
                 throw Error.metalDeviceUnavailable
             }
@@ -141,8 +151,6 @@ enum LegacyKernelFixture {
 
                 ShaderLibrary.shared.register(library)
             }
-
-            registered = true
         }
     }
 }
