@@ -56,11 +56,27 @@ public struct PipelineBenchmark: Sendable {
 
     /// Result of a timing run. All times are in milliseconds.
     public struct Result: Sendable {
+        /// Number of measurement iterations that actually ran
+        /// (warmup iterations are not counted).
         public let iterationsMeasured: Int
+        /// Median GPU wall-clock time across the measured iterations.
+        /// Robust to outliers (unlike the mean) and is the number to
+        /// quote when comparing two runs.
         public let medianMs: Double
+        /// 95th-percentile GPU wall-clock time. Captures tail latency
+        /// that the median hides; relevant for real-time pipelines
+        /// where the *slowest* frame determines the frame budget.
         public let p95Ms: Double
+        /// Minimum GPU wall-clock time observed. Useful as a lower
+        /// bound on achievable throughput on the measurement host.
         public let minMs: Double
+        /// Maximum GPU wall-clock time observed. Indicates worst-case
+        /// thermal / cache / scheduling variability during the run.
         public let maxMs: Double
+        /// Sample standard deviation of GPU wall-clock times.
+        /// High stddev at an otherwise stable median suggests the
+        /// host is thermally throttling or the pipeline is
+        /// contending with external Metal work.
         public let stdDevMs: Double
 
         /// Comma-separated row suitable for logging or test output.

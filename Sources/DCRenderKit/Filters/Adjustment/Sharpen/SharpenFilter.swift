@@ -40,15 +40,19 @@ public struct SharpenFilter: FilterProtocol {
     /// `round(1.0 * pixelsPerPoint)`. Minimum effective value is 1.
     public var step: Float
 
+    /// Create a ``SharpenFilter`` with the given amount slider and
+    /// `pixelsPerPoint`-scaled Laplacian sampling step.
     public init(amount: Float = 0, step: Float = 3.0) {
         self.amount = amount
         self.step = step
     }
 
+    /// Compute-kernel binding. See ``FilterProtocol/modifier``.
     public var modifier: ModifierEnum {
         .compute(kernel: "DCRSharpenFilter")
     }
 
+    /// Typed uniform payload. See ``FilterProtocol/uniforms``.
     public var uniforms: FilterUniforms {
         // Product-side compression: raw amount/100 is too strong; ×1.6
         // peaks at +100 maps to a hand-tuned "strong but not haloed" level.
@@ -65,6 +69,8 @@ public struct SharpenFilter: FilterProtocol {
         ))
     }
 
+    /// Declared fuse group (`nil` — Sharpen is not fusable).
+    /// See ``FilterProtocol/fuseGroup``.
     public static var fuseGroup: FuseGroup? { nil }
 }
 

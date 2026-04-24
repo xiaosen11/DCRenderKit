@@ -82,6 +82,8 @@ public struct ContrastFilter: FilterProtocol {
     /// the same tonal location regardless of pipeline color space.
     public var colorSpace: DCRColorSpace
 
+    /// Create a ``ContrastFilter`` with the given slider, scene mean
+    /// luminance, and the pipeline's current color-space mode.
     public init(
         contrast: Float = 0,
         lumaMean: Float = 0.5,
@@ -92,10 +94,12 @@ public struct ContrastFilter: FilterProtocol {
         self.colorSpace = colorSpace
     }
 
+    /// Compute-kernel binding. See ``FilterProtocol/modifier``.
     public var modifier: ModifierEnum {
         .compute(kernel: "DCRContrastFilter")
     }
 
+    /// Typed uniform payload. See ``FilterProtocol/uniforms``.
     public var uniforms: FilterUniforms {
         FilterUniforms(ContrastUniforms(
             contrast: contrast / 100.0,
@@ -104,6 +108,8 @@ public struct ContrastFilter: FilterProtocol {
         ))
     }
 
+    /// Declared fuse group (`.toneAdjustment`). See
+    /// ``FilterProtocol/fuseGroup``.
     public static var fuseGroup: FuseGroup? { .toneAdjustment }
 }
 

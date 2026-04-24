@@ -69,6 +69,8 @@ public struct BlacksFilter: FilterProtocol {
     /// hits the same tonal location in linear mode.
     public var colorSpace: DCRColorSpace
 
+    /// Create a ``BlacksFilter`` configured with a slider value and
+    /// the pipeline's current color-space mode.
     public init(
         blacks: Float = 0,
         colorSpace: DCRColorSpace = DCRenderKit.defaultColorSpace
@@ -77,10 +79,12 @@ public struct BlacksFilter: FilterProtocol {
         self.colorSpace = colorSpace
     }
 
+    /// Compute-kernel binding. See ``FilterProtocol/modifier``.
     public var modifier: ModifierEnum {
         .compute(kernel: "DCRBlacksFilter")
     }
 
+    /// Typed uniform payload. See ``FilterProtocol/uniforms``.
     public var uniforms: FilterUniforms {
         FilterUniforms(BlacksUniforms(
             blacks: blacks / 100.0,
@@ -88,6 +92,8 @@ public struct BlacksFilter: FilterProtocol {
         ))
     }
 
+    /// Declared fuse group (`.toneAdjustment`). See
+    /// ``FilterProtocol/fuseGroup``.
     public static var fuseGroup: FuseGroup? { .toneAdjustment }
 }
 

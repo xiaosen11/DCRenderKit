@@ -101,15 +101,25 @@ public struct PortraitBlurFilter: MultiPassFilter, @unchecked Sendable {
     /// identity pass-through.
     private let maskTexture: MTLTexture?
 
+    /// Create a ``PortraitBlurFilter`` with the given strength slider
+    /// and an optional subject mask. A `nil` mask makes the filter an
+    /// identity pass-through (see `passes(input:)` for the short-
+    /// circuit).
     public init(strength: Float = 50, maskTexture: MTLTexture?) {
         self.strength = strength
         self.maskTexture = maskTexture
     }
 
+    /// Exposes the subject mask (if any) as a single entry at
+    /// `additionalInputs[0]`, consumed by both Poisson passes via
+    /// `PassInput.additional(0)`. See
+    /// ``MultiPassFilter/additionalInputs``.
     public var additionalInputs: [MTLTexture] {
         maskTexture.map { [$0] } ?? []
     }
 
+    /// Declarative pass graph: pass1 (Poisson) + pass2 (Poisson,
+    /// 90°-rotated). See ``MultiPassFilter/passes(input:)``.
     public func passes(input: TextureInfo) -> [Pass] {
         // Identity pass-through when no mask was provided — emit an
         // empty pass graph so the executor hands the source back

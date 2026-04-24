@@ -109,10 +109,12 @@ public struct LUT3DFilter: FilterProtocol, @unchecked Sendable {
 
     // MARK: - FilterProtocol
 
+    /// Compute-kernel binding. See ``FilterProtocol/modifier``.
     public var modifier: ModifierEnum {
         .compute(kernel: "DCRLUT3DFilter")
     }
 
+    /// Typed uniform payload. See ``FilterProtocol/uniforms``.
     public var uniforms: FilterUniforms {
         FilterUniforms(LUT3DUniforms(
             intensity: intensity,
@@ -120,10 +122,15 @@ public struct LUT3DFilter: FilterProtocol, @unchecked Sendable {
         ))
     }
 
+    /// 3D LUT texture bound to `texture(2)` in the compute kernel.
+    /// See ``FilterProtocol/additionalInputs``.
     public var additionalInputs: [MTLTexture] {
         [lutTexture]
     }
 
+    /// Declared fuse group (`nil` — LUT3D is a 3D lookup that cannot
+    /// be fused with 1D per-pixel tone operators).
+    /// See ``FilterProtocol/fuseGroup``.
     public static var fuseGroup: FuseGroup? { nil }
 
     // MARK: - Private

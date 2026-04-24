@@ -54,6 +54,8 @@ public struct ClarityFilter: MultiPassFilter {
     /// then re-linearizes.
     public var colorSpace: DCRColorSpace
 
+    /// Create a ``ClarityFilter`` with the given intensity slider and
+    /// the pipeline's current color-space mode.
     public init(
         intensity: Float = 0,
         colorSpace: DCRColorSpace = DCRenderKit.defaultColorSpace
@@ -62,6 +64,8 @@ public struct ClarityFilter: MultiPassFilter {
         self.colorSpace = colorSpace
     }
 
+    /// Declarative pass graph: downsample → computeAB → smoothAB →
+    /// computeBase → applyDetail. See ``MultiPassFilter/passes(input:)``.
     public func passes(input: TextureInfo) -> [Pass] {
         let normalized = intensity / 100.0
         guard abs(normalized) > 0.001 else { return [] }

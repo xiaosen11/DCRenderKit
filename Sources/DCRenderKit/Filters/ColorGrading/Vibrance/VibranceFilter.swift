@@ -75,18 +75,23 @@ public struct VibranceFilter: FilterProtocol {
     /// low-chroma pixels.
     public var vibrance: Float
 
+    /// Create a ``VibranceFilter`` with the given slider.
     public init(vibrance: Float = 0.0) {
         self.vibrance = vibrance
     }
 
+    /// Compute-kernel binding. See ``FilterProtocol/modifier``.
     public var modifier: ModifierEnum {
         .compute(kernel: "DCRVibranceFilter")
     }
 
+    /// Typed uniform payload. See ``FilterProtocol/uniforms``.
     public var uniforms: FilterUniforms {
         FilterUniforms(VibranceUniforms(vibrance: vibrance))
     }
 
+    /// Declared fuse group (`.colorGrading`). See
+    /// ``FilterProtocol/fuseGroup``.
     public static var fuseGroup: FuseGroup? { .colorGrading }
 }
 

@@ -68,12 +68,17 @@ public struct SoftGlowFilter: MultiPassFilter {
     /// 0.002 (slider 0) to 0.006 (slider 100).
     public var bloomRadius: Float
 
+    /// Create a ``SoftGlowFilter`` with strength, bright-threshold,
+    /// and bloom-radius sliders.
     public init(strength: Float = 50, threshold: Float = 0, bloomRadius: Float = 25) {
         self.strength = strength
         self.threshold = threshold
         self.bloomRadius = bloomRadius
     }
 
+    /// Declarative pass graph: bright threshold → pyramid downsample
+    /// → pyramid upsample → Screen-blend composite.
+    /// See ``MultiPassFilter/passes(input:)``.
     public func passes(input: TextureInfo) -> [Pass] {
         guard strength > 0.001 else { return [] }
 

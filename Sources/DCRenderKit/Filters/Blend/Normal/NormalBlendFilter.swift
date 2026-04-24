@@ -60,23 +60,31 @@ public struct NormalBlendFilter: FilterProtocol, @unchecked Sendable {
 
     private let overlay: MTLTexture
 
+    /// Create a ``NormalBlendFilter`` with the given overlay texture
+    /// and source-over mix intensity.
     public init(overlay: MTLTexture, intensity: Float = 1.0) {
         self.overlay = overlay
         self.intensity = intensity
     }
 
+    /// Compute-kernel binding. See ``FilterProtocol/modifier``.
     public var modifier: ModifierEnum {
         .compute(kernel: "DCRBlendNormalFilter")
     }
 
+    /// Typed uniform payload. See ``FilterProtocol/uniforms``.
     public var uniforms: FilterUniforms {
         FilterUniforms(NormalBlendUniforms(intensity: intensity))
     }
 
+    /// Overlay texture bound to `texture(2)` in the compute kernel.
+    /// See ``FilterProtocol/additionalInputs``.
     public var additionalInputs: [MTLTexture] {
         [overlay]
     }
 
+    /// Declared fuse group (`nil` — blends are not fusable).
+    /// See ``FilterProtocol/fuseGroup``.
     public static var fuseGroup: FuseGroup? { nil }
 }
 

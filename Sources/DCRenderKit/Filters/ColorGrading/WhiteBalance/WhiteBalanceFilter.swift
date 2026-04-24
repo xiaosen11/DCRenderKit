@@ -60,6 +60,8 @@ public struct WhiteBalanceFilter: FilterProtocol {
     /// the fit with linearize/delinearize for visual parity.
     public var colorSpace: DCRColorSpace
 
+    /// Create a ``WhiteBalanceFilter`` with the given Kelvin
+    /// temperature, tint, and pipeline color-space mode.
     public init(
         temperature: Float = 5000,
         tint: Float = 0,
@@ -70,10 +72,12 @@ public struct WhiteBalanceFilter: FilterProtocol {
         self.colorSpace = colorSpace
     }
 
+    /// Compute-kernel binding. See ``FilterProtocol/modifier``.
     public var modifier: ModifierEnum {
         .compute(kernel: "DCRWhiteBalanceFilter")
     }
 
+    /// Typed uniform payload. See ``FilterProtocol/uniforms``.
     public var uniforms: FilterUniforms {
         FilterUniforms(WhiteBalanceUniforms(
             temperature: temperature,
@@ -82,6 +86,8 @@ public struct WhiteBalanceFilter: FilterProtocol {
         ))
     }
 
+    /// Declared fuse group (`.colorGrading`). See
+    /// ``FilterProtocol/fuseGroup``.
     public static var fuseGroup: FuseGroup? { .colorGrading }
 }
 

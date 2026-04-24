@@ -57,18 +57,23 @@ public struct SaturationFilter: FilterProtocol {
     /// Saturation multiplier. Range `0 ... 2`; identity at `1`.
     public var saturation: Float
 
+    /// Create a ``SaturationFilter`` with the given chroma multiplier.
     public init(saturation: Float = 1.0) {
         self.saturation = saturation
     }
 
+    /// Compute-kernel binding. See ``FilterProtocol/modifier``.
     public var modifier: ModifierEnum {
         .compute(kernel: "DCRSaturationFilter")
     }
 
+    /// Typed uniform payload. See ``FilterProtocol/uniforms``.
     public var uniforms: FilterUniforms {
         FilterUniforms(SaturationUniforms(saturation: saturation))
     }
 
+    /// Declared fuse group (`.colorGrading`). See
+    /// ``FilterProtocol/fuseGroup``.
     public static var fuseGroup: FuseGroup? { .colorGrading }
 }
 

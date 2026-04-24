@@ -62,6 +62,8 @@ public struct HighlightShadowFilter: MultiPassFilter {
     /// response (the direct fix for F3's "对高光暗部不够敏感, 缺层次感").
     public var colorSpace: DCRColorSpace
 
+    /// Create a ``HighlightShadowFilter`` with the given slider pair
+    /// and the pipeline's current color-space mode.
     public init(
         highlights: Float = 0,
         shadows: Float = 0,
@@ -72,6 +74,8 @@ public struct HighlightShadowFilter: MultiPassFilter {
         self.colorSpace = colorSpace
     }
 
+    /// Declarative pass graph: downsample → computeAB → smoothAB →
+    /// applyRatio → final. See ``MultiPassFilter/passes(input:)``.
     public func passes(input: TextureInfo) -> [Pass] {
         // Identity short-circuit (dead-zone matches shader side).
         let h = highlights / 100.0

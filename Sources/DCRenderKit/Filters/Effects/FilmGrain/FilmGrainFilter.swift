@@ -57,6 +57,8 @@ public struct FilmGrainFilter: FilterProtocol {
     /// `1.5pt * pixelsPerPoint`. Minimum effective value is 1.
     public var grainSize: Float
 
+    /// Create a ``FilmGrainFilter`` with the four sliders and a
+    /// `pixelsPerPoint`-scaled grain size.
     public init(
         density: Float = 0,
         roughness: Float = 0,
@@ -69,10 +71,12 @@ public struct FilmGrainFilter: FilterProtocol {
         self.grainSize = grainSize
     }
 
+    /// Compute-kernel binding. See ``FilterProtocol/modifier``.
     public var modifier: ModifierEnum {
         .compute(kernel: "DCRFilmGrainFilter")
     }
 
+    /// Typed uniform payload. See ``FilterProtocol/uniforms``.
     public var uniforms: FilterUniforms {
         FilterUniforms(FilmGrainUniforms(
             density: density,
@@ -82,6 +86,8 @@ public struct FilmGrainFilter: FilterProtocol {
         ))
     }
 
+    /// Declared fuse group (`nil` — grain is not fusable).
+    /// See ``FilterProtocol/fuseGroup``.
     public static var fuseGroup: FuseGroup? { nil }
 }
 

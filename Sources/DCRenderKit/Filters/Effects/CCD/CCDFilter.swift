@@ -84,6 +84,8 @@ public struct CCDFilter: FilterProtocol {
     /// Max chromatic-aberration offset in pixels. Pass `5.0pt × pixelsPerPoint`.
     public var caMaxOffset: Float
 
+    /// Create a ``CCDFilter`` with the five aesthetic sliders and
+    /// three `pixelsPerPoint`-scaled spatial defaults.
     public init(
         strength: Float = 100,
         digitalNoise: Float = 50,
@@ -104,10 +106,12 @@ public struct CCDFilter: FilterProtocol {
         self.caMaxOffset = caMaxOffset
     }
 
+    /// Compute-kernel binding. See ``FilterProtocol/modifier``.
     public var modifier: ModifierEnum {
         .compute(kernel: "DCRCCDFilter")
     }
 
+    /// Typed uniform payload. See ``FilterProtocol/uniforms``.
     public var uniforms: FilterUniforms {
         FilterUniforms(CCDUniforms(
             strength: strength / 100.0,
@@ -127,6 +131,9 @@ public struct CCDFilter: FilterProtocol {
         ))
     }
 
+    /// Declared fuse group (`nil` — CCD is a compound aesthetic
+    /// filter that already fuses four effects internally).
+    /// See ``FilterProtocol/fuseGroup``.
     public static var fuseGroup: FuseGroup? { nil }
 }
 

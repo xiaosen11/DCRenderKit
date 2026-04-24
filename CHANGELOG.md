@@ -114,6 +114,18 @@ until `v1.0.0`. Each breaking change is flagged explicitly below.
 
 ### Internal / docs
 
+- **SwiftDoc coverage sweep across filter layer** (#59 first pass).
+  Added doc comments for the FilterProtocol / MultiPassFilter
+  conformance members (`modifier`, `uniforms`, `additionalInputs`,
+  `fuseGroup`, `passes(input:)`) and the `public init(…)` of every
+  shipped filter: Blacks, Whites, Contrast, Exposure, Sharpen,
+  HighlightShadow, Clarity, NormalBlend, Saturation, Vibrance,
+  WhiteBalance, CCD, FilmGrain, PortraitBlur, SoftGlow, LUT3D.
+  Also filled in per-member docs for `PipelineBenchmark.Result`
+  (iterations / median / p95 / min / max / stddev). Closes the
+  highest-volume gap from the audit; infrastructure-type public
+  members (Pipeline / Device / TexturePool / …) were already
+  documented at member level and do not need adjustment.
 - **Zero unreferenced FIXME / TODO / HACK marker audit**. The CI
   lint rule that every marker carry a `(§…)` or `(#…)` reference
   catches contributor misses; this pass closed two false positives

@@ -69,6 +69,8 @@ public struct WhitesFilter: FilterProtocol {
     /// highlight brightness" framing used by consumer-grading tools.
     public var colorSpace: DCRColorSpace
 
+    /// Create a ``WhitesFilter`` with the given slider value and the
+    /// pipeline's current color-space mode.
     public init(
         whites: Float = 0,
         colorSpace: DCRColorSpace = DCRenderKit.defaultColorSpace
@@ -77,10 +79,12 @@ public struct WhitesFilter: FilterProtocol {
         self.colorSpace = colorSpace
     }
 
+    /// Compute-kernel binding. See ``FilterProtocol/modifier``.
     public var modifier: ModifierEnum {
         .compute(kernel: "DCRWhitesFilter")
     }
 
+    /// Typed uniform payload. See ``FilterProtocol/uniforms``.
     public var uniforms: FilterUniforms {
         FilterUniforms(WhitesUniforms(
             whites: whites / 100.0,
@@ -88,6 +92,8 @@ public struct WhitesFilter: FilterProtocol {
         ))
     }
 
+    /// Declared fuse group (`.toneAdjustment`). See
+    /// ``FilterProtocol/fuseGroup``.
     public static var fuseGroup: FuseGroup? { .toneAdjustment }
 }
 

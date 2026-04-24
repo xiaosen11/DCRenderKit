@@ -87,6 +87,8 @@ public struct ExposureFilter: FilterProtocol {
     /// to thread it through every construction site.
     public var colorSpace: DCRColorSpace
 
+    /// Create an ``ExposureFilter`` with the given slider and
+    /// pipeline's current color-space mode.
     public init(
         exposure: Float = 0,
         colorSpace: DCRColorSpace = DCRenderKit.defaultColorSpace
@@ -95,10 +97,12 @@ public struct ExposureFilter: FilterProtocol {
         self.colorSpace = colorSpace
     }
 
+    /// Compute-kernel binding. See ``FilterProtocol/modifier``.
     public var modifier: ModifierEnum {
         .compute(kernel: "DCRExposureFilter")
     }
 
+    /// Typed uniform payload. See ``FilterProtocol/uniforms``.
     public var uniforms: FilterUniforms {
         FilterUniforms(ExposureUniforms(
             exposure: exposure / 100.0,
@@ -106,6 +110,8 @@ public struct ExposureFilter: FilterProtocol {
         ))
     }
 
+    /// Declared fuse group (`.toneAdjustment`). See
+    /// ``FilterProtocol/fuseGroup``.
     public static var fuseGroup: FuseGroup? { .toneAdjustment }
 }
 
