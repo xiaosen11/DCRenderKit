@@ -374,7 +374,14 @@ next Claude must internalise before touching code:
 
 ---
 
-## 10. Literal opening prompt for next session
+## 10. Literal opening prompts
+
+Three versions — pick the one matching which phase the session
+is starting on. Every version includes the Q1-Q4 lock + the
+"don't reopen decisions" guardrails, so mis-picking is safe
+(you'll just load more context than strictly needed).
+
+### 10.A Phase 5 opening (user-gated Pipeline integration)
 
 ```
 继续 DCRenderKit 的 pipeline-compiler refactor。你现在接手的是 Phase 5
@@ -389,6 +396,8 @@ next Claude must internalise before touching code:
 
 2. docs/pipeline-compiler-handoff.md — 本文件的基础。§0 5 条 most-
    important、§3 锁定决策表、§4 测试顺序踩坑、§6 是你的工作主战场。
+   §7/§8 是 Phase 6/7 overview，如果本 session 做完 Phase 5 还有余量
+   且 user 让你接着做，再读对应节；否则不读。
 
 3. Tests/DCRenderKitTests/PipelineCompiler/ 目录 ls 一遍。每个测试
    文件的顶部注释说明它覆盖什么 phase 的什么 step。LegacyParityTests 和
@@ -423,9 +432,14 @@ next Claude must internalise before touching code:
 **User gate**: 5.7 完成后，停下来请 user 在 iPhone 14 Pro Max 上跑
 benchmark + 视觉验证 Tier 2 曲线感官问题。不跑过去不要开 Phase 6。
 
+**如果 Phase 5 user gate 通过且 user 让你继续 Phase 6**: 读本文件的
+§7 Phase 6 overview，然后按 §10.B 的 opening prompt 自我装载 Phase 6
+scope，最后再开始 Phase 6 代码工作。结束 session 前更新本 §1 commit
+chain + §6 改成 Phase-5 retrospective + §7 扩写成 Phase 6 active plan。
+
 **绝对禁止**：
   · 重开 Q1-Q4（shape 方案、TailSink 激进 / 保守、warm-up 归属、IR 暴露）。
-  · 碰 fragment shader（Phase 6 的事）。
+  · 碰 fragment shader（Phase 6 的事，除非 user 明确让你进 Phase 6）。
   · 跨 shape 合并 cluster（Phase 3 step 3c 明确锁定了 shape match）。
   · 删除 Tests/DCRenderKitTests/LegacyKernels/*.metal（Phase 7 才删）。
   · 凭记忆 claim "Apple 官方建议" 之类（.claude/rules/engineering-
@@ -439,6 +453,121 @@ benchmark + 视觉验证 Tier 2 曲线感官问题。不跑过去不要开 Phase
   · 英文 commit + 中文聊天
 
 开工前先跑一遍验证，然后 Step 5.1 开始。每个 commit 都要带测试。
+```
+
+### 10.B Phase 6 opening (fragment shader bodies)
+
+```
+继续 DCRenderKit 的 pipeline-compiler refactor。你现在接手的是 Phase 6
+(fragment shader body 补齐 + compute/fragment parity)。
+
+**前置条件**: Phase 5 已合并到 main，真机 benchmark 通过且 user 签字。
+如果不确定，跑 swift test 查最新 pass count + 读 handoff §1 最新 commit
+chain 是否列出 Phase-5 条目。
+
+**必读**：
+
+1. docs/pipeline-compiler-design.md — §1-§4 + §6 TBDR 铺垫。
+2. docs/pipeline-compiler-handoff.md — §0 决策 lock + §3 锁定决策 +
+   §4 踩坑 + §7 Phase 6 overview（本 session 主战场）+ §8 Phase 7
+   overview（了解下游需求不要破坏 TBDR 前提）。
+3. Sources/DCRenderKit/Dispatchers/MetalSourceBuilder.swift — 看看
+   compute 路径现有 shape 实装，fragment 版本按相同 shape 拆分。
+4. Sources/DCRenderKit/Shaders/**/*.metal — 每个 filter 的 body 已存
+   在，fragment 版本要在同文件加第二个 body 或单独 .metal 文件 —
+   依架构决定。
+
+**验证当前状态（必做）**：
+
+  swift build -Xswiftc -warnings-as-errors
+  swift test
+
+pass count 应 ≥ session-1 的 504 + Phase 5 新增量。0 warning / 0 fail。
+不 match 就 STOP。
+
+**Phase 6 工作清单**：
+
+  6.1 决定 fragment body 住哪：同 .metal 的 second body，还是
+      `<Name>FilterFragment.metal`？选一条路，设计稿更新反映决策。
+  6.2 `MetalSourceBuilder.buildFragmentPipeline(for: Node)` —
+      与 compute 方法对称，emit vertex + fragment pair + render
+      pipeline descriptor。
+  6.3 ComputeBackend 的兄弟 `RenderBackend` / 或 compute backend
+      的 render overload。
+  6.4 9 个 pixel-local filter 补 fragment body（LUT3D/NormalBlend 形
+      状不同，独立处理）。
+  6.5 compute/fragment parity test × 每 filter — 同 input 下两版
+      output ±1 LSB。
+
+**User gate**: 无强制真机 gate；但 Phase 6 完成后 Phase 7 才能接。
+
+**绝对禁止**: 见 §10.A 同样列表。加一条：别在 Phase 6 就切 production
+dispatch 到 render pipeline — 那是 Phase 7 的 TBDR 任务。本 phase
+只是**准备** fragment body，不走 TBDR 路径。
+
+开工流程同 §10.A。每 step 独立 commit + tests。
+```
+
+### 10.C Phase 7 opening (TBDR + final cleanup)
+
+```
+继续 DCRenderKit 的 pipeline-compiler refactor。你现在接手的是 Phase 7
+(TBDR render pipeline backend + 终验 + legacy kernel 删除)，项目的最
+后一个 phase。
+
+**前置条件**: Phase 5 + Phase 6 都已合并到 main。Compute/fragment
+parity test 全绿（Phase 6 的保底）。真机 Phase-5 benchmark 已 user 签
+字。
+
+**必读**：
+
+1. docs/pipeline-compiler-design.md — §6.2 TBDR backend scope、
+   §7.4 memoryless attachment、§13 TBDR 风险条目。
+2. docs/pipeline-compiler-handoff.md — §0 决策 lock + §3 锁定决策 +
+   §4 踩坑 + §8 Phase 7 overview（本 session 主战场）+ §2 文件索引
+   确认 Sources / Tests 当前形态。
+3. Apple Metal documentation on TBDR:
+   - `MTLStorageModeMemoryless`
+   - `MTLRenderPassDescriptor` + tile memory
+   - `imageblock` / function linking for tile shaders
+   （engineering-judgment §4: 引 fetched URL，不靠记忆）
+
+**验证当前状态（必做）**：
+
+  swift build -Xswiftc -warnings-as-errors
+  swift test
+
+pass count 应反映 Phase 5 + 6 累积。不 match 就 STOP。
+
+**Phase 7 工作清单**：
+
+  7.1 `TBDRBackend` — sibling of ComputeBackend. 输入 Node 输出
+      render pipeline dispatch。memoryless attachment 决策逻辑在
+      allocator 扩展。
+  7.2 Allocator 扩展 supporting memoryless spec — 同 bucket 但不走
+      TexturePool.dequeue，`MTLTexture` 是 memoryless 的。
+  7.3 Backend 路由：Pipeline.executeStep 对 cluster / 连续 pixelLocal
+      chain 选 TBDR if 够长且下游能接 render；否则 compute。
+  7.4 Phase-7 smoke test 覆盖 TBDR 路径 bit-equal compute 路径。
+  7.5 真机终验（user gate）：benchmark + 视觉验证在 TBDR 路径上
+      维持或改善。
+  7.6 **Final cleanup commit**：user 签字 + 真机稳定 ≥ 1 周后 —
+      删 Tests/DCRenderKitTests/LegacyKernels/*.metal × 12 +
+      LegacyKernelFixture.swift + LegacyParityTests.swift +
+      ClusterLegacyParityTests.swift + LegacyKernelAvailabilityTests
+      .swift。
+  7.7 Handoff doc §1 改成 "final", §6-§8 改成 retrospective. memory
+      file 里记"done"。
+
+**User gate 2 次**:
+  · 7.5 真机终验
+  · 7.6 删 legacy 前 user 签字 + ≥ 1 周稳定观察
+
+**绝对禁止**: 见 §10.A。加一条：7.6 之前任何情况下都不要删 legacy
+kernels — 它们是 parity 最后的保险。
+
+开工流程同 §10.A。Phase 7 尾声 session 结束时，refactor 项目完
+结；memory file 标 "done"，handoff doc 归档。
 ```
 
 ---
