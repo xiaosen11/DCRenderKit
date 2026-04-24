@@ -12,6 +12,16 @@ until `v1.0.0`. Each breaking change is flagged explicitly below.
 
 ### Added
 
+- **Integration tests for PortraitBlur mask routing**
+  (`Tests/DCRenderKitTests/IntegrationTests/PortraitBlurMaskPipelineTests`).
+  Three synthetic-source, half-split-mask scenarios covering the
+  Demo→SDK path: spatial selectivity (proves `additional(0)` is
+  consumed by both Poisson passes), a DigiCam-style edit chain
+  (Exposure → Contrast → PortraitBlur(mask) → Saturation → Sharpen)
+  confirming `additionalInputs` survives step-to-step texture handoff,
+  and mask / source resolution mismatch exercising the shader's
+  `gid / inputW * maskW` coordinate remap. All synthetic; Demo never
+  gains an XCTest target. Test count 326 → 329.
 - **Snapshot-regression harness** (`SnapshotAssertion.assertMatchesBaseline`).
   8-bit PNG baselines stored under `Tests/DCRenderKitTests/__Snapshots__/`.
   First run writes baseline + `XCTSkip`; subsequent runs fail on per-channel
