@@ -42,6 +42,18 @@ let package = Package(
             name: "DCRenderKitTests",
             dependencies: ["DCRenderKit"],
             path: "Tests/DCRenderKitTests",
+            resources: [
+                // Legacy kernels carry the pre-compiler-refactor
+                // standalone `.metal` source for every pixel-local
+                // built-in filter, renamed with a `DCRLegacy...`
+                // prefix. They live in the test target (not the
+                // SDK target) so the shipping binary never includes
+                // them, and they serve as the parity reference for
+                // the Phase-3 compute-backend tests. Deleted after
+                // the Phase-7 final-verification gate per the
+                // pipeline-compiler design doc §4.3.
+                .process("LegacyKernels"),
+            ],
             swiftSettings: [
                 .swiftLanguageMode(.v6),
             ]
