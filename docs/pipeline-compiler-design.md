@@ -1,6 +1,27 @@
-# DCRenderKit Pipeline Compiler — Phase 0 Design Document
+# DCRenderKit Pipeline Compiler — Design Document
 
 **Status**: FINAL · 2026-04-24 · User signed off Q1/Q2/Q3/Q4
+
+**Implementation progress**: Phases 0-4 complete as of
+2026-04-24 session 1. See
+[`docs/pipeline-compiler-handoff.md`](pipeline-compiler-handoff.md)
+for the authoritative hand-off to session 2 (Phase 5 gate).
+The commit chain, locked decisions, test-order gotchas, and
+session-2 opening prompt all live in that document.
+
+| Phase | Status | Coverage |
+|---|---|---|
+| 0 | ✅ | Design sign-off (Q1 B / Q2 SDK / Q3 aggressive / Q4 6 additive APIs) |
+| 1 | ✅ | IR types, Lowering, 12 filter `fusionBody`, 12 legacy kernels in test bundle |
+| 2 | ✅ | 5 optimiser passes (DCE, VerticalFusion, CSE, KernelInlining, TailSink) |
+| 3 | ✅ | MetalSourceBuilder (5 shapes + cluster), ComputeBackend + UberKernelCache, 12-filter + 2/3/5-member cluster legacy parity all pass |
+| 4 | ✅ | TextureAliasingPlanner + LifetimeAwareTextureAllocator |
+| 5 | ⏭️ next session, **user gate** | Pipeline integration, delete production kernels, real-device benchmark |
+| 6 |  | Fragment shader bodies + compute/fragment parity |
+| 7 | **user gate** | TBDR render pipeline, final legacy cleanup |
+
+Total session-1 test delta: 348 → 504 (+156), zero warnings,
+zero regressions. Every phase commit lands on `origin/main`.
 
 **目的**: 把 DCRenderKit 从"filter 数组 + 逐个 dispatch"升级为带 IR 的 pipeline compiler，实现 *"无论叠多少 filter，运行时开销都像一个 filter"* 的 SDK 契约。
 

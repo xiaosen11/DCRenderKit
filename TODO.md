@@ -20,7 +20,26 @@ Session D：#66 PortraitBlur mask routing integration tests（`Tests/DCRenderKit
 
 ## Pending 分类
 
-### 必定改 SDK 功能代码（0 条）
+### 进行中的大型重构：Pipeline Compiler（Phase 5-7 剩余）
+
+**入口文档**：
+- `docs/pipeline-compiler-design.md` — 设计稿（Q1-Q4 已 signed off）
+- `docs/pipeline-compiler-handoff.md` — Session-to-session handoff + §10 opening prompt
+
+**当前状态（2026-04-24）**：Phase 0-4 完成，504 tests pass，零
+warning。12 filter codegen + legacy parity 通过，cluster fusion 实
+装，aliasing allocator 就绪。剩下三个 phase 要接着做：
+
+| Phase | Scope | Blocker |
+|---|---|---|
+| **5** | Pipeline.executeStep 走 codegen + 删 12 个 production kernel + warm-up API + 迁移 50+ existing tests + 真机 benchmark | **user gate** 真机验证 |
+| **6** | 12 filter 补 fragment shader body + compute/fragment parity | Phase 5 完成 |
+| **7** | TBDR render pipeline backend + 终验 + 删 legacy kernels | **user gate** 真机终验 |
+
+Session 间 handoff 用 `docs/pipeline-compiler-handoff.md` §10
+opening prompt 装载上下文，不要重开 Q1-Q4 决策。
+
+### 必定改 SDK 功能代码（0 条，不含 pipeline compiler）
 
 无 — 所有"必改"代码类工作已在 Session C 落地。
 
