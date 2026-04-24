@@ -79,6 +79,7 @@ internal enum Optimizer {
     nonisolated(unsafe) internal static var defaultPasses: [any OptimizerPass] = [
         DeadCodeElimination(),
         VerticalFusion(),
+        CommonSubexpressionElimination(),
     ]
 
     /// Run every pass in `defaultPasses` against `graph`, in order.
