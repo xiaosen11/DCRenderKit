@@ -92,7 +92,8 @@ public struct SharpenFilter: FilterProtocol {
             uniformStructName: "SharpenUniforms",
             kind: .neighborRead(radius: 8),
             wantsLinearInput: false,
-            sourceMetalFile: FusionBodyDescriptor.bundledSDKMetalURL("SharpenFilter"),
+            sourceText: BundledShaderSources.sharpenFilter,
+            sourceLabel: "SharpenFilter.metal",
             signatureShape: .neighborReadWithSource
         )
     }

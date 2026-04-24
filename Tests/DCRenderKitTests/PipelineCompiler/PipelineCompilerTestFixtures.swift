@@ -17,8 +17,9 @@ enum PipelineCompilerTestFixtures {
     // MARK: - FusionBody placeholders
 
     /// Minimal `FusionBody` suitable for pass tests — the tests
-    /// never resolve the URL or dispatch the body, so real shader
-    /// metadata is unnecessary.
+    /// never extract real shader text or dispatch the body, so
+    /// `sourceText` is a placeholder string and `sourceLabel` names
+    /// a dummy file.
     static func dummyBody(
         _ functionName: String,
         kind: FusionNodeKind = .pixelLocal,
@@ -30,7 +31,8 @@ enum PipelineCompilerTestFixtures {
             uniformStructName: "\(functionName)Uniforms",
             kind: kind,
             wantsLinearInput: wantsLinearInput,
-            sourceMetalFile: URL(fileURLWithPath: "/dev/null/\(functionName).metal"),
+            sourceText: "// dummy — not read in fixture tests",
+            sourceLabel: "\(functionName).metal",
             signatureShape: signatureShape
         )
     }

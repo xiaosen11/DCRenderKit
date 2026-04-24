@@ -29,17 +29,17 @@ final class FusionBodyDescriptorTests: XCTestCase {
     // MARK: - Constructor round-trip
 
     /// The primary initialiser stores every supplied field. Derivation:
-    /// the initialiser takes 5 arguments and constructs a
+    /// the initialiser takes 6 arguments and constructs a
     /// `FusionBody` payload with 1:1 field mapping, so reading each
     /// field back should return the original value.
     func testPrimaryInitPreservesAllFields() {
-        let url = URL(fileURLWithPath: "/tmp/ExposureFilter.metal")
         let descriptor = FusionBodyDescriptor(
             functionName: "DCRExposureBody",
             uniformStructName: "ExposureUniforms",
             kind: .pixelLocal,
             wantsLinearInput: false,
-            sourceMetalFile: url
+            sourceText: "// ExposureFilter stub source",
+            sourceLabel: "ExposureFilter.metal"
         )
 
         guard let body = descriptor.body else {
@@ -50,7 +50,8 @@ final class FusionBodyDescriptorTests: XCTestCase {
         XCTAssertEqual(body.uniformStructName, "ExposureUniforms")
         XCTAssertEqual(body.kind, .pixelLocal)
         XCTAssertFalse(body.wantsLinearInput)
-        XCTAssertEqual(body.sourceMetalFile, url)
+        XCTAssertEqual(body.sourceText, "// ExposureFilter stub source")
+        XCTAssertEqual(body.sourceLabel, "ExposureFilter.metal")
     }
 
     /// `.neighborRead(radius:)` round-trips — the radius reaches
@@ -61,7 +62,8 @@ final class FusionBodyDescriptorTests: XCTestCase {
             uniformStructName: "SharpenUniforms",
             kind: .neighborRead(radius: 3),
             wantsLinearInput: true,
-            sourceMetalFile: URL(fileURLWithPath: "/tmp/SharpenFilter.metal")
+            sourceText: "// SharpenFilter stub source",
+            sourceLabel: "SharpenFilter.metal"
         )
 
         guard case .neighborRead(let radius) = descriptor.body?.kind else {
@@ -90,7 +92,8 @@ final class FusionBodyDescriptorTests: XCTestCase {
             uniformStructName: "AnyUniforms",
             kind: .pixelLocal,
             wantsLinearInput: false,
-            sourceMetalFile: URL(fileURLWithPath: "/tmp/any.metal")
+            sourceText: "// any.metal stub",
+            sourceLabel: "any.metal"
         )
         XCTAssertNotNil(real.body)
         XCTAssertNil(FusionBodyDescriptor.unsupported.body)
@@ -213,13 +216,17 @@ final class FusionBodyDescriptorTests: XCTestCase {
                 "\(type(of: e.filter)).fusionBody.kind"
             )
             XCTAssertEqual(
-                body.sourceMetalFile.lastPathComponent,
+                body.sourceLabel,
                 "\(e.expectedMetalFileBaseName).metal",
-                "\(type(of: e.filter)).fusionBody.sourceMetalFile points at the expected .metal"
+                "\(type(of: e.filter)).fusionBody.sourceLabel identifies the expected .metal"
+            )
+            XCTAssertFalse(
+                body.sourceText.isEmpty,
+                "\(type(of: e.filter)).fusionBody.sourceText must be a non-empty bundled string"
             )
             XCTAssertTrue(
-                FileManager.default.fileExists(atPath: body.sourceMetalFile.path),
-                "\(type(of: e.filter)).fusionBody.sourceMetalFile must resolve to a bundled resource"
+                body.sourceText.contains("@dcr:body-begin"),
+                "\(type(of: e.filter)).fusionBody.sourceText must contain the body marker for \(e.expectedFunctionName)"
             )
         }
     }
@@ -260,13 +267,8 @@ final class FusionBodyDescriptorTests: XCTestCase {
         XCTAssertEqual(body.functionName, "DCRLUT3DBody")
         XCTAssertEqual(body.uniformStructName, "LUT3DUniforms")
         XCTAssertEqual(body.kind, .pixelLocal)
-        XCTAssertEqual(
-            body.sourceMetalFile.lastPathComponent,
-            "LUT3DFilter.metal"
-        )
-        XCTAssertTrue(
-            FileManager.default.fileExists(atPath: body.sourceMetalFile.path)
-        )
+        XCTAssertEqual(body.sourceLabel, "LUT3DFilter.metal")
+        XCTAssertTrue(body.sourceText.contains("@dcr:body-begin DCRLUT3DBody"))
     }
 
     // MARK: - Helpers

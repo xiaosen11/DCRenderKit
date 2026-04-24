@@ -211,30 +211,14 @@ final class ShaderSourceExtractorTests: XCTestCase {
         }
     }
 
-    // MARK: - File I/O
-
-    /// File-URL variant surfaces `fileUnreadable` on a missing path.
-    func testFileUnreadableWrapsUnderlyingError() {
-        let missingURL = URL(fileURLWithPath: "/tmp/dcr-test-nonexistent.metal")
-        XCTAssertThrowsError(
-            try ShaderSourceExtractor.extractBody(named: "Anything", from: missingURL)
-        ) { error in
-            if case ShaderSourceExtractor.ExtractionError.fileUnreadable(let url, _) = error {
-                XCTAssertEqual(url, missingURL)
-            } else {
-                XCTFail("Expected .fileUnreadable, got \(error)")
-            }
-        }
-    }
-
     // MARK: - Integration against production shaders
 
-    /// Sanity check: for every SDK built-in filter that adopts
-    /// the Phase-3 body-function convention, the extractor finds
-    /// both the body and the uniform struct in its production
-    /// `.metal` file. Covers all 11 non-LUT single-pass filters;
-    /// LUT3D requires a `MTLTexture` at init time and is handled
-    /// separately.
+    /// Sanity check: for every SDK built-in filter that adopts the
+    /// Phase-3 body-function convention, the extractor finds both
+    /// the body and the uniform struct in the bundled source text
+    /// that `BundledShaderSources` ships. Covers all 11 non-LUT
+    /// single-pass filters; LUT3D requires a `MTLTexture` at init
+    /// time and is handled separately.
     func testAllProductionFusionShadersExposeBodiesAndUniforms() throws {
         let filters: [(filter: any FilterProtocol, functionName: String, structName: String)] = [
             // signatureShape: .pixelLocalOnly
@@ -260,12 +244,20 @@ final class ShaderSourceExtractorTests: XCTestCase {
             XCTAssertEqual(body.functionName, functionName)
             XCTAssertEqual(body.uniformStructName, structName)
             XCTAssertNoThrow(
-                try ShaderSourceExtractor.extractBody(named: functionName, from: body.sourceMetalFile),
-                "Body \(functionName) not extractable from \(body.sourceMetalFile.lastPathComponent)"
+                try ShaderSourceExtractor.extractBody(
+                    named: functionName,
+                    from: body.sourceText,
+                    sourceLabel: body.sourceLabel
+                ),
+                "Body \(functionName) not extractable from \(body.sourceLabel)"
             )
             XCTAssertNoThrow(
-                try ShaderSourceExtractor.extractUniformStruct(named: structName, from: body.sourceMetalFile),
-                "Struct \(structName) not extractable from \(body.sourceMetalFile.lastPathComponent)"
+                try ShaderSourceExtractor.extractUniformStruct(
+                    named: structName,
+                    from: body.sourceText,
+                    sourceLabel: body.sourceLabel
+                ),
+                "Struct \(structName) not extractable from \(body.sourceLabel)"
             )
         }
 
@@ -284,7 +276,11 @@ final class ShaderSourceExtractorTests: XCTestCase {
         XCTAssertEqual(nbBody.functionName, "DCRNormalBlendBody")
         XCTAssertEqual(nbBody.uniformStructName, "NormalBlendUniforms")
         XCTAssertNoThrow(
-            try ShaderSourceExtractor.extractBody(named: "DCRNormalBlendBody", from: nbBody.sourceMetalFile)
+            try ShaderSourceExtractor.extractBody(
+                named: "DCRNormalBlendBody",
+                from: nbBody.sourceText,
+                sourceLabel: nbBody.sourceLabel
+            )
         )
 
         // LUT3D — needs parsed cube data to construct.
@@ -303,32 +299,50 @@ final class ShaderSourceExtractorTests: XCTestCase {
         XCTAssertEqual(lutBody.functionName, "DCRLUT3DBody")
         XCTAssertEqual(lutBody.uniformStructName, "LUT3DUniforms")
         XCTAssertNoThrow(
-            try ShaderSourceExtractor.extractBody(named: "DCRLUT3DBody", from: lutBody.sourceMetalFile)
+            try ShaderSourceExtractor.extractBody(
+                named: "DCRLUT3DBody",
+                from: lutBody.sourceText,
+                sourceLabel: lutBody.sourceLabel
+            )
         )
     }
 
-    /// Round-trip via the on-disk overload — write a temporary
-    /// file, read its body back. Confirms the disk-path and
-    /// source-path overloads produce identical results.
-    func testDiskAndSourceOverloadsAgree() throws {
-        let source = """
-        // @dcr:body-begin RoundTrip
-        inline int RoundTrip() { return 7; }
-        // @dcr:body-end
-        """
-        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("dcr-test-roundtrip.metal")
-        try source.write(to: tmp, atomically: true, encoding: .utf8)
-        defer { try? FileManager.default.removeItem(at: tmp) }
+    // MARK: - BundledShaderSources
 
-        let inMem = try ShaderSourceExtractor.extractBody(
-            named: "RoundTrip",
-            from: source
-        )
-        let onDisk = try ShaderSourceExtractor.extractBody(
-            named: "RoundTrip",
-            from: tmp
-        )
-        XCTAssertEqual(inMem, onDisk)
+    /// Every bundled source string contains both the `@dcr:body-end`
+    /// marker and a `struct <Name>Uniforms` declaration. Serves as
+    /// a regeneration tripwire — if `Scripts/generate-bundled-
+    /// shaders.sh` gets out of sync with the `.metal` files (e.g.
+    /// someone edits a body without rerunning the generator) this
+    /// test catches it.
+    func testAllBundledSourcesContainExpectedMarkers() {
+        let sources: [(name: String, text: String)] = [
+            ("exposureFilter",     BundledShaderSources.exposureFilter),
+            ("contrastFilter",     BundledShaderSources.contrastFilter),
+            ("blacksFilter",       BundledShaderSources.blacksFilter),
+            ("whitesFilter",       BundledShaderSources.whitesFilter),
+            ("sharpenFilter",      BundledShaderSources.sharpenFilter),
+            ("saturationFilter",   BundledShaderSources.saturationFilter),
+            ("vibranceFilter",     BundledShaderSources.vibranceFilter),
+            ("whiteBalanceFilter", BundledShaderSources.whiteBalanceFilter),
+            ("ccdFilter",          BundledShaderSources.ccdFilter),
+            ("filmGrainFilter",    BundledShaderSources.filmGrainFilter),
+            ("lut3DFilter",        BundledShaderSources.lut3DFilter),
+            ("normalBlendFilter",  BundledShaderSources.normalBlendFilter),
+        ]
+        for (name, text) in sources {
+            XCTAssertTrue(
+                text.contains("@dcr:body-begin"),
+                "\(name) missing @dcr:body-begin marker"
+            )
+            XCTAssertTrue(
+                text.contains("@dcr:body-end"),
+                "\(name) missing @dcr:body-end marker"
+            )
+            XCTAssertTrue(
+                text.contains("struct "),
+                "\(name) missing uniform struct declaration"
+            )
+        }
     }
 }

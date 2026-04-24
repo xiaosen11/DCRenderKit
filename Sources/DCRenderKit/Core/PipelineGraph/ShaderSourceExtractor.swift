@@ -2,18 +2,20 @@
 //  ShaderSourceExtractor.swift
 //  DCRenderKit
 //
-//  Runtime text extractor for the Phase-3 compute backend. Reads a
-//  `.metal` source file and pulls out the two fragments the uber
-//  kernel needs to splice in for every participating filter:
+//  Text extractor for the Phase-3 compute backend. Given a `.metal`
+//  source string, pulls out the two fragments the uber kernel needs
+//  to splice in for every participating filter:
 //
 //    1. The uniform `struct` declaration (pattern-matched).
 //    2. The inline body function wrapped by the marker pair
 //       `// @dcr:body-begin <name>` / `// @dcr:body-end`.
 //
-//  Keeping this as a Swift-side tool (rather than a Metal pre-
-//  processor) means we can generate uber kernels at runtime without
-//  a toolchain pre-pass; the cost is one file read per filter on
-//  first use, cached by the compute backend.
+//  Operates purely on in-memory strings — the SDK never reads
+//  `.metal` files at runtime. Source text is supplied by
+//  `FusionBody.sourceText`, which for built-in filters is baked
+//  into the binary via `BundledShaderSources` and for third-party
+//  filters is loaded at descriptor-construction time by the
+//  consumer.
 //
 //  Design note: the body marker is a paired line comment, not an
 //  attribute, because Metal shaders don't surface custom attributes
@@ -24,71 +26,61 @@
 
 import Foundation
 
-/// Extract body functions and uniform structs from `.metal`
-/// sources using the Phase-3 marker convention. Every call reads
-/// the file from disk; callers that invoke repeatedly should
-/// cache the returned text. The compute backend does that
-/// caching, so production code never re-reads the same file.
+/// Extract body functions and uniform structs from a `.metal`
+/// source string using the Phase-3 marker convention.
 @available(iOS 18.0, *)
 internal enum ShaderSourceExtractor {
 
-    /// Errors surfaced to callers. Each variant is recoverable at
-    /// the backend layer — the uber-kernel builder falls back to
-    /// compiling per-filter kernels instead.
+    /// Errors surfaced to callers. Every variant carries the
+    /// diagnostic `sourceLabel` (typically the original `.metal`
+    /// file name, e.g. `"ExposureFilter.metal"`) so error
+    /// messages point at the offending shader.
     internal enum ExtractionError: Error, CustomStringConvertible {
-        case fileUnreadable(URL, underlying: Error)
-        case bodyMarkerNotFound(functionName: String, file: URL)
-        case unmatchedBodyMarkers(file: URL)
-        case uniformStructNotFound(structName: String, file: URL)
-        case uniformStructUnterminated(structName: String, file: URL)
+        case bodyMarkerNotFound(functionName: String, sourceLabel: String)
+        case unmatchedBodyMarkers(sourceLabel: String)
+        case uniformStructNotFound(structName: String, sourceLabel: String)
+        case uniformStructUnterminated(structName: String, sourceLabel: String)
 
         var description: String {
             switch self {
-            case .fileUnreadable(let url, let e):
-                return "ShaderSourceExtractor: cannot read \(url.lastPathComponent) — \(e)"
-            case .bodyMarkerNotFound(let name, let url):
-                return "ShaderSourceExtractor: no `// @dcr:body-begin \(name)` marker in \(url.lastPathComponent)"
-            case .unmatchedBodyMarkers(let url):
-                return "ShaderSourceExtractor: body-begin marker is not closed by a body-end marker in \(url.lastPathComponent)"
-            case .uniformStructNotFound(let name, let url):
-                return "ShaderSourceExtractor: no `struct \(name)` declaration in \(url.lastPathComponent)"
-            case .uniformStructUnterminated(let name, let url):
-                return "ShaderSourceExtractor: `struct \(name)` in \(url.lastPathComponent) never hits a matching closing `};`"
+            case .bodyMarkerNotFound(let name, let label):
+                return "ShaderSourceExtractor: no `// @dcr:body-begin \(name)` marker in \(label)"
+            case .unmatchedBodyMarkers(let label):
+                return "ShaderSourceExtractor: body-begin marker is not closed by a body-end marker in \(label)"
+            case .uniformStructNotFound(let name, let label):
+                return "ShaderSourceExtractor: no `struct \(name)` declaration in \(label)"
+            case .uniformStructUnterminated(let name, let label):
+                return "ShaderSourceExtractor: `struct \(name)` in \(label) never hits a matching closing `};`"
             }
         }
     }
 
     // MARK: - Body function
 
-    /// Read `url` and return the inline body function wrapped by
+    /// Return the inline body function wrapped by
     /// `// @dcr:body-begin <functionName>` / `// @dcr:body-end`.
     ///
     /// The markers are matched by **name** — two separate body
-    /// functions in the same file (e.g. a future filter with two
+    /// functions in the same source (e.g. a future filter with two
     /// body variants) can coexist without interference. The
     /// returned text excludes both marker lines themselves; it
     /// starts at the first line after the begin marker and ends
     /// at the last line before the end marker.
     ///
-    /// A file containing a begin marker but no end marker is a
+    /// A source containing a begin marker but no end marker is a
     /// programmer error (the shader is malformed); we surface it
     /// as `.unmatchedBodyMarkers` rather than silently returning
     /// a truncated body.
-    static func extractBody(
-        named functionName: String,
-        from url: URL
-    ) throws -> String {
-        let source = try readSource(at: url)
-        return try extractBody(named: functionName, from: source, url: url)
-    }
-
-    /// Overload that operates on source text directly. Useful in
-    /// tests that want to build their fixtures inline, and in the
-    /// future when the compute backend caches `.metal` contents.
+    ///
+    /// - Parameters:
+    ///   - functionName: Body symbol to extract.
+    ///   - source: Full `.metal` source text.
+    ///   - sourceLabel: Diagnostic identifier, e.g.
+    ///     `"ExposureFilter.metal"`.
     static func extractBody(
         named functionName: String,
         from source: String,
-        url: URL = URL(fileURLWithPath: "<in-memory>")
+        sourceLabel: String = "<in-memory>"
     ) throws -> String {
         let lines = source.split(separator: "\n", omittingEmptySubsequences: false)
         let beginMarker = "@dcr:body-begin"
@@ -106,7 +98,7 @@ internal enum ShaderSourceExtractor {
         guard let start = beginIndex else {
             throw ExtractionError.bodyMarkerNotFound(
                 functionName: functionName,
-                file: url
+                sourceLabel: sourceLabel
             )
         }
 
@@ -117,7 +109,7 @@ internal enum ShaderSourceExtractor {
         }
 
         guard let end = endIndex else {
-            throw ExtractionError.unmatchedBodyMarkers(file: url)
+            throw ExtractionError.unmatchedBodyMarkers(sourceLabel: sourceLabel)
         }
 
         // Slice between the markers, exclusive of both marker lines.
@@ -127,27 +119,20 @@ internal enum ShaderSourceExtractor {
 
     // MARK: - Uniform struct
 
-    /// Read `url` and return the full text of `struct <structName>
-    /// { ... };` by pattern match + brace-balance scan. Comments
-    /// and whitespace inside the struct are preserved verbatim so
-    /// the emitted uber-kernel source stays human-readable.
-    static func extractUniformStruct(
-        named structName: String,
-        from url: URL
-    ) throws -> String {
-        let source = try readSource(at: url)
-        return try extractUniformStruct(
-            named: structName,
-            from: source,
-            url: url
-        )
-    }
-
-    /// Source-text overload (see `extractBody` rationale).
+    /// Return the full text of `struct <structName> { ... };` by
+    /// pattern match + brace-balance scan. Comments and whitespace
+    /// inside the struct are preserved verbatim so the emitted
+    /// uber-kernel source stays human-readable.
+    ///
+    /// - Parameters:
+    ///   - structName: Metal `struct` name to extract.
+    ///   - source: Full `.metal` source text.
+    ///   - sourceLabel: Diagnostic identifier, e.g.
+    ///     `"ExposureFilter.metal"`.
     static func extractUniformStruct(
         named structName: String,
         from source: String,
-        url: URL = URL(fileURLWithPath: "<in-memory>")
+        sourceLabel: String = "<in-memory>"
     ) throws -> String {
         // Find `struct <structName>` — optionally followed by
         // whitespace before the opening brace. We accept any
@@ -156,7 +141,7 @@ internal enum ShaderSourceExtractor {
         guard let structRange = source.range(of: "struct \(structName)") else {
             throw ExtractionError.uniformStructNotFound(
                 structName: structName,
-                file: url
+                sourceLabel: sourceLabel
             )
         }
 
@@ -183,7 +168,7 @@ internal enum ShaderSourceExtractor {
                     guard after < source.endIndex, source[after] == ";" else {
                         throw ExtractionError.uniformStructUnterminated(
                             structName: structName,
-                            file: url
+                            sourceLabel: sourceLabel
                         )
                     }
                     let closingSemicolonEnd = source.index(after: after)
@@ -195,22 +180,11 @@ internal enum ShaderSourceExtractor {
 
         throw ExtractionError.uniformStructUnterminated(
             structName: structName,
-            file: url
+            sourceLabel: sourceLabel
         )
     }
 
     // MARK: - Private
-
-    /// Read a `.metal` file as UTF-8 text. Wraps any I/O failure
-    /// into the extractor's typed error so callers don't have to
-    /// switch on `Foundation.CocoaError`.
-    private static func readSource(at url: URL) throws -> String {
-        do {
-            return try String(contentsOf: url, encoding: .utf8)
-        } catch {
-            throw ExtractionError.fileUnreadable(url, underlying: error)
-        }
-    }
 
     /// Parse the whitespace-delimited token following `marker` on
     /// `line`. Returns `nil` if no token appears after the marker.

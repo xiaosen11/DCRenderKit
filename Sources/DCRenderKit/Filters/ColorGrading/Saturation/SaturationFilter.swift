@@ -91,7 +91,8 @@ public struct SaturationFilter: FilterProtocol {
             uniformStructName: "SaturationUniforms",
             kind: .pixelLocal,
             wantsLinearInput: true,
-            sourceMetalFile: FusionBodyDescriptor.bundledSDKMetalURL("SaturationFilter")
+            sourceText: BundledShaderSources.saturationFilter,
+            sourceLabel: "SaturationFilter.metal"
         )
     }
 }

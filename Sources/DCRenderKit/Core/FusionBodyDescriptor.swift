@@ -50,11 +50,11 @@ public struct FusionBodyDescriptor: Sendable {
     ///
     /// - Parameters:
     ///   - functionName: The Metal function symbol to splice. Must
-    ///     match a `// @dcr:body-begin <name>` marker in the
-    ///     referenced `.metal` file.
+    ///     match a `// @dcr:body-begin <name>` marker inside
+    ///     `sourceText`.
     ///   - uniformStructName: Name of the Metal `struct` the body
     ///     function expects as its `constant` argument. The struct
-    ///     must be declared in the same `.metal` file.
+    ///     must be declared in the same source text.
     ///   - kind: Whether the body reads only its own pixel or a
     ///     neighbourhood.
     ///   - wantsLinearInput: `true` if the body operates on linear
@@ -62,15 +62,26 @@ public struct FusionBodyDescriptor: Sendable {
     ///     gamma-encoded values. Drives the compiler's decision to
     ///     wrap the body with sRGB (de)linearisation when the
     ///     pipeline's color space differs.
-    ///   - sourceMetalFile: URL of the `.metal` file carrying the
-    ///     body function. Typically
-    ///     `Bundle.module.url(forResource: "MyFilter", withExtension: "metal")`.
+    ///   - sourceText: Complete verbatim source of the `.metal`
+    ///     file declaring the body function and uniform struct.
+    ///     The compiler splices `functionName`'s body and the
+    ///     `uniformStructName` struct out of this text at dispatch
+    ///     time; the file is never read from disk at runtime.
+    ///     SDK-built-in filters pass bundled strings from
+    ///     `BundledShaderSources`; third-party filters load their
+    ///     own `.metal` file via `Bundle(for:).url(forResource:...)`
+    ///     + `String(contentsOf:)` at descriptor-construction time.
+    ///   - sourceLabel: Human-readable identifier of the source —
+    ///     typically the original `.metal` file's name including
+    ///     extension (e.g. `"ExposureFilter.metal"`). Used only in
+    ///     diagnostic messages from `ShaderSourceExtractor`.
     public init(
         functionName: String,
         uniformStructName: String,
         kind: FusionNodeKind,
         wantsLinearInput: Bool,
-        sourceMetalFile: URL,
+        sourceText: String,
+        sourceLabel: String,
         signatureShape: FusionBodySignatureShape = .pixelLocalOnly
     ) {
         self.body = FusionBody(
@@ -78,7 +89,8 @@ public struct FusionBodyDescriptor: Sendable {
             uniformStructName: uniformStructName,
             kind: kind,
             wantsLinearInput: wantsLinearInput,
-            sourceMetalFile: sourceMetalFile,
+            sourceText: sourceText,
+            sourceLabel: sourceLabel,
             signatureShape: signatureShape
         )
     }
@@ -96,36 +108,6 @@ public struct FusionBodyDescriptor: Sendable {
         self.body = body
     }
 
-    // MARK: - Internal helpers for SDK-built-in filters
-
-    /// Resolves the `.metal` source URL for an SDK-built-in filter
-    /// inside `Bundle.module`. This is the standard `sourceMetalFile`
-    /// used by every built-in filter's `fusionBody`.
-    ///
-    /// The SDK's `Package.swift` ships every `.metal` file under
-    /// `Shaders/` as a bundled resource (`.process("Shaders")`), so a
-    /// missing URL here is an internal bundling error, not a runtime
-    /// failure the consumer can recover from. The method logs a fault
-    /// and returns a placeholder URL in Release, and traps in Debug
-    /// via ``Invariant/unreachable(_:fallback:category:file:line:)``.
-    /// Third-party filter authors should use their own
-    /// `Bundle(for:)` / `Bundle.module` lookup and must not rely on
-    /// this helper.
-    ///
-    /// - Parameter baseName: The `.metal` file name without its
-    ///   extension, e.g. `"ExposureFilter"`.
-    internal static func bundledSDKMetalURL(_ baseName: String) -> URL {
-        guard let url = Bundle.module.url(
-            forResource: baseName,
-            withExtension: "metal"
-        ) else {
-            return Invariant.unreachable(
-                "Bundle.module missing \(baseName).metal — SDK resource bundling broken",
-                fallback: URL(fileURLWithPath: "/dev/null/\(baseName).metal")
-            )
-        }
-        return url
-    }
 }
 
 /// Internal value type carrying the actual body-function metadata.
@@ -137,7 +119,15 @@ internal struct FusionBody: Sendable, Hashable {
     let uniformStructName: String
     let kind: FusionNodeKind
     let wantsLinearInput: Bool
-    let sourceMetalFile: URL
+    /// Complete verbatim `.metal` source text containing both the
+    /// body function and its uniform struct. Baked into the SDK
+    /// binary at build time — see `BundledShaderSources` — so the
+    /// runtime compiler never reads `.metal` files from disk.
+    let sourceText: String
+    /// Human-readable identifier of the source (typically the
+    /// `.metal` file's name including extension). Used by
+    /// `ShaderSourceExtractor` in diagnostic messages.
+    let sourceLabel: String
     let signatureShape: FusionBodySignatureShape
 }
 

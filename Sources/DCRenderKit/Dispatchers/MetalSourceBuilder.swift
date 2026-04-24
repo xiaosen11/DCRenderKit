@@ -183,17 +183,19 @@ internal enum MetalSourceBuilder {
         }
 
         // Extract the uniform struct and body-function texts from
-        // the filter's production `.metal` file.
+        // the filter's bundled source string.
         let uniformStructText: String
         let bodyText: String
         do {
             uniformStructText = try ShaderSourceExtractor.extractUniformStruct(
                 named: body.uniformStructName,
-                from: body.sourceMetalFile
+                from: body.sourceText,
+                sourceLabel: body.sourceLabel
             )
             bodyText = try ShaderSourceExtractor.extractBody(
                 named: body.functionName,
-                from: body.sourceMetalFile
+                from: body.sourceText,
+                sourceLabel: body.sourceLabel
             )
         } catch {
             throw BuildError.extractionFailed(error)
@@ -209,10 +211,10 @@ internal enum MetalSourceBuilder {
         // ── Injected helpers ────────────────────────────────────────
         \(joinedHelpers)
 
-        // ── Filter uniform struct (from \(body.sourceMetalFile.lastPathComponent)) ──
+        // ── Filter uniform struct (from \(body.sourceLabel)) ──
         \(uniformStructText)
 
-        // ── Filter body (from \(body.sourceMetalFile.lastPathComponent)) ──
+        // ── Filter body (from \(body.sourceLabel)) ──
         \(bodyText)
 
         // ── Uber kernel ────────────────────────────────────────────
@@ -256,10 +258,10 @@ internal enum MetalSourceBuilder {
         // ── Injected helpers ────────────────────────────────────────
         \(helpers)
 
-        // ── Filter uniform struct (from \(body.sourceMetalFile.lastPathComponent)) ──
+        // ── Filter uniform struct (from \(body.sourceLabel)) ──
         \(uniformStructText)
 
-        // ── Filter body (from \(body.sourceMetalFile.lastPathComponent)) ──
+        // ── Filter body (from \(body.sourceLabel)) ──
         \(bodyText)
 
         // ── Uber kernel (pixelLocalWithLUT3D) ──────────────────────
@@ -305,10 +307,10 @@ internal enum MetalSourceBuilder {
         // ── Injected helpers ────────────────────────────────────────
         \(helpers)
 
-        // ── Filter uniform struct (from \(body.sourceMetalFile.lastPathComponent)) ──
+        // ── Filter uniform struct (from \(body.sourceLabel)) ──
         \(uniformStructText)
 
-        // ── Filter body (from \(body.sourceMetalFile.lastPathComponent)) ──
+        // ── Filter body (from \(body.sourceLabel)) ──
         \(bodyText)
 
         // ── Uber kernel (pixelLocalWithOverlay) ────────────────────
@@ -354,10 +356,10 @@ internal enum MetalSourceBuilder {
         // ── Injected helpers ────────────────────────────────────────
         \(helpers)
 
-        // ── Filter uniform struct (from \(body.sourceMetalFile.lastPathComponent)) ──
+        // ── Filter uniform struct (from \(body.sourceLabel)) ──
         \(uniformStructText)
 
-        // ── Filter body (from \(body.sourceMetalFile.lastPathComponent)) ──
+        // ── Filter body (from \(body.sourceLabel)) ──
         \(bodyText)
 
         // ── Uber kernel (neighborReadWithSource) ───────────────────
@@ -400,11 +402,13 @@ internal enum MetalSourceBuilder {
         do {
             uniformStructText = try ShaderSourceExtractor.extractUniformStruct(
                 named: body.uniformStructName,
-                from: body.sourceMetalFile
+                from: body.sourceText,
+                sourceLabel: body.sourceLabel
             )
             bodyText = try ShaderSourceExtractor.extractBody(
                 named: body.functionName,
-                from: body.sourceMetalFile
+                from: body.sourceText,
+                sourceLabel: body.sourceLabel
             )
         } catch {
             throw BuildError.extractionFailed(error)
@@ -466,7 +470,8 @@ internal enum MetalSourceBuilder {
             do {
                 let text = try ShaderSourceExtractor.extractUniformStruct(
                     named: member.body.uniformStructName,
-                    from: member.body.sourceMetalFile
+                    from: member.body.sourceText,
+                    sourceLabel: member.body.sourceLabel
                 )
                 uniformStructTexts.append(text)
             } catch {
@@ -484,7 +489,8 @@ internal enum MetalSourceBuilder {
             do {
                 let text = try ShaderSourceExtractor.extractBody(
                     named: member.body.functionName,
-                    from: member.body.sourceMetalFile
+                    from: member.body.sourceText,
+                    sourceLabel: member.body.sourceLabel
                 )
                 bodyTexts.append(text)
             } catch {

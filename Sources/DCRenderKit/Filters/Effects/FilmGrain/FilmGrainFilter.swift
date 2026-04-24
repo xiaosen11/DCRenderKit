@@ -108,7 +108,8 @@ public struct FilmGrainFilter: FilterProtocol {
             uniformStructName: "FilmGrainUniforms",
             kind: .neighborRead(radius: 16),
             wantsLinearInput: false,
-            sourceMetalFile: FusionBodyDescriptor.bundledSDKMetalURL("FilmGrainFilter"),
+            sourceText: BundledShaderSources.filmGrainFilter,
+            sourceLabel: "FilmGrainFilter.metal",
             signatureShape: .neighborReadWithSource
         )
     }

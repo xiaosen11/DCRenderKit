@@ -122,7 +122,8 @@ public struct ContrastFilter: FilterProtocol {
             uniformStructName: "ContrastUniforms",
             kind: .pixelLocal,
             wantsLinearInput: false,
-            sourceMetalFile: FusionBodyDescriptor.bundledSDKMetalURL("ContrastFilter")
+            sourceText: BundledShaderSources.contrastFilter,
+            sourceLabel: "ContrastFilter.metal"
         )
     }
 }

@@ -107,7 +107,8 @@ public struct VibranceFilter: FilterProtocol {
             uniformStructName: "VibranceUniforms",
             kind: .pixelLocal,
             wantsLinearInput: true,
-            sourceMetalFile: FusionBodyDescriptor.bundledSDKMetalURL("VibranceFilter")
+            sourceText: BundledShaderSources.vibranceFilter,
+            sourceLabel: "VibranceFilter.metal"
         )
     }
 }

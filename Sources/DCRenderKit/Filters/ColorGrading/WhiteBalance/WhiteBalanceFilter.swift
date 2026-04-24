@@ -100,7 +100,8 @@ public struct WhiteBalanceFilter: FilterProtocol {
             uniformStructName: "WhiteBalanceUniforms",
             kind: .pixelLocal,
             wantsLinearInput: false,
-            sourceMetalFile: FusionBodyDescriptor.bundledSDKMetalURL("WhiteBalanceFilter")
+            sourceText: BundledShaderSources.whiteBalanceFilter,
+            sourceLabel: "WhiteBalanceFilter.metal"
         )
     }
 }

@@ -155,7 +155,8 @@ public struct CCDFilter: FilterProtocol {
             uniformStructName: "CCDUniforms",
             kind: .neighborRead(radius: 32),
             wantsLinearInput: false,
-            sourceMetalFile: FusionBodyDescriptor.bundledSDKMetalURL("CCDFilter"),
+            sourceText: BundledShaderSources.ccdFilter,
+            sourceLabel: "CCDFilter.metal",
             signatureShape: .neighborReadWithSource
         )
     }

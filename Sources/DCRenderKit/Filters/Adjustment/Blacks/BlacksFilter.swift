@@ -106,7 +106,8 @@ public struct BlacksFilter: FilterProtocol {
             uniformStructName: "BlacksUniforms",
             kind: .pixelLocal,
             wantsLinearInput: false,
-            sourceMetalFile: FusionBodyDescriptor.bundledSDKMetalURL("BlacksFilter")
+            sourceText: BundledShaderSources.blacksFilter,
+            sourceLabel: "BlacksFilter.metal"
         )
     }
 }

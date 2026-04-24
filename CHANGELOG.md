@@ -75,6 +75,19 @@ until `v1.0.0`. Each breaking change is flagged explicitly below.
 
 ### Changed (breaking)
 
+- **`FusionBodyDescriptor.init` takes `sourceText: String` +
+  `sourceLabel: String` instead of `sourceMetalFile: URL`** (Phase 5
+  bundling fix). Xcode's SPM integration for iOS compiles `.metal`
+  resources into the app's default metallib but does **not** copy the
+  raw source files into the resource bundle, so the Phase-1 URL-based
+  contract (`Bundle.module.url(forResource:withExtension:)`) worked
+  on macOS `swift test` but trapped at launch on iPhone with the
+  compiler path enabled. SDK-built-in filters now reference bundled
+  source strings from the new `BundledShaderSources` enum (regenerated
+  from the `.metal` files via `Scripts/generate-bundled-shaders.sh`).
+  Third-party filters adopting `FusionBodyDescriptor` must load their
+  own `.metal` file content into a `String` at descriptor-
+  construction time. No runtime file I/O is performed by the SDK.
 - **Standalone `DCR<Name>Filter` kernels retired** (Phase 5 step 5.5).
   The twelve built-in single-pass filters — Exposure / Contrast /
   Blacks / Whites / Saturation / Vibrance / WhiteBalance / Sharpen /

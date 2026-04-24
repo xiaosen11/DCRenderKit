@@ -124,7 +124,8 @@ public struct ExposureFilter: FilterProtocol {
             uniformStructName: "ExposureUniforms",
             kind: .pixelLocal,
             wantsLinearInput: false,
-            sourceMetalFile: FusionBodyDescriptor.bundledSDKMetalURL("ExposureFilter")
+            sourceText: BundledShaderSources.exposureFilter,
+            sourceLabel: "ExposureFilter.metal"
         )
     }
 }

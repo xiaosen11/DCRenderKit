@@ -106,7 +106,8 @@ public struct WhitesFilter: FilterProtocol {
             uniformStructName: "WhitesUniforms",
             kind: .pixelLocal,
             wantsLinearInput: false,
-            sourceMetalFile: FusionBodyDescriptor.bundledSDKMetalURL("WhitesFilter")
+            sourceText: BundledShaderSources.whitesFilter,
+            sourceLabel: "WhitesFilter.metal"
         )
     }
 }
