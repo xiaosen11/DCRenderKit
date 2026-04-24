@@ -53,30 +53,20 @@ inline float DCRSRGBGammaToLinear(float c) {
                           : pow((cc + 0.055f) / 1.055f, 2.4f);
 }
 
-kernel void DCRBlacksFilter(
-    texture2d<half, access::write> output [[texture(0)]],
-    texture2d<half, access::read>  input  [[texture(1)]],
-    constant BlacksUniforms& u            [[buffer(0)]],
-    uint2 gid [[thread_position_in_grid]])
-{
-    if (gid.x >= output.get_width() || gid.y >= output.get_height()) {
-        return;
-    }
-
-    const half4 original = input.read(gid);
-    half3 color = original.rgb;
+// @dcr:body-begin DCRBlacksBody
+inline half3 DCRBlacksBody(half3 rgbIn, constant BlacksUniforms& u) {
+    half3 color = rgbIn;
 
     const float blacks = clamp(u.blacks, -1.0f, 1.0f);
     const bool isLinear = (u.isLinearSpace != 0u);
 
+    if (abs(blacks) <= 0.001f) {
+        return color;
+    }
+
     // Reinhard toe scale. slider = 0 ⇒ ε = 1 ⇒ identity.
     // slider > 0 ⇒ ε < 1 ⇒ shadow lift; slider < 0 ⇒ ε > 1 ⇒ shadow crush.
     const float eps = exp2(-blacks * 1.0f);
-
-    if (abs(blacks) <= 0.001f) {
-        output.write(original, gid);
-        return;
-    }
 
     for (int ch = 0; ch < 3; ch++) {
         float c = float(color[ch]);
@@ -92,5 +82,19 @@ kernel void DCRBlacksFilter(
         color[ch] = half(isLinear ? DCRSRGBGammaToLinear(y_clamped) : y_clamped);
     }
 
-    output.write(half4(color, original.a), gid);
+    return color;
+}
+// @dcr:body-end
+
+kernel void DCRBlacksFilter(
+    texture2d<half, access::write> output [[texture(0)]],
+    texture2d<half, access::read>  input  [[texture(1)]],
+    constant BlacksUniforms& u            [[buffer(0)]],
+    uint2 gid [[thread_position_in_grid]])
+{
+    if (gid.x >= output.get_width() || gid.y >= output.get_height()) {
+        return;
+    }
+    const half4 original = input.read(gid);
+    output.write(half4(DCRBlacksBody(original.rgb, u), original.a), gid);
 }

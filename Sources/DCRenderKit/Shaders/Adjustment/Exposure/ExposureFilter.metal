@@ -69,18 +69,9 @@ inline float DCRSRGBGammaToLinear(float c) {
                           : pow((cc + 0.055f) / 1.055f, 2.4f);
 }
 
-kernel void DCRExposureFilter(
-    texture2d<half, access::write> output [[texture(0)]],
-    texture2d<half, access::read>  input  [[texture(1)]],
-    constant ExposureUniforms& u          [[buffer(0)]],
-    uint2 gid [[thread_position_in_grid]])
-{
-    if (gid.x >= output.get_width() || gid.y >= output.get_height()) {
-        return;
-    }
-
-    const half4 original = input.read(gid);
-    half3 color = original.rgb;
+// @dcr:body-begin DCRExposureBody
+inline half3 DCRExposureBody(half3 rgbIn, constant ExposureUniforms& u) {
+    half3 color = rgbIn;
 
     // Product compression: slider ±1 maps to 70% of raw fit magnitude.
     const float exposure = clamp(u.exposure, -1.0f, 1.0f) * 0.7f;
@@ -131,5 +122,19 @@ kernel void DCRExposureFilter(
         }
     }
 
-    output.write(half4(color, original.a), gid);
+    return color;
+}
+// @dcr:body-end
+
+kernel void DCRExposureFilter(
+    texture2d<half, access::write> output [[texture(0)]],
+    texture2d<half, access::read>  input  [[texture(1)]],
+    constant ExposureUniforms& u          [[buffer(0)]],
+    uint2 gid [[thread_position_in_grid]])
+{
+    if (gid.x >= output.get_width() || gid.y >= output.get_height()) {
+        return;
+    }
+    const half4 original = input.read(gid);
+    output.write(half4(DCRExposureBody(original.rgb, u), original.a), gid);
 }

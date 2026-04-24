@@ -227,6 +227,59 @@ final class ShaderSourceExtractorTests: XCTestCase {
         }
     }
 
+    // MARK: - Integration against production shaders
+
+    /// Sanity check: for every SDK built-in filter that has
+    /// adopted the Phase-3 body-function convention, the
+    /// extractor finds both the body and the uniform struct in
+    /// its production `.metal` file. Filters that are still in
+    /// flight (FilmGrain / CCD / LUT3D / NormalBlend / Sharpen at
+    /// this step) are excluded from the list.
+    func testProductionPixelLocalShadersExposeBodiesAndUniforms() throws {
+        let pixelLocalFiltersInFlight: [(filter: any FilterProtocol, functionName: String, structName: String)] = [
+            (ExposureFilter(),     "DCRExposureBody",     "ExposureUniforms"),
+            (ContrastFilter(),     "DCRContrastBody",     "ContrastUniforms"),
+            (BlacksFilter(),       "DCRBlacksBody",       "BlacksUniforms"),
+            (WhitesFilter(),       "DCRWhitesBody",       "WhitesUniforms"),
+            (SaturationFilter(),   "DCRSaturationBody",   "SaturationUniforms"),
+            (VibranceFilter(),     "DCRVibranceBody",     "VibranceUniforms"),
+            (WhiteBalanceFilter(), "DCRWhiteBalanceBody", "WhiteBalanceUniforms"),
+        ]
+
+        for (filter, functionName, structName) in pixelLocalFiltersInFlight {
+            guard let body = filter.fusionBody.body else {
+                XCTFail("\(type(of: filter)) fusionBody missing in-flight metadata")
+                continue
+            }
+            XCTAssertEqual(
+                body.functionName, functionName,
+                "\(type(of: filter)) descriptor's functionName should match the production marker"
+            )
+            XCTAssertEqual(
+                body.uniformStructName, structName,
+                "\(type(of: filter)) descriptor's uniformStructName should match the shader struct"
+            )
+
+            // Body extraction must succeed on the real file.
+            XCTAssertNoThrow(
+                try ShaderSourceExtractor.extractBody(
+                    named: functionName,
+                    from: body.sourceMetalFile
+                ),
+                "Body \(functionName) not extractable from \(body.sourceMetalFile.lastPathComponent)"
+            )
+
+            // Uniform struct extraction must also succeed.
+            XCTAssertNoThrow(
+                try ShaderSourceExtractor.extractUniformStruct(
+                    named: structName,
+                    from: body.sourceMetalFile
+                ),
+                "Struct \(structName) not extractable from \(body.sourceMetalFile.lastPathComponent)"
+            )
+        }
+    }
+
     /// Round-trip via the on-disk overload — write a temporary
     /// file, read its body back. Confirms the disk-path and
     /// source-path overloads produce identical results.

@@ -60,18 +60,9 @@ inline float DCRSRGBGammaToLinear(float c) {
                           : pow((cc + 0.055f) / 1.055f, 2.4f);
 }
 
-kernel void DCRContrastFilter(
-    texture2d<half, access::write> output [[texture(0)]],
-    texture2d<half, access::read>  input  [[texture(1)]],
-    constant ContrastUniforms& u          [[buffer(0)]],
-    uint2 gid [[thread_position_in_grid]])
-{
-    if (gid.x >= output.get_width() || gid.y >= output.get_height()) {
-        return;
-    }
-
-    const half4 original = input.read(gid);
-    half3 color = original.rgb;
+// @dcr:body-begin DCRContrastBody
+inline half3 DCRContrastBody(half3 rgbIn, constant ContrastUniforms& u) {
+    half3 color = rgbIn;
 
     const float contrast = clamp(u.contrast, -1.0f, 1.0f);
     const bool isLinear = (u.isLinearSpace != 0u);
@@ -102,5 +93,19 @@ kernel void DCRContrastFilter(
         color[ch] = half(isLinear ? DCRSRGBGammaToLinear(y_clamped) : y_clamped);
     }
 
-    output.write(half4(color, original.a), gid);
+    return color;
+}
+// @dcr:body-end
+
+kernel void DCRContrastFilter(
+    texture2d<half, access::write> output [[texture(0)]],
+    texture2d<half, access::read>  input  [[texture(1)]],
+    constant ContrastUniforms& u          [[buffer(0)]],
+    uint2 gid [[thread_position_in_grid]])
+{
+    if (gid.x >= output.get_width() || gid.y >= output.get_height()) {
+        return;
+    }
+    const half4 original = input.read(gid);
+    output.write(half4(DCRContrastBody(original.rgb, u), original.a), gid);
 }

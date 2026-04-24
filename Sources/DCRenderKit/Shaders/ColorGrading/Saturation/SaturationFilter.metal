@@ -110,21 +110,12 @@ struct SaturationUniforms {
     float saturation;
 };
 
-kernel void DCRSaturationFilter(
-    texture2d<half, access::write> output [[texture(0)]],
-    texture2d<half, access::read>  input  [[texture(1)]],
-    constant SaturationUniforms& u        [[buffer(0)]],
-    uint2 gid [[thread_position_in_grid]])
-{
-    if (gid.x >= output.get_width() || gid.y >= output.get_height()) {
-        return;
-    }
-
-    const half4 c = input.read(gid);
+// @dcr:body-begin DCRSaturationBody
+inline half3 DCRSaturationBody(half3 rgbIn, constant SaturationUniforms& u) {
     const float s = clamp(u.saturation, 0.0f, 2.0f);
 
     // linear sRGB → OKLCh
-    const float3 lab = DCRLinearSRGBToOKLab(float3(c.rgb));
+    const float3 lab = DCRLinearSRGBToOKLab(float3(rgbIn));
     float3 lch = DCROKLabToOKLCh(lab);
 
     // Uniform chroma scaling (Adobe-like saturation — no hue protect).
@@ -137,5 +128,19 @@ kernel void DCRSaturationFilter(
     const float3 lab_out = DCROKLChToOKLab(lch);
     const float3 rgb = DCROKLabToLinearSRGB(lab_out);
 
-    output.write(half4(half3(rgb), c.a), gid);
+    return half3(rgb);
+}
+// @dcr:body-end
+
+kernel void DCRSaturationFilter(
+    texture2d<half, access::write> output [[texture(0)]],
+    texture2d<half, access::read>  input  [[texture(1)]],
+    constant SaturationUniforms& u        [[buffer(0)]],
+    uint2 gid [[thread_position_in_grid]])
+{
+    if (gid.x >= output.get_width() || gid.y >= output.get_height()) {
+        return;
+    }
+    const half4 c = input.read(gid);
+    output.write(half4(DCRSaturationBody(c.rgb, u), c.a), gid);
 }
