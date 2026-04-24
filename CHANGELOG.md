@@ -114,6 +114,11 @@ until `v1.0.0`. Each breaking change is flagged explicitly below.
 
 ### Internal / docs
 
+- **GitHub Discussions guide** (`docs/discussions-guide.md`). Defines
+  the four-category layout (Q&A / Show-and-tell / Ideas / General),
+  posting / moderation conventions, and a one-time enablement
+  checklist for the repo owner. Complements CONTRIBUTING.md's "open
+  a Discussion for exploratory feature ideas" pointer.
 - **Project governance documents** (`SECURITY.md` at the repo root,
   `docs/maintainer-sop.md` under docs/). `SECURITY.md` scopes the
   security-relevant surface, defines a tiered response SLA, and
