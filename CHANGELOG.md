@@ -114,6 +114,14 @@ until `v1.0.0`. Each breaking change is flagged explicitly below.
 
 ### Internal / docs
 
+- **Project governance documents** (`SECURITY.md` at the repo root,
+  `docs/maintainer-sop.md` under docs/). `SECURITY.md` scopes the
+  security-relevant surface, defines a tiered response SLA, and
+  points reporters at GitHub's private-advisory form.
+  `docs/maintainer-sop.md` is the maintainer-facing playbook: PR
+  review checklist, release-cut sequence, breaking-change
+  registration rules, security-response workflow, and an issue-triage
+  baseline.
 - **Tier 3 filter contracts** formalised in `docs/contracts/` for
   Vibrance, Saturation, HighlightShadow, Clarity, SoftGlow. Each carries
   ≥ 6 measurable clauses with derivation and industry-reference fetched
