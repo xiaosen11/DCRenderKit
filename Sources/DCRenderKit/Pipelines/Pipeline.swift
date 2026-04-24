@@ -377,16 +377,34 @@ public final class Pipeline: @unchecked Sendable {
                 storageMode: .private
             ))
 
-            try ComputeDispatcher.dispatch(
-                kernel: kernel,
-                uniforms: filter.uniforms,
-                additionalInputs: filter.additionalInputs,
-                source: effectiveSource,
-                destination: destination,
-                commandBuffer: commandBuffer,
-                psoCache: psoCache,
-                uniformPool: uniformPool
-            )
+            // Phase-5 step 5.1: filters that expose a `fusionBody`
+            // descriptor dispatch through the compiler-driven
+            // ComputeBackend (runtime uber-kernel codegen). Filters
+            // without a descriptor (the `.unsupported` default — legacy
+            // third-party filters, etc.) fall through to the standalone
+            // kernel that `.compute(kernel:)` names. Built-in SDK
+            // filters all ship descriptors, so production now runs the
+            // codegen path by default; the parity gate in
+            // `LegacyParityTests` guarantees bit-close equivalence.
+            if filter.fusionBody.body != nil {
+                try dispatchThroughComputeBackend(
+                    filter: filter,
+                    source: effectiveSource,
+                    destination: destination,
+                    commandBuffer: commandBuffer
+                )
+            } else {
+                try ComputeDispatcher.dispatch(
+                    kernel: kernel,
+                    uniforms: filter.uniforms,
+                    additionalInputs: filter.additionalInputs,
+                    source: effectiveSource,
+                    destination: destination,
+                    commandBuffer: commandBuffer,
+                    psoCache: psoCache,
+                    uniformPool: uniformPool
+                )
+            }
 
             try filter.combinationAfter(commandBuffer: commandBuffer)
             return destination
@@ -405,6 +423,45 @@ public final class Pipeline: @unchecked Sendable {
                 reason: "modifier \(filter.modifier) is not supported in generic Pipeline step dispatch yet"
             ))
         }
+    }
+
+    /// Lower a single-pass filter to a one-node `PipelineGraph`, then
+    /// execute that node through `ComputeBackend`. Phase-5 step 5.1
+    /// introduced this path for filters that expose a `fusionBody`
+    /// descriptor; the codegen uber kernel replaces the filter's
+    /// production standalone kernel at dispatch time.
+    ///
+    /// This single-filter path does not yet run the optimiser — a one-
+    /// node graph has no cross-filter fusion opportunity. Multi-filter
+    /// fusion lands when Phase 5 rewrites `encode(into:)` to lower the
+    /// whole chain through `Lowering` + `Optimizer` at once (5.3).
+    private func dispatchThroughComputeBackend(
+        filter: any FilterProtocol,
+        source: MTLTexture,
+        destination: MTLTexture,
+        commandBuffer: MTLCommandBuffer
+    ) throws {
+        let sourceInfo = TextureInfo(
+            width: source.width,
+            height: source.height,
+            pixelFormat: source.pixelFormat
+        )
+        guard let graph = Lowering.lower([.single(filter)], source: sourceInfo),
+              let node = graph.nodes.first else {
+            throw PipelineError.filter(.invalidPassGraph(
+                filterName: String(describing: type(of: filter)),
+                reason: "lowering yielded no node for a single-pass filter with fusionBody"
+            ))
+        }
+
+        try ComputeBackend.execute(
+            node: node,
+            source: source,
+            destination: destination,
+            additionalInputs: filter.additionalInputs,
+            commandBuffer: commandBuffer,
+            uniformPool: uniformPool
+        )
     }
 
     private func executeMultiPass(
