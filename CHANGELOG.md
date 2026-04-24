@@ -123,6 +123,19 @@ until `v1.0.0`. Each breaking change is flagged explicitly below.
 
 ### Internal / docs
 
+- **DocC catalog + GitHub Pages deploy workflow** (#57 / #61).
+  `Sources/DCRenderKit/DCRenderKit.docc/` contains three articles:
+  `DCRenderKit.md` (landing page with full topic taxonomy),
+  `GettingStarted.md` (adoption walkthrough), and
+  `Architecture.md` (layered-model reference pointing at the full
+  `docs/architecture.md`). A new `docs` CI job on `main` builds
+  the catalog via `xcodebuild docbuild`, transforms the archive
+  for static hosting, and publishes to GitHub Pages. The
+  workflow runs only on `main` so PR CI stays fast; the public
+  site is a snapshot of the latest merged commit. Deliberately
+  no `swift-docc-plugin` dependency — the zero-external-
+  dependency rule applies to build-time plugins too. Local
+  preview is Xcode's Product → Build Documentation.
 - **Architecture narrative document**
   (`docs/architecture.md`, #58). Distils the "why" behind 13
   cross-cutting architectural decisions from session handoffs into

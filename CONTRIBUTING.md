@@ -148,6 +148,34 @@ Closes #42
 4. At least one reviewer approval required
 5. Squash and merge preferred
 
+## Documentation
+
+### Writing SwiftDoc
+
+Every `public` symbol needs a `///` doc comment. For filter
+structs, include a **`Model form justification`** block describing
+the algorithm choice (see `.claude/rules/filter-development.md`
+for the required 4-step selection gate).
+
+### Browsing the DocC catalog locally
+
+The SDK ships a DocC catalog at
+`Sources/DCRenderKit/DCRenderKit.docc/` with a curated landing
+page, a "Getting Started" article, and an architecture reference
+keyed off `docs/architecture.md`.
+
+To build it on your own machine (Xcode, since the SDK does not
+take a dependency on `swift-docc-plugin` by choice — the
+zero-external-dependency rule applies even to build-time plugins):
+
+1. Open `Package.swift` in Xcode 16+.
+2. Select the **DCRenderKit** scheme.
+3. **Product → Build Documentation** (⌃⇧⌘D).
+4. Xcode's Documentation Viewer opens with the compiled catalog.
+
+The CI workflow publishes the catalog to GitHub Pages on every
+merge to `main` — see `.github/workflows/ci.yml`'s `docs` job.
+
 ## Questions?
 
 Open a [Discussion](https://github.com/xiaosen11/DCRenderKit/discussions) — we're happy to help.

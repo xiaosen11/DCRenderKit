@@ -85,6 +85,65 @@ jobs:
             -configuration Debug
 
   # ═══════════════════════════════════════════════════════════════
+  # DocC → GitHub Pages
+  # ═══════════════════════════════════════════════════════════════
+  # Builds the DocC catalog (Sources/DCRenderKit/DCRenderKit.docc)
+  # via `xcodebuild docbuild` — we deliberately do not depend on
+  # swift-docc-plugin because the zero-external-dependency rule
+  # (see PackageManifestTests) extends to build-time plugins.
+  # `xcrun docc process-archive transform-for-static-hosting` bridges
+  # the generated .doccarchive into a static site that deploy-pages
+  # can serve.
+  #
+  # Only runs on main so PR CI stays fast; the published Pages site
+  # is therefore a snapshot of the latest merged commit.
+  docs:
+    name: DocC → GitHub Pages
+    runs-on: macos-15
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.app
+
+      - name: Build DocC archive
+        run: |
+          xcodebuild docbuild \
+            -scheme DCRenderKit \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath .derivedData \
+            -skipPackagePluginValidation
+
+      - name: Transform for static hosting
+        run: |
+          ARCHIVE=$(find .derivedData -name "DCRenderKit.doccarchive" -type d | head -1)
+          if [ -z "$ARCHIVE" ]; then
+            echo "::error::DocC archive not found under .derivedData"
+            exit 1
+          fi
+          mkdir -p docs-site
+          xcrun docc process-archive transform-for-static-hosting \
+            "$ARCHIVE" \
+            --hosting-base-path DCRenderKit \
+            --output-path ./docs-site
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./docs-site
+
+      - name: Deploy to Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  # ═══════════════════════════════════════════════════════════════
   # Source hygiene
   # ═══════════════════════════════════════════════════════════════
   # Enforces two rules human reviewers can miss:
