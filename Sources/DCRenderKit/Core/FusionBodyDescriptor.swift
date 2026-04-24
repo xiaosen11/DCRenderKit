@@ -70,14 +70,16 @@ public struct FusionBodyDescriptor: Sendable {
         uniformStructName: String,
         kind: FusionNodeKind,
         wantsLinearInput: Bool,
-        sourceMetalFile: URL
+        sourceMetalFile: URL,
+        signatureShape: FusionBodySignatureShape = .pixelLocalOnly
     ) {
         self.body = FusionBody(
             functionName: functionName,
             uniformStructName: uniformStructName,
             kind: kind,
             wantsLinearInput: wantsLinearInput,
-            sourceMetalFile: sourceMetalFile
+            sourceMetalFile: sourceMetalFile,
+            signatureShape: signatureShape
         )
     }
 
@@ -136,6 +138,7 @@ internal struct FusionBody: Sendable, Hashable {
     let kind: FusionNodeKind
     let wantsLinearInput: Bool
     let sourceMetalFile: URL
+    let signatureShape: FusionBodySignatureShape
 }
 
 // MARK: - FusionNodeKind
@@ -161,4 +164,70 @@ public enum FusionNodeKind: Sendable, Hashable {
     ///   pixels) the body uses. The compiler uses this to reason about
     ///   tile boundaries when targeting the TBDR backend.
     case neighborRead(radius: Int)
+}
+
+// MARK: - FusionBodySignatureShape
+
+/// Declares the Metal signature a `FusionBodyDescriptor` body
+/// function is expected to have. Codegen reads this to generate
+/// the correct call-site — which parameters to pass, which texture
+/// slots to bind, whether `uint2 gid` is needed, etc.
+///
+/// Every body ultimately returns `half3` (the modified pixel) and
+/// takes `(half3 rgbIn, constant <StructName>& u, …)` in some form;
+/// the shape enumerates which extra parameters come after those two
+/// leading args. Seven of the SDK's twelve built-in filters (the
+/// pure tone / colour operators) use `.pixelLocalOnly`; the other
+/// five carry extras.
+///
+/// The five built-in variants cover every SDK-shipped filter. Third-
+/// party filters that don't match any of these shapes opt out of
+/// fusion via `FusionBodyDescriptor.unsupported` and ship their own
+/// standalone kernel (see `ShaderLibrary.register(_:)`).
+@available(iOS 18.0, *)
+public enum FusionBodySignatureShape: Sendable, Hashable {
+
+    /// `inline half3 body(half3 rgbIn, constant X& u)`
+    ///
+    /// The canonical pure pixel-local shape: the body reads only
+    /// its own pixel and the filter's uniform struct. Used by
+    /// Exposure / Contrast / Blacks / Whites / Saturation /
+    /// Vibrance / WhiteBalance.
+    case pixelLocalOnly
+
+    /// `inline half3 body(half3 rgbIn, constant X& u, uint2 gid)`
+    ///
+    /// Body uses the thread's grid position for deterministic
+    /// per-pixel effects (typically hash-based noise) without
+    /// sampling the source texture. Reserved for future filters
+    /// that need gid but no source-neighborhood reads.
+    case pixelLocalWithGid
+
+    /// `inline half3 body(half3 rgbIn, constant X& u,
+    ///                    texture3d<float, access::read> lut)`
+    ///
+    /// Body samples a 3D lookup texture indexed by the input
+    /// colour (LUT3D). Does not use `gid` — every pixel indexes
+    /// the LUT by its own `rgbIn`.
+    case pixelLocalWithLUT3D
+
+    /// `inline half3 body(half3 rgbIn, constant X& u, uint2 gid,
+    ///                    texture2d<half, access::read> overlay,
+    ///                    uint2 outputSize)`
+    ///
+    /// Body composites a 2D overlay texture onto the primary
+    /// input. `outputSize` is needed because the overlay-to-output
+    /// coordinate mapping depends on both dimensions (see
+    /// `NormalBlendFilter.metal`). Used by NormalBlend.
+    case pixelLocalWithOverlay
+
+    /// `inline half3 body(half3 rgbIn, constant X& u, uint2 gid,
+    ///                    texture2d<half, access::read> src)`
+    ///
+    /// Body reads a neighbourhood of `src` around `gid`. Used by
+    /// Sharpen (Laplacian 5-tap), CCD (CA offset + grain block +
+    /// sharp), and FilmGrain (block-centre luma read). The kernel
+    /// binds `src` to the same slot as the primary source texture
+    /// so the body can sample arbitrary offsets.
+    case neighborReadWithSource
 }

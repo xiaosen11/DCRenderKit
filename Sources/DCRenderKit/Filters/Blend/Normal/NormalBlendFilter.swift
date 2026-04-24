@@ -102,7 +102,8 @@ public struct NormalBlendFilter: FilterProtocol, @unchecked Sendable {
             uniformStructName: "NormalBlendUniforms",
             kind: .pixelLocal,
             wantsLinearInput: false,
-            sourceMetalFile: FusionBodyDescriptor.bundledSDKMetalURL("NormalBlendFilter")
+            sourceMetalFile: FusionBodyDescriptor.bundledSDKMetalURL("NormalBlendFilter"),
+            signatureShape: .pixelLocalWithOverlay
         )
     }
 }

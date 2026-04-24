@@ -22,14 +22,16 @@ enum PipelineCompilerTestFixtures {
     static func dummyBody(
         _ functionName: String,
         kind: FusionNodeKind = .pixelLocal,
-        wantsLinearInput: Bool = false
+        wantsLinearInput: Bool = false,
+        signatureShape: FusionBodySignatureShape = .pixelLocalOnly
     ) -> FusionBody {
         FusionBody(
             functionName: functionName,
             uniformStructName: "\(functionName)Uniforms",
             kind: kind,
             wantsLinearInput: wantsLinearInput,
-            sourceMetalFile: URL(fileURLWithPath: "/dev/null/\(functionName).metal")
+            sourceMetalFile: URL(fileURLWithPath: "/dev/null/\(functionName).metal"),
+            signatureShape: signatureShape
         )
     }
 

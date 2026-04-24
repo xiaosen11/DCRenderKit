@@ -93,17 +93,23 @@ public struct FilmGrainFilter: FilterProtocol {
 
     /// Fusion metadata. See ``FilterProtocol/fusionBody`` and
     /// `docs/pipeline-compiler-design.md` §4. The body function
-    /// `DCRFilmGrainBody` lands in `FilmGrainFilter.metal` in Phase 3.
+    /// `DCRFilmGrainBody` lives in `FilmGrainFilter.metal`.
     ///
-    /// Classified as `.pixelLocal` because the sin-trick hash reads
-    /// only the current grid position; it does not sample neighbours.
+    /// Classified as `.neighborRead(radius: 16)` because the grain
+    /// shader reads the block-centre texel (not the thread's own
+    /// pixel) to compute block-constant luma for the sin-trick
+    /// hash. 16 bounds the grain size at typical settings
+    /// (grainSize default 4.5 × 3× preview scale up to ~16 px). The
+    /// body therefore needs a `texture2d` source parameter, encoded
+    /// via `signatureShape: .neighborReadWithSource`.
     public var fusionBody: FusionBodyDescriptor {
         FusionBodyDescriptor(
             functionName: "DCRFilmGrainBody",
             uniformStructName: "FilmGrainUniforms",
-            kind: .pixelLocal,
+            kind: .neighborRead(radius: 16),
             wantsLinearInput: false,
-            sourceMetalFile: FusionBodyDescriptor.bundledSDKMetalURL("FilmGrainFilter")
+            sourceMetalFile: FusionBodyDescriptor.bundledSDKMetalURL("FilmGrainFilter"),
+            signatureShape: .neighborReadWithSource
         )
     }
 }

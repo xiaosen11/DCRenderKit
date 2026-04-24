@@ -180,7 +180,7 @@ final class FusionBodyDescriptorTests: XCTestCase {
             Expectation(filter: FilmGrainFilter(),
                         expectedFunctionName: "DCRFilmGrainBody",
                         expectedUniformStructName: "FilmGrainUniforms",
-                        expectedKind: .pixelLocal,
+                        expectedKind: .neighborRead(radius: 16),
                         expectedMetalFileBaseName: "FilmGrainFilter"),
             Expectation(filter: CCDFilter(),
                         expectedFunctionName: "DCRCCDBody",

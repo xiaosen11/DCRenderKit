@@ -148,7 +148,8 @@ public struct LUT3DFilter: FilterProtocol, @unchecked Sendable {
             uniformStructName: "LUT3DUniforms",
             kind: .pixelLocal,
             wantsLinearInput: false,
-            sourceMetalFile: FusionBodyDescriptor.bundledSDKMetalURL("LUT3DFilter")
+            sourceMetalFile: FusionBodyDescriptor.bundledSDKMetalURL("LUT3DFilter"),
+            signatureShape: .pixelLocalWithLUT3D
         )
     }
 

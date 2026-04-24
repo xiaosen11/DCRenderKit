@@ -29,7 +29,8 @@ final class PipelineGraphIRTests: XCTestCase {
             uniformStructName: uniformStruct,
             kind: .pixelLocal,
             wantsLinearInput: false,
-            sourceMetalFile: URL(fileURLWithPath: "/dev/null/\(name).metal")
+            sourceMetalFile: URL(fileURLWithPath: "/dev/null/\(name).metal"),
+            signatureShape: .pixelLocalOnly
         )
     }
 
