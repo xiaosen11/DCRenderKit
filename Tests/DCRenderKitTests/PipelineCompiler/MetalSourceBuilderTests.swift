@@ -217,6 +217,124 @@ final class MetalSourceBuilderTests: XCTestCase {
         }
     }
 
+    // MARK: - Cluster: fused pixelLocalOnly
+
+    /// A 3-filter pixelLocal chain lowers and optimises into a
+    /// single `.fusedPixelLocalCluster`. The builder must generate
+    /// an uber kernel that:
+    ///   · declares 3 uniform buffer slots (buffer(0..2))
+    ///   · includes each filter's uniform struct once
+    ///   · includes each filter's body function once
+    ///   · calls the bodies in cluster order
+    ///   · compiles and resolves the uber kernel name
+    func testThreeFilterClusterCompilesAndBinds() throws {
+        let steps: [AnyFilter] = [
+            .single(ExposureFilter(exposure: 10)),
+            .single(ContrastFilter(contrast: 5, lumaMean: 0.5)),
+            .single(SaturationFilter(saturation: 1.2)),
+        ]
+        let lowered = try XCTUnwrap(Lowering.lower(
+            steps,
+            source: TextureInfo(width: 256, height: 256, pixelFormat: .rgba16Float)
+        ))
+        let optimised = Optimizer.optimize(lowered)
+        XCTAssertEqual(optimised.nodes.count, 1, "Three pixelLocals should collapse into one cluster")
+
+        let clusterNode = optimised.nodes[0]
+        let result = try MetalSourceBuilder.build(for: clusterNode)
+
+        // Binding plan: three uniform buffers, zero aux.
+        XCTAssertEqual(result.bindings.uniformBufferCount, 3)
+        XCTAssertEqual(result.bindings.auxiliaryTextureSlotCount, 0)
+
+        // Source-shape checks.
+        XCTAssertTrue(result.source.contains("struct ExposureUniforms"))
+        XCTAssertTrue(result.source.contains("struct ContrastUniforms"))
+        XCTAssertTrue(result.source.contains("struct SaturationUniforms"))
+        XCTAssertTrue(result.source.contains("inline half3 DCRExposureBody"))
+        XCTAssertTrue(result.source.contains("inline half3 DCRContrastBody"))
+        XCTAssertTrue(result.source.contains("inline half3 DCRSaturationBody"))
+
+        // Body call sequence: must appear in the order members
+        // were lowered.
+        let exposureCall = result.source.range(of: "rgb = DCRExposureBody(rgb, u0);")
+        let contrastCall = result.source.range(of: "rgb = DCRContrastBody(rgb, u1);")
+        let satCall = result.source.range(of: "rgb = DCRSaturationBody(rgb, u2);")
+        XCTAssertNotNil(exposureCall)
+        XCTAssertNotNil(contrastCall)
+        XCTAssertNotNil(satCall)
+        if let e = exposureCall, let c = contrastCall, let s = satCall {
+            XCTAssertLessThan(e.lowerBound, c.lowerBound)
+            XCTAssertLessThan(c.lowerBound, s.lowerBound)
+        }
+
+        // Buffer slot bindings: u0 at buffer(0), u1 at buffer(1), u2 at buffer(2).
+        XCTAssertTrue(result.source.contains("u0 [[buffer(0)]]"))
+        XCTAssertTrue(result.source.contains("u1 [[buffer(1)]]"))
+        XCTAssertTrue(result.source.contains("u2 [[buffer(2)]]"))
+
+        // Metal compilation: the whole thing must parse and the
+        // uber kernel must resolve on the compiled library.
+        let library = try device.makeLibrary(source: result.source, options: nil)
+        XCTAssertNotNil(
+            library.makeFunction(name: result.functionName),
+            "Cluster uber kernel must resolve after compilation"
+        )
+    }
+
+    /// Cluster naming is deterministic: building the same cluster
+    /// shape twice (different uniform values, same member body
+    /// sequence) returns the same function name so the PSO cache
+    /// can share a compiled pipeline across slider positions.
+    func testClusterNameIsDeterministicAcrossSliderValues() throws {
+        func makeCluster(exposureValue: Float) throws -> Node {
+            let steps: [AnyFilter] = [
+                .single(ExposureFilter(exposure: exposureValue)),
+                .single(ContrastFilter(contrast: 10, lumaMean: 0.5)),
+            ]
+            let lowered = try XCTUnwrap(Lowering.lower(
+                steps,
+                source: TextureInfo(width: 128, height: 128, pixelFormat: .rgba16Float)
+            ))
+            let optimised = Optimizer.optimize(lowered)
+            return optimised.nodes[0]
+        }
+
+        let nameA = try MetalSourceBuilder.build(for: makeCluster(exposureValue: 10)).functionName
+        let nameB = try MetalSourceBuilder.build(for: makeCluster(exposureValue: 80)).functionName
+        XCTAssertEqual(nameA, nameB)
+    }
+
+    /// Clusters with different member ordering produce different
+    /// uber-kernel names — the hash incorporates the ordered
+    /// sequence of body function names.
+    func testClusterNameDiffersWithMemberOrder() throws {
+        func makeCluster(order: [AnyFilter]) throws -> Node {
+            let lowered = try XCTUnwrap(Lowering.lower(
+                order,
+                source: TextureInfo(width: 128, height: 128, pixelFormat: .rgba16Float)
+            ))
+            let optimised = Optimizer.optimize(lowered)
+            return optimised.nodes[0]
+        }
+
+        let forward = try makeCluster(order: [
+            .single(ExposureFilter(exposure: 10)),
+            .single(ContrastFilter(contrast: 10, lumaMean: 0.5)),
+        ])
+        let reversed = try makeCluster(order: [
+            .single(ContrastFilter(contrast: 10, lumaMean: 0.5)),
+            .single(ExposureFilter(exposure: 10)),
+        ])
+
+        let nameForward = try MetalSourceBuilder.build(for: forward).functionName
+        let nameReversed = try MetalSourceBuilder.build(for: reversed).functionName
+        XCTAssertNotEqual(
+            nameForward, nameReversed,
+            "Order matters: Exposure→Contrast and Contrast→Exposure aren't the same kernel"
+        )
+    }
+
     // MARK: - Helpers
 
     private func loweredSingleNode(for step: AnyFilter) -> Node {

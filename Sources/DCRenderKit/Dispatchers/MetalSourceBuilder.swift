@@ -65,10 +65,16 @@ internal enum MetalSourceBuilder {
 
     // MARK: - Entry point
 
-    /// Build an uber-kernel Metal source for the given Node. Step 3a
-    /// scope: single `.pixelLocal` Node with signature
-    /// `.pixelLocalOnly`; all other inputs throw
-    /// `.unsupportedNodeKind` or `.unsupportedSignatureShape`.
+    /// Build an uber-kernel Metal source for the given Node.
+    /// Currently supports:
+    ///
+    ///   · `.pixelLocal` with signature `.pixelLocalOnly` (Step 3a)
+    ///   · `.fusedPixelLocalCluster` where every member has
+    ///     signature `.pixelLocalOnly` (Step 3b)
+    ///
+    /// Other node kinds and richer signature shapes surface as
+    /// `.unsupportedNodeKind` / `.unsupportedSignatureShape` and
+    /// extend in later Phase-3 steps.
     ///
     /// Guard order matters for diagnostic clarity: the signature-
     /// shape check is evaluated before the "no auxiliary inputs"
@@ -76,23 +82,40 @@ internal enum MetalSourceBuilder {
     /// neighbour-read filters see the informative shape error
     /// rather than the structural "kind" error.
     static func build(for node: Node) throws -> BuildResult {
-        guard case let .pixelLocal(body, _, _, additionalAux) = node.kind else {
+        switch node.kind {
+        case let .pixelLocal(body, _, _, additionalAux):
+            guard body.signatureShape == .pixelLocalOnly else {
+                throw BuildError.unsupportedSignatureShape(body.signatureShape)
+            }
+            guard additionalAux.isEmpty else {
+                throw BuildError.unsupportedNodeKind(
+                    "pixelLocalOnly shape should not carry additionalNodeInputs"
+                )
+            }
+            return try buildPixelLocalOnly(body: body)
+
+        case let .fusedPixelLocalCluster(members, wantsLinear, aux):
+            // Every member must use the `.pixelLocalOnly` shape —
+            // mixed-shape clusters need the richer codegen that
+            // lands in later steps.
+            for member in members {
+                guard member.body.signatureShape == .pixelLocalOnly else {
+                    throw BuildError.unsupportedSignatureShape(member.body.signatureShape)
+                }
+            }
+            guard aux.isEmpty else {
+                throw BuildError.unsupportedNodeKind(
+                    "pixelLocalOnly cluster should not carry additionalNodeInputs"
+                )
+            }
+            return try buildFusedPixelLocalCluster(
+                members: members,
+                wantsLinearInput: wantsLinear
+            )
+
+        default:
             throw BuildError.unsupportedNodeKind(String(describing: node.kind))
         }
-        guard body.signatureShape == .pixelLocalOnly else {
-            throw BuildError.unsupportedSignatureShape(body.signatureShape)
-        }
-        guard additionalAux.isEmpty else {
-            // A `.pixelLocalOnly` descriptor with non-empty aux
-            // inputs is a graph-construction bug — the shape
-            // declares "no auxiliary textures", so the Node
-            // shouldn't carry any. Surface it loudly rather than
-            // silently ignore.
-            throw BuildError.unsupportedNodeKind(
-                "pixelLocalOnly shape should not carry additionalNodeInputs"
-            )
-        }
-        return try buildPixelLocalOnly(body: body)
     }
 
     // MARK: - Shape: pixelLocalOnly
@@ -188,6 +211,160 @@ internal enum MetalSourceBuilder {
                 auxiliaryTextureSlotCount: 0
             )
         )
+    }
+
+    // MARK: - Shape: fusedPixelLocalCluster (pixelLocalOnly members)
+
+    /// Build an uber kernel for a `.fusedPixelLocalCluster` whose
+    /// members are all `.pixelLocalOnly`. The kernel declares one
+    /// uniform buffer slot per member and emits a sequential chain
+    /// of body calls inside a single thread-per-pixel dispatch.
+    ///
+    /// Deduplication rules:
+    ///
+    ///   · helper text blocks are injected once per unique content
+    ///   · uniform struct declarations are injected once per unique
+    ///     struct name (two nodes of the same filter share the
+    ///     declaration)
+    ///   · body function declarations are injected once per unique
+    ///     function name (same rationale — Metal forbids duplicate
+    ///     symbol definitions in one compilation unit)
+    ///
+    /// The call site still issues one call per member regardless of
+    /// dedup, so two back-to-back `ExposureFilter` nodes get two
+    /// separate uniform buffer bindings (u0, u1) feeding the same
+    /// `DCRExposureBody` function.
+    private static func buildFusedPixelLocalCluster(
+        members: [FusedClusterMember],
+        wantsLinearInput: Bool
+    ) throws -> BuildResult {
+        precondition(!members.isEmpty, "VerticalFusion should never emit an empty cluster")
+
+        // Collect helpers deduped by text content.
+        var helperTexts: [String] = []
+        var seenHelpers: Set<String> = []
+        for member in members {
+            let blocks = FusionHelperSource.helpersForBody(named: member.body.functionName)
+            guard !blocks.isEmpty else {
+                throw BuildError.unsupportedBodyHelpers(
+                    functionName: member.body.functionName
+                )
+            }
+            for block in blocks {
+                if seenHelpers.insert(block).inserted {
+                    helperTexts.append(block)
+                }
+            }
+        }
+
+        // Extract uniform struct texts (unique by struct name).
+        var uniformStructTexts: [String] = []
+        var seenStructs: Set<String> = []
+        for member in members {
+            guard seenStructs.insert(member.body.uniformStructName).inserted else {
+                continue
+            }
+            do {
+                let text = try ShaderSourceExtractor.extractUniformStruct(
+                    named: member.body.uniformStructName,
+                    from: member.body.sourceMetalFile
+                )
+                uniformStructTexts.append(text)
+            } catch {
+                throw BuildError.extractionFailed(error)
+            }
+        }
+
+        // Extract body function texts (unique by function name).
+        var bodyTexts: [String] = []
+        var seenBodies: Set<String> = []
+        for member in members {
+            guard seenBodies.insert(member.body.functionName).inserted else {
+                continue
+            }
+            do {
+                let text = try ShaderSourceExtractor.extractBody(
+                    named: member.body.functionName,
+                    from: member.body.sourceMetalFile
+                )
+                bodyTexts.append(text)
+            } catch {
+                throw BuildError.extractionFailed(error)
+            }
+        }
+
+        let functionName = uberFunctionName(
+            forCluster: members,
+            wantsLinearInput: wantsLinearInput
+        )
+
+        // One `constant X& uN [[buffer(N)]]` param per member.
+        let uniformParamList = members.enumerated().map { index, member in
+            "    constant \(member.body.uniformStructName)& u\(index) [[buffer(\(index))]]"
+        }.joined(separator: ",\n")
+
+        // Sequential body calls: rgb passes through each member in
+        // cluster order, fed by that member's own uniform buffer.
+        let bodyCallChain = members.enumerated().map { index, member in
+            "    rgb = \(member.body.functionName)(rgb, u\(index));"
+        }.joined(separator: "\n")
+
+        let memberSummary = members.map { $0.body.functionName }.joined(separator: " → ")
+
+        let source = """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        // ── Injected helpers ────────────────────────────────────────
+        \(helperTexts.joined(separator: "\n\n"))
+
+        // ── Uniform structs (deduped by name) ──────────────────────
+        \(uniformStructTexts.joined(separator: "\n\n"))
+
+        // ── Body functions (deduped by name) ───────────────────────
+        \(bodyTexts.joined(separator: "\n\n"))
+
+        // ── Uber kernel: \(memberSummary) ──
+        kernel void \(functionName)(
+            texture2d<half, access::write> output [[texture(0)]],
+            texture2d<half, access::read>  input  [[texture(1)]],
+        \(uniformParamList),
+            uint2 gid [[thread_position_in_grid]])
+        {
+            if (gid.x >= output.get_width() || gid.y >= output.get_height()) return;
+            const half4 c = input.read(gid);
+            half3 rgb = c.rgb;
+        \(bodyCallChain)
+            output.write(half4(rgb, c.a), gid);
+        }
+        """
+
+        return BuildResult(
+            source: source,
+            functionName: functionName,
+            bindings: Bindings(
+                uniformBufferCount: members.count,
+                auxiliaryTextureSlotCount: 0
+            )
+        )
+    }
+
+    /// Cluster-level uber-kernel name. Hashes the ordered sequence
+    /// of member body-function names + uniform-struct names + the
+    /// cluster's linearity flag. Uniform values stay out of the
+    /// hash (same reason as single-node naming: slider positions
+    /// are bound at dispatch).
+    internal static func uberFunctionName(
+        forCluster members: [FusedClusterMember],
+        wantsLinearInput: Bool
+    ) -> String {
+        var hasher = FNV1aHasher()
+        for member in members {
+            hasher.combine(member.body.functionName)
+            hasher.combine(member.body.uniformStructName)
+        }
+        hasher.combine(wantsLinearInput ? "lin" : "gam")
+        return "DCR_UberCluster_\(String(hasher.finalize(), radix: 16))"
     }
 
     // MARK: - Uber-kernel naming
