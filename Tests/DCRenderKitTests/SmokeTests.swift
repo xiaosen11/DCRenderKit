@@ -300,7 +300,7 @@ final class SmokeTests: XCTestCase {
     /// plus the intentional overshoot from HDR-aware filters.
     private func assertInGamut(
         _ texture: MTLTexture,
-        file: StaticString = #file, line: UInt = #line
+        file: StaticString = #filePath, line: UInt = #line
     ) {
         do {
             let pixels = try readSmokeTexture(texture)

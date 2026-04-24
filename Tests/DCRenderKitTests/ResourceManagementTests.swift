@@ -355,10 +355,14 @@ final class UniformBufferPoolTests: XCTestCase {
 
         // `addCompletedHandler` is invoked on an unspecified GPU thread;
         // give it up to half a second before declaring the release failed.
+        // Capture `pool` through a local constant so the @Sendable
+        // background closure doesn't have to reach into `self` (the test
+        // case itself is not Sendable).
         let releasedExpectation = expectation(description: "reservations released")
-        DispatchQueue.global().async { [self] in
+        let poolRef = pool!
+        DispatchQueue.global().async {
             for _ in 0..<50 {
-                if pool.reservedSlotCount == 0 {
+                if poolRef.reservedSlotCount == 0 {
                     releasedExpectation.fulfill()
                     return
                 }

@@ -278,18 +278,17 @@ final class MultiPassExecutorTests: XCTestCase {
     }
 
     func testRenderModifierRejected() throws {
-        let source = try makeTex(width: 8, height: 8, red: 0)
-
-        // Manually construct a pass with a .render modifier via inside knowledge.
-        // Since Pass.render factory was removed, construct via the compute
-        // factory then verify the error at dispatch time by using a modifier
-        // directly. We can't easily test this since modifier is let-only;
-        // instead we test the error message path by using mps modifier via
-        // the same means. Skipped — not easily reachable from public API.
-        //
-        // This limitation is by design: the public API only exposes .compute
-        // and .final factories, so you can't accidentally build a non-compute
-        // multi-pass filter.
+        // Documenting an unreachable code path rather than asserting on
+        // it: `MultiPassExecutor.execute` switches over `pass.modifier`
+        // and throws `.invalidPassGraph` for `.render / .blit / .mps`.
+        // The public `Pass.compute` / `Pass.final` factories only
+        // produce `.compute(kernel:)` modifiers, so no caller using the
+        // public API can reach the error-throwing branch. We therefore
+        // have no way to exercise it from the outside without
+        // constructing a `Pass` internally — which is also how the
+        // branch would be reached in practice (accidental internal
+        // misuse), but that's a `@testable` concern handled by
+        // neighbouring dispatcher tests.
     }
 }
 

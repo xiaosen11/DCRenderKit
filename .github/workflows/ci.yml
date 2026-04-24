@@ -48,10 +48,17 @@ jobs:
         run: swift package resolve
 
       - name: swift build
-        run: swift build -v
+        # `-Xswiftc -warnings-as-errors` makes any Swift warning fail
+        # the build so the SDK's zero-warning invariant is preserved
+        # PR-by-PR. Covered locally by the #72 audit; the flag keeps
+        # that audit from regressing.
+        run: swift build -v -Xswiftc -warnings-as-errors
 
       - name: swift test
-        run: swift test -v
+        # Same treatment for the test target — tests are the larger
+        # Swift-source surface and are where Swift-6-concurrency /
+        # Swift-6-default-argument warnings most recently surfaced.
+        run: swift test -v -Xswiftc -warnings-as-errors
 
   ios-build:
     name: Build (iOS Simulator)

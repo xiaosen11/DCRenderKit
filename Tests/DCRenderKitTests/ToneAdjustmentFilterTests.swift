@@ -680,7 +680,7 @@ final class ToneAdjustmentFilterTests: XCTestCase {
         return try pipeline.outputSync()
     }
 
-    private func assertFinite(_ p: TonePixel, file: StaticString = #file, line: UInt = #line) {
+    private func assertFinite(_ p: TonePixel, file: StaticString = #filePath, line: UInt = #line) {
         XCTAssertTrue(p.r.isFinite, "R not finite", file: file, line: line)
         XCTAssertTrue(p.g.isFinite, "G not finite", file: file, line: line)
         XCTAssertTrue(p.b.isFinite, "B not finite", file: file, line: line)

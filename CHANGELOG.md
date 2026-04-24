@@ -114,6 +114,15 @@ until `v1.0.0`. Each breaking change is flagged explicitly below.
 
 ### Internal / docs
 
+- **Zero-warning audit across SDK + test targets**, locked as a CI
+  gate via `-Xswiftc -warnings-as-errors` on both `swift build` and
+  `swift test` steps. Fixed one Swift-6 Sendable-capture warning in
+  `ResourceManagementTests` (extracted a local `poolRef` so the
+  background closure no longer reaches into non-Sendable `self`) and
+  the `#file` → `#filePath` default-argument divergence that
+  surfaced across `SmokeTests`, `ColorGradingFilterTests`, and
+  `ToneAdjustmentFilterTests`. `MultiPassAndLoaderTests`'s
+  documentation-only test had a dead local variable removed.
 - **Foundation capability baseline** (`docs/foundation-capability-baseline.md`).
   18 verifiable architectural claims grouped by category
   (dependency / platform, correctness architecture, colour-space &
