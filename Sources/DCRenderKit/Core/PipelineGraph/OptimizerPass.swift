@@ -80,6 +80,7 @@ internal enum Optimizer {
         DeadCodeElimination(),
         VerticalFusion(),
         CommonSubexpressionElimination(),
+        KernelInlining(),
     ]
 
     /// Run every pass in `defaultPasses` against `graph`, in order.

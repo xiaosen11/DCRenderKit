@@ -239,6 +239,42 @@ internal struct Node: Sendable, Identifiable {
     /// Human-readable label used in diagnostic logs and graph dumps.
     /// Typically `"Exposure#3"` (filter name + index in chain).
     let debugLabel: String
+
+    /// Phase-2 `KernelInlining` marker: a pixel-local body that
+    /// the Phase-3 codegen should splice into this node's sample
+    /// reads. Typical use: when a `.neighborRead` node's only
+    /// primary input is a `.pixelLocal` node with no other
+    /// consumer, `KernelInlining` drops the pixelLocal and stores
+    /// its body metadata here. The neighbour-read kernel then
+    /// applies the inlined body to every sample it reads before
+    /// combining them, so the uber kernel reads raw source pixels
+    /// once instead of reading a precomputed intermediate texture.
+    ///
+    /// Only meaningful when `kind == .neighborRead`; other kinds
+    /// keep `nil`. The `additionalRange` of the cluster member
+    /// points into the owning node's `additionalNodeInputs`.
+    let inlinedBodyBeforeSample: FusedClusterMember?
+
+    /// Designated initialiser. `inlinedBodyBeforeSample` defaults
+    /// to `nil` so every existing construction site compiles
+    /// without change.
+    init(
+        id: NodeID,
+        kind: NodeKind,
+        inputs: [NodeRef],
+        outputSpec: TextureSpec,
+        isFinal: Bool,
+        debugLabel: String,
+        inlinedBodyBeforeSample: FusedClusterMember? = nil
+    ) {
+        self.id = id
+        self.kind = kind
+        self.inputs = inputs
+        self.outputSpec = outputSpec
+        self.isFinal = isFinal
+        self.debugLabel = debugLabel
+        self.inlinedBodyBeforeSample = inlinedBodyBeforeSample
+    }
 }
 
 // MARK: - Node dependency traversal
