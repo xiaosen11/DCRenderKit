@@ -12,6 +12,20 @@ until `v1.0.0`. Each breaking change is flagged explicitly below.
 
 ### Added
 
+- **Pipeline compiler (Phase 5 step 5.1 – 5.2).** SDK built-in filters
+  now dispatch through a runtime-compiled *uber kernel* produced by the
+  Phase 1–3 pipeline compiler instead of the pre-compiler standalone
+  `DCR<Name>Filter` symbols. Delivers the cross-filter fusion
+  infrastructure that Phase 5 step 5.3 will use to collapse chains of
+  pixel-local filters into a single dispatch. New additive public API:
+  - `PipelineOptimization` enum (`.full` default, `.none` disables
+    cross-filter fusion but keeps codegen). Introduced ahead of step 5.3
+    so the API is stable when fusion flips on; in steps 5.1 – 5.2 both
+    modes behave identically since each filter still dispatches
+    independently.
+  - `Pipeline.optimization: PipelineOptimization` property + new
+    `optimization:` parameter on both initialisers (defaults `.full`;
+    additive — every existing call site keeps compiling).
 - **Integration tests for PortraitBlur mask routing**
   (`Tests/DCRenderKitTests/IntegrationTests/PortraitBlurMaskPipelineTests`).
   Three synthetic-source, half-split-mask scenarios covering the

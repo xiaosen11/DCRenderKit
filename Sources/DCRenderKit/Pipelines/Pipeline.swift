@@ -10,6 +10,47 @@
 import Foundation
 import Metal
 
+/// Strategies for the pipeline compiler's optimisation passes.
+///
+/// Introduced with Phase 5 of the pipeline-compiler refactor. Every
+/// mode keeps the compiler in the dispatch path — lowering each
+/// filter to an internal graph and running it on a runtime-compiled
+/// uber kernel — but the optimisation passes between lowering and
+/// codegen differ.
+///
+/// - ``full``: run every optimiser pass (dead-code elimination,
+///   vertical fusion, common-subexpression elimination, kernel
+///   inlining, tail sink). Chains of pixel-local filters collapse
+///   into a single uber kernel; sibling multi-pass filters share
+///   common downsample passes; adjacent pixel-local bodies ride
+///   out of neighbour-read kernels. This is the mode the SDK
+///   ships by default and the one the performance claims in the
+///   README are written against.
+///
+/// - ``none``: skip the optimiser; every lowered node dispatches
+///   through its own uber kernel. Useful as a debugging aid (the
+///   output of a single filter is easier to inspect in isolation)
+///   and as a fallback while diagnosing a suspected optimiser
+///   regression. `.none` **does not** revert to pre-compiler
+///   standalone kernels — all dispatch still flows through the
+///   codegen path, only cross-filter fusion is disabled.
+///
+/// Cross-filter fusion lands in Phase 5 step 5.3. Until that step
+/// lands, `.full` and `.none` are operationally equivalent for
+/// every chain (single-filter lowering has nothing for the optimiser
+/// to merge). The enum is introduced here so the public API is
+/// stable before 5.3 flips the behaviour.
+@available(iOS 18.0, *)
+public enum PipelineOptimization: Sendable, Hashable {
+
+    /// Run every optimiser pass. Default.
+    case full
+
+    /// Lower the chain but skip the optimiser. Each node dispatches
+    /// through its own uber kernel, without cross-filter fusion.
+    case none
+}
+
 /// The primary filter chain execution entry point.
 ///
 /// ## Minimal usage
@@ -66,6 +107,15 @@ public final class Pipeline: @unchecked Sendable {
     /// Defaults to the standard optimizer (passthrough in Phase 1).
     public let optimizer: FilterGraphOptimizer
 
+    /// Compiler optimisation strategy for the pipeline graph. See
+    /// ``PipelineOptimization``. Defaults to ``PipelineOptimization/full``.
+    ///
+    /// Introduced with the Phase-5 pipeline-compiler refactor. Until
+    /// cross-filter fusion lands in step 5.3, `.full` and `.none`
+    /// behave identically — every chain compiles to one uber kernel
+    /// per filter.
+    public let optimization: PipelineOptimization
+
     /// Pixel format of intermediate textures between filters.
     ///
     /// Default is `.rgba16Float` which is the right choice for commercial-
@@ -103,11 +153,13 @@ public final class Pipeline: @unchecked Sendable {
     public init(
         input: PipelineInput,
         steps: [AnyFilter] = [],
-        colorSpace: DCRColorSpace = DCRenderKit.defaultColorSpace
+        colorSpace: DCRColorSpace = DCRenderKit.defaultColorSpace,
+        optimization: PipelineOptimization = .full
     ) {
         self.source = input
         self.steps = steps
         self.optimizer = FilterGraphOptimizer()
+        self.optimization = optimization
         self.intermediatePixelFormat = .rgba16Float
         self.colorSpace = colorSpace
         self.device = .shared
@@ -125,6 +177,7 @@ public final class Pipeline: @unchecked Sendable {
         input: PipelineInput,
         steps: [AnyFilter],
         optimizer: FilterGraphOptimizer = FilterGraphOptimizer(),
+        optimization: PipelineOptimization = .full,
         intermediatePixelFormat: MTLPixelFormat = .rgba16Float,
         colorSpace: DCRColorSpace = DCRenderKit.defaultColorSpace,
         device: Device,
@@ -138,6 +191,7 @@ public final class Pipeline: @unchecked Sendable {
         self.source = input
         self.steps = steps
         self.optimizer = optimizer
+        self.optimization = optimization
         self.intermediatePixelFormat = intermediatePixelFormat
         self.colorSpace = colorSpace
         self.device = device

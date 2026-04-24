@@ -164,16 +164,66 @@ final class Phase5PipelineIntegrationTests: XCTestCase {
         XCTAssertTrue(px.r.isFinite)
     }
 
+    // MARK: - Phase 5 step 5.2 — PipelineOptimization knob
+
+    /// `Pipeline.optimization` defaults to `.full`. Confirmed at the
+    /// API level rather than by observable behaviour since `.full`
+    /// vs `.none` produce identical graphs before cross-filter fusion
+    /// lands in step 5.3.
+    func testOptimizationDefaultsToFull() throws {
+        let source = try makeSolidTexture(width: 4, height: 4, red: 0.5)
+        let pipeline = makePipeline(
+            input: .texture(source),
+            steps: [.single(ExposureFilter(exposure: 5))]
+        )
+        XCTAssertEqual(pipeline.optimization, .full)
+    }
+
+    /// `.none` and `.full` produce bit-identical output for a chain
+    /// whose graph the optimiser has nothing to merge (step 5.3
+    /// flips this: `.full` will collapse a 3-filter pixel-local
+    /// chain into one cluster uber kernel while `.none` keeps three
+    /// independent dispatches).
+    func testOptimizationNoneProducesSameOutputAsFullToday() throws {
+        let source = try makeSolidTexture(width: 8, height: 8, red: 0.4)
+
+        let fullPipeline = makePipeline(
+            input: .texture(source),
+            steps: [.single(ExposureFilter(exposure: 15))],
+            optimization: .full
+        )
+        let nonePipeline = makePipeline(
+            input: .texture(source),
+            steps: [.single(ExposureFilter(exposure: 15))],
+            optimization: .none
+        )
+
+        let fullOut = try fullPipeline.outputSync()
+        let noneOut = try nonePipeline.outputSync()
+
+        let fullPx = try readFirstPixel(fullOut)
+        let nonePx = try readFirstPixel(noneOut)
+
+        // Both paths go through the same single-filter codegen today.
+        // Tolerance covers Float16 rounding across the two separate
+        // command buffers.
+        XCTAssertEqual(fullPx.r, nonePx.r, accuracy: 0.002)
+        XCTAssertEqual(fullPx.g, nonePx.g, accuracy: 0.002)
+        XCTAssertEqual(fullPx.b, nonePx.b, accuracy: 0.002)
+    }
+
     // MARK: - Fixtures
 
     private func makePipeline(
         input: PipelineInput,
-        steps: [AnyFilter]
+        steps: [AnyFilter],
+        optimization: PipelineOptimization = .full
     ) -> Pipeline {
         Pipeline(
             input: input,
             steps: steps,
             optimizer: FilterGraphOptimizer(),
+            optimization: optimization,
             intermediatePixelFormat: .rgba16Float,
             device: device,
             textureLoader: textureLoader,
