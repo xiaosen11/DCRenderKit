@@ -114,6 +114,17 @@ until `v1.0.0`. Each breaking change is flagged explicitly below.
 
 ### Internal / docs
 
+- **Foundation capability baseline** (`docs/foundation-capability-baseline.md`).
+  18 verifiable architectural claims grouped by category
+  (dependency / platform, correctness architecture, colour-space &
+  algorithm foundation, verification gates), each with an evidence
+  path (code / test / doc) plus a "why it matters" rationale. Also
+  lists five intentional out-of-scope gaps (external pixel parity,
+  CI perf gates, cross-platform, HDR > 1.0, video temporal
+  stability) so adopters can decide before adopting. Paired with
+  `docs/release-criteria.md` and `docs/session-handoff.md` as the
+  three architecture-truth documents that the maintainer SOP
+  treats as non-negotiable.
 - **GitHub Discussions guide** (`docs/discussions-guide.md`). Defines
   the four-category layout (Q&A / Show-and-tell / Ideas / General),
   posting / moderation conventions, and a one-time enablement
