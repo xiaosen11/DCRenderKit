@@ -236,17 +236,22 @@ final class Phase5PipelineIntegrationTests: XCTestCase {
         XCTAssertEqual(fullPx.b, nonePx.b, accuracy: 0.005)
     }
 
-    /// A chain containing a multi-pass filter must fall back to the
-    /// per-step loop because `MultiPassExecutor` owns the pass graph
-    /// of `HighlightShadowFilter` / `ClarityFilter` / `SoftGlowFilter`
-    /// / `PortraitBlurFilter`. The compiler path rejects graphs
-    /// containing `.nativeCompute` nodes (emitted for each pass of a
-    /// multi-pass filter) so the legacy dispatch handles the
-    /// multi-pass filter while the single-pass filters adjacent to
-    /// it still route through the codegen path — their step loop
-    /// iterations individually invoke `ComputeBackend` via the
-    /// `dispatchThroughComputeBackend` hook.
-    func testMixedChainFallsBackToPerStepDispatch() throws {
+    /// Phase 6: mixed chains (single-pass + multi-pass) stay on the
+    /// compiler path. `Lowering` emits `.nativeCompute` nodes for
+    /// every multi-pass pass; `tryCompilerPath` dispatches each of
+    /// those through `ComputeDispatcher` while the surrounding
+    /// `.pixelLocal` / `.neighborRead` / `.fusedPixelLocalCluster`
+    /// nodes ride on `ComputeBackend`'s uber-kernel codegen. The
+    /// allocator plans aliasing across the whole graph, so
+    /// intermediate textures collapse by lifetime rather than
+    /// flooding the pool with one texture per step.
+    ///
+    /// Observable: the chain `[Exposure, HighlightShadow, Saturation]`
+    /// compiles exactly two uber kernels — one for `Exposure`, one
+    /// for `Saturation` — while HS's internal passes dispatch
+    /// through `PipelineStateCache` (not `UberKernelCache`) and do
+    /// not inflate this count.
+    func testMixedChainStaysOnCompilerPath() throws {
         let source = try makeSolidTexture(width: 32, height: 32, red: 0.5)
         let pipeline = makePipeline(
             input: .texture(source),
@@ -261,13 +266,9 @@ final class Phase5PipelineIntegrationTests: XCTestCase {
         let output = try pipeline.outputSync()
         let after = UberKernelCache.shared.cachedPipelineCount
 
-        // Exposure + Saturation each compile their own uber kernel
-        // via the per-step codegen path (step 5.1). Two uber kernels
-        // total; HighlightShadow dispatches its passes through
-        // `MultiPassExecutor` with zero uber-kernel compilation.
         XCTAssertEqual(
             after - before, 2,
-            "Mixed chain should compile one uber kernel per adjacent single-pass filter and leave the multi-pass filter on the legacy path; got Δ=\(after - before)."
+            "Exposure + Saturation are both pixel-local and compile one uber kernel each; HS's nativeCompute passes dispatch via PipelineStateCache. Expected Δ=2, got \(after - before)."
         )
 
         let px = try readFirstPixel(output)

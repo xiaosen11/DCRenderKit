@@ -397,7 +397,78 @@ Step 5.7 — Real-device benchmark + hand-off to user for
 
 ---
 
-## 7. Phase 6 — fragment shader bodies (overview)
+## 6.5 Phase 5 retrospective — gaps surfaced by real-device run
+
+Phase 5 shipped with two design-internal blind spots that only became
+visible when the user exercised the full 16-filter chain on iPhone 14
+Pro Max (2026-04-24):
+
+1. **Graph-level allocator + cluster fusion only fire for "pure"
+   chains.** `tryCompilerPath` returns `nil` the moment `Lowering`
+   emits any `.nativeCompute` node — which happens for every pass of
+   every `MultiPassFilter` (HighlightShadow / Clarity / SoftGlow /
+   PortraitBlur). A 16-filter chain with four multi-pass filters
+   therefore drops entirely to `executePerStepFallback`, where every
+   single-pass filter takes Phase 5.1's per-filter codegen but none
+   of 5.3's cross-filter fusion, and where `LifetimeAwareTexture
+   Allocator`'s aliasing is **not applied at all**.
+
+2. **Peak intermediate memory therefore stays close to the pre-Phase-5
+   ceiling for the user's real chain.** Measured: 700 MB peak /
+   500 MB average on-device versus the design-doc target of ≤66 MB
+   for an 8-filter colour chain at Phase 5. The gap is the
+   unaliased per-step dispatch, not Phase 7's TBDR — that's a
+   separate further reduction.
+
+Phases 6 – 8 below are the planned closures for gap 1 (Phase 6),
+plus the original Phase 6/7 renamed to 7/8 (fragment-shader bodies
+and TBDR memoryless — both of which remain queued but not on the
+critical path for the user's immediate memory complaint). Phase 9
+adds the instrumentation that makes real-device validation
+evidence-based instead of speculative.
+
+---
+
+## 6.6 Phase 6 — graph-level dispatch for mixed chains
+
+**Problem**: `tryCompilerPath` bails on `.nativeCompute`, so mixed
+chains lose both the allocator's aliasing and `VerticalFusion`'s
+cluster dispatch.
+
+**Scope**:
+
+1. `tryCompilerPath` accepts graphs containing `.nativeCompute` nodes.
+2. `dispatchCompilerNode` gains a `.nativeCompute` branch that
+   routes through the existing `ComputeDispatcher.dispatch(kernel:)`
+   path, using the node's kernel name + uniforms + resolved
+   auxiliary textures.
+3. `executePerStepFallback` is narrowed to chains `Lowering` can't
+   produce — render / blit / MPS single-pass modifiers today.
+   Built-in filters never hit it.
+4. `VerticalFusion` clusters [E, C, B, W, WB] and [Sat, Vib] around
+   multi-pass filters in the expected 16-filter mixed chain.
+5. `LifetimeAwareTextureAllocator` plans aliasing across the full
+   graph — intermediates collapse from "one live texture per step"
+   to "one per distinct spec per overlapping lifetime" (usually
+   2–3 buckets for a 16-filter chain).
+
+**Expected user-visible wins**: mixed-chain peak memory drops from
+~700 MB to ~50–100 MB (aliasing + cluster dispatch); CPU savings
+from fewer encoder starts + fewer uniform binds.
+
+**Files touched** (scope estimate):
+- `Sources/DCRenderKit/Pipelines/Pipeline.swift` (compiler-path
+  eligibility + dispatch branch)
+- `Tests/DCRenderKitTests/PipelineCompiler/Phase5PipelineIntegration
+  Tests.swift` (mixed-chain now expects fusion-firing)
+- `Tests/DCRenderKitTests/PipelineCompiler/Phase5BenchmarkTests.swift`
+  (new mixed-chain benchmark variant)
+
+**User gate**: none on its own — validated in Phase 9 by log diff.
+
+---
+
+## 7. Phase 7 — fragment shader bodies (overview)
 
 Every `.pixelLocalOnly` / `.pixelLocalWithLUT3D` /
 `.pixelLocalWithOverlay` filter gains a fragment-shader variant
@@ -416,7 +487,7 @@ lines shader + 12 parity tests ≈ ~400 lines + tests.
 
 ---
 
-## 8. Phase 7 — TBDR render pipeline (overview)
+## 8. Phase 8 — TBDR render pipeline + memoryless (formerly Phase 7)
 
 `TBDRBackend` sibling of `ComputeBackend` that uses render
 pipelines + `.memoryless` attachments. Short cluster chains get
@@ -424,12 +495,78 @@ the render path (intermediates stay in tile memory, zero device
 bandwidth); longer chains or aux-reading filters fall through
 to the compute path.
 
-Phase 7 ends with `Tests/DCRenderKitTests/LegacyKernels/` + the
+`LifetimeAwareTextureAllocator` is extended so buckets that are
+only read by nodes inside the same render pass can tag themselves
+`.storageMode = .memoryless` — the allocator never goes to
+`TexturePool` for those; Metal allocates them in tile memory for
+the pass's lifetime only.
+
+Phase 8 is the memory 究极方案: after Phase 6's aliasing compresses
+peak intermediate count and Phase 8's memoryless strips device-
+memory backing from the intermediates that stay inside a render
+pass, the pure-tone-chain case should approach zero intermediate
+device memory (only source + final land on GPU RAM).
+
+Phase 8 ends with `Tests/DCRenderKitTests/LegacyKernels/` + the
 dynamic-probe fixture code deleting (once the user has accepted
-Phase-7 real-device verification).
+Phase-8 real-device verification).
 
 Estimated scope: ~80 k tokens; on the order of 2-3 sessions of
 ordinary work including the final legacy cleanup commit.
+
+---
+
+## 8.5 Phase 9 — full instrumentation / logging
+
+**Problem**: Phase-5 user-gate validation on iPhone required
+guesswork because the SDK emits almost no runtime signal about
+the compiler's decisions — "did fusion fire?", "how many live
+intermediates?", "where did peak bytes go?" answers had to be
+inferred from macOS test output, not measured on device.
+
+**Scope**: add a `DCRLogging` layer for the compiler / allocator
+hot paths, gated so a Release consumer pays near-zero cost but a
+diagnostic build dumps a clear trace into Console.app (subsystem
+`com.digirender.dcrenderkit`, categories `PipelineCompiler` /
+`PipelineMem` / `PipelineBackend`).
+
+Signals per frame:
+
+1. **`Pipeline.encodeAll`**: chain length, compiler path vs
+   per-step fallback, fallback reason if any, post-optimiser
+   cluster / inlined / tail-sunk counts.
+2. **`LifetimeAwareTextureAllocator.allocate`**: graph node count
+   → bucket count (compression ratio), bytes per bucket, estimated
+   frame peak.
+3. **`ComputeBackend.execute`** per node: uber-kernel function
+   name + cache hit/miss.
+4. **`TexturePool`** sampled periodically: `cachedTextureCount`,
+   `currentBytes`, peak `currentBytes`.
+5. **CB completion**: pendingEnqueue size (= simultaneously live
+   intermediates last frame).
+6. **One-shot start-up log**: SDK version, compile-time flags,
+   device info.
+
+**Gating**: a runtime flag (`DCRLogging.diagnosticPipelineLogging`)
+toggles via environment variable `DCR_DIAGNOSTIC_LOGGING=1` at
+launch. Default off — Release apps pay only a load-time env-var
+check.
+
+**User-gate protocol** (final validation for Phases 5 – 8):
+consumer sets `DCR_DIAGNOSTIC_LOGGING=1` in scheme environment,
+runs DCRDemo with the 16-filter chain for 60 – 120 s, exports
+Console.app log. Log must show:
+
+- compiler path taken on every frame, no per-step fallback on
+  the 16-filter chain
+- aliasing compression ≥ 5× (node count / bucket count) on that
+  chain
+- UberKernelCache stabilises inside 20 frames
+- TexturePool `currentBytes` bounded, no monotonic growth over
+  the 60 s sample
+
+Estimated scope: ~30 k tokens; one session. Contained by design —
+the instrumentation is additive and can't regress correctness.
 
 ---
 

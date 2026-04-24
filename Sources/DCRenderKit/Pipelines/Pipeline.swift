@@ -407,31 +407,32 @@ public final class Pipeline: @unchecked Sendable {
 
     /// Attempt to dispatch the entire chain through the pipeline
     /// compiler: `Lowering` → `Optimizer` (skipped in `.none`) →
-    /// `LifetimeAwareTextureAllocator` → one `ComputeBackend.execute`
-    /// call per resulting node. Returns `nil` and leaves no partial
-    /// work in the command buffer when any lowered node is not a
-    /// backend-dispatchable shape; the caller then falls back to the
-    /// per-step loop.
+    /// `LifetimeAwareTextureAllocator` → per-node dispatch (either
+    /// `ComputeBackend` for fusion-eligible node kinds or
+    /// `ComputeDispatcher` for opaque `.nativeCompute` nodes).
+    /// Returns `nil` only when `Lowering` itself cannot produce a
+    /// graph — the caller then falls back to the per-step loop for
+    /// chains containing render / blit / MPS single-pass modifiers.
     ///
-    /// Eligibility rules for the compiler path:
-    ///
-    /// 1. `Lowering.lower(_:source:)` must succeed. It returns `nil`
-    ///    for chains containing render / blit / MPS single-pass
-    ///    filters or multi-pass filters whose passes use a modifier
-    ///    other than `.compute`.
-    /// 2. After `Optimizer.optimize` (when `optimization == .full`)
-    ///    every node must be one of `.pixelLocal`, `.neighborRead`,
-    ///    or `.fusedPixelLocalCluster`. `.nativeCompute` nodes —
-    ///    emitted today for each `Pass` of a multi-pass filter —
-    ///    drop the chain back to the per-step loop so
-    ///    `MultiPassExecutor` handles the filter, preserving the
-    ///    multi-pass contract.
+    /// Phase 6 expanded this path to cover mixed chains. Previously
+    /// the eligibility check rejected graphs containing any
+    /// `.nativeCompute` node (emitted for every pass of a multi-pass
+    /// filter), which dropped the entire chain to the per-step
+    /// loop — forfeiting both the allocator's aliasing and the
+    /// optimiser's cluster dispatch. The current implementation
+    /// routes `.nativeCompute` through the legacy `ComputeDispatcher`
+    /// path from inside the same graph traversal, so aliasing
+    /// applies across the full chain and `VerticalFusion` clusters
+    /// fire even with multi-pass filters in the mix.
     ///
     /// Cross-filter fusion (pixel-local cluster) lands through
     /// `VerticalFusion` inside `Optimizer.optimize`, so a 3-filter
     /// tone chain (`[Exposure, Contrast, Saturation]`) collapses to
     /// a single cluster node — and therefore a single uber-kernel
-    /// dispatch — under `.full`.
+    /// dispatch — under `.full`. A 16-filter mixed chain collapses
+    /// into pixel-local clusters around each multi-pass filter plus
+    /// one opaque `.nativeCompute` node per multi-pass inner pass,
+    /// with intermediate textures aliased by lifetime.
     private func tryCompilerPath(
         steps: [AnyFilter],
         source: MTLTexture,
@@ -452,15 +453,6 @@ public final class Pipeline: @unchecked Sendable {
             graph = Optimizer.optimize(lowered)
         case .none:
             graph = lowered
-        }
-
-        for node in graph.nodes {
-            switch node.kind {
-            case .pixelLocal, .neighborRead, .fusedPixelLocalCluster:
-                continue
-            default:
-                return nil
-            }
         }
 
         let destInfo = TextureInfo(
@@ -497,11 +489,15 @@ public final class Pipeline: @unchecked Sendable {
         return finalTexture
     }
 
-    /// Dispatch a single compiler-path node via `ComputeBackend`.
-    /// Resolves the node's primary texture input through the
-    /// allocator's NodeID→MTLTexture map (for `.node(_)` refs), the
-    /// pipeline's source (for `.source`), or the graph-global
-    /// additional-inputs array (for `.additional(_)`).
+    /// Dispatch a single compiler-path node. Fusion-eligible kinds
+    /// (`.pixelLocal` / `.neighborRead` / `.fusedPixelLocalCluster`)
+    /// go through `ComputeBackend` which compiles and caches a
+    /// runtime-generated uber kernel. `.nativeCompute` (a
+    /// multi-pass filter's inner pass) goes through
+    /// `ComputeDispatcher` with the node's carried kernel name — the
+    /// same dispatch the pre-Phase-5 `MultiPassExecutor` used, only
+    /// now driven from the graph loop so the allocator controls the
+    /// destination texture.
     private func dispatchCompilerNode(
         node: Node,
         source: MTLTexture,
@@ -525,14 +521,56 @@ public final class Pipeline: @unchecked Sendable {
             ))
         }
 
-        try ComputeBackend.execute(
-            node: node,
-            source: primaryInput,
-            destination: destination,
-            additionalInputs: globalAdditional,
-            commandBuffer: commandBuffer,
-            uniformPool: uniformPool
-        )
+        switch node.kind {
+        case .pixelLocal, .neighborRead, .fusedPixelLocalCluster:
+            try ComputeBackend.execute(
+                node: node,
+                source: primaryInput,
+                destination: destination,
+                additionalInputs: globalAdditional,
+                commandBuffer: commandBuffer,
+                uniformPool: uniformPool
+            )
+
+        case let .nativeCompute(kernelName, uniforms, additionalRefs):
+            // Resolve every NodeRef this opaque kernel reads beyond
+            // its primary input — these translate to the `additional
+            // Inputs` parameter `ComputeDispatcher.dispatch` binds
+            // at texture slots 2+ in declaration order.
+            var nodeAdditional: [MTLTexture] = []
+            nodeAdditional.reserveCapacity(additionalRefs.count)
+            for ref in additionalRefs {
+                nodeAdditional.append(try resolveCompilerInput(
+                    ref: ref,
+                    source: source,
+                    allocation: allocation,
+                    globalAdditional: globalAdditional,
+                    context: node.debugLabel
+                ))
+            }
+            try ComputeDispatcher.dispatch(
+                kernel: kernelName,
+                uniforms: uniforms,
+                additionalInputs: nodeAdditional,
+                source: primaryInput,
+                destination: destination,
+                commandBuffer: commandBuffer,
+                psoCache: psoCache,
+                uniformPool: uniformPool
+            )
+
+        case .downsample, .upsample, .reduce, .blend:
+            // Reserved optimiser kinds not currently emitted by
+            // `Lowering`. Reaching here means the graph was hand-
+            // constructed (test fixture) or a future optimiser added
+            // a pass whose codegen isn't wired yet — surface the
+            // mismatch explicitly rather than silently dropping the
+            // dispatch.
+            throw PipelineError.filter(.invalidPassGraph(
+                filterName: node.debugLabel,
+                reason: "compiler-path dispatch does not handle node kind \(node.kind)"
+            ))
+        }
     }
 
     /// Translate a `NodeRef` carried inside a compiler-path node into
