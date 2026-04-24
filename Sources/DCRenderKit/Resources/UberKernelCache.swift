@@ -127,6 +127,16 @@ internal final class UberKernelCache: @unchecked Sendable {
         return pipelines.count
     }
 
+    /// `true` if a pipeline named `functionName` is already in the
+    /// cache. Used by `ComputeBackend` diagnostic logging to label
+    /// each dispatch as a cache hit or miss without touching the
+    /// main `pipelineState(source:functionName:)` fast path.
+    func containsPipelineState(named functionName: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return pipelines[functionName] != nil
+    }
+
     // MARK: - Private
 
     private func makeOrFetchLibrary(

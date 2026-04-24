@@ -363,14 +363,25 @@ public final class Pipeline: @unchecked Sendable {
     }
 
     /// Per-step dispatch. The original Phase-1 implementation of the
-    /// chain loop; still used for chains the compiler path can't cover
-    /// today (multi-pass filters, non-compute single-pass modifiers,
-    /// filters without a `fusionBody`).
+    /// chain loop; retained as a safety net for chains the compiler
+    /// path can't cover (non-compute single-pass modifiers —
+    /// render / blit / MPS — which `Lowering` rejects). Post-Phase-6
+    /// built-in filter chains don't reach it.
     private func executePerStepFallback(
         steps: [AnyFilter],
         source: MTLTexture,
         commandBuffer: MTLCommandBuffer
     ) throws -> MTLTexture {
+        if DCRLogging.diagnosticPipelineLogging {
+            DCRLogging.logger.debug(
+                "per-step fallback engaged",
+                category: "PipelineCompiler",
+                attributes: [
+                    "chainLength": "\(steps.count)",
+                    "note": "Lowering rejected the chain — likely render/blit/mps modifier",
+                ]
+            )
+        }
         var currentInput = source
         var finalOutput: MTLTexture?
         var pendingEnqueue: [MTLTexture] = []
@@ -444,6 +455,16 @@ public final class Pipeline: @unchecked Sendable {
             pixelFormat: source.pixelFormat
         )
         guard let lowered = Lowering.lower(steps, source: sourceInfo) else {
+            if DCRLogging.diagnosticPipelineLogging {
+                DCRLogging.logger.debug(
+                    "compiler path rejected: Lowering returned nil",
+                    category: "PipelineCompiler",
+                    attributes: [
+                        "chainLength": "\(steps.count)",
+                        "reason": "non-compute single-pass modifier or malformed multi-pass",
+                    ]
+                )
+            }
             return nil
         }
 
@@ -453,6 +474,24 @@ public final class Pipeline: @unchecked Sendable {
             graph = Optimizer.optimize(lowered)
         case .none:
             graph = lowered
+        }
+
+        if DCRLogging.diagnosticPipelineLogging {
+            let stats = Self.graphStats(lowered: lowered, optimized: graph)
+            DCRLogging.logger.debug(
+                "compiler path taken",
+                category: "PipelineCompiler",
+                attributes: [
+                    "chainLength": "\(steps.count)",
+                    "optimization": (optimization == .full) ? "full" : "none",
+                    "loweredNodes": "\(lowered.nodes.count)",
+                    "optimizedNodes": "\(graph.nodes.count)",
+                    "clusters": "\(stats.clusters)",
+                    "inlinedBodies": "\(stats.inlinedBodies)",
+                    "tailSunkBodies": "\(stats.tailSunkBodies)",
+                    "nativeCompute": "\(stats.nativeCompute)",
+                ]
+            )
         }
 
         let destInfo = TextureInfo(
@@ -465,6 +504,30 @@ public final class Pipeline: @unchecked Sendable {
             graph: graph,
             sourceInfo: destInfo
         )
+
+        if DCRLogging.diagnosticPipelineLogging {
+            let bucketCount = allocation.plan.uniqueBucketCount
+            let totalBytes = allocation.plan.bucketSpec.values
+                .reduce(0) { $0 + Self.byteEstimate($1) }
+            let ratioStr: String
+            if graph.nodes.count > 0 {
+                let ratio = Double(graph.nodes.count) / Double(max(bucketCount, 1))
+                ratioStr = String(format: "%.2f", ratio)
+            } else {
+                ratioStr = "∞"
+            }
+            DCRLogging.logger.debug(
+                "allocator plan",
+                category: "PipelineMem",
+                attributes: [
+                    "nodes": "\(graph.nodes.count)",
+                    "buckets": "\(bucketCount)",
+                    "compressionRatio": ratioStr,
+                    "peakBytes": "\(totalBytes)",
+                    "peakMB": String(format: "%.1f", Double(totalBytes) / (1024 * 1024)),
+                ]
+            )
+        }
 
         let globalAdditional = collectGlobalAdditionalInputs(from: steps)
 
@@ -487,6 +550,62 @@ public final class Pipeline: @unchecked Sendable {
             ))
         }
         return finalTexture
+    }
+
+    /// Structural counts derived from a lowered / optimised graph
+    /// used by the diagnostic `PipelineCompiler` log line. Computing
+    /// them is O(N); the enclosing call site only runs when
+    /// ``DCRLogging/diagnosticPipelineLogging`` is true.
+    private struct GraphStats {
+        let clusters: Int
+        let inlinedBodies: Int
+        let tailSunkBodies: Int
+        let nativeCompute: Int
+    }
+
+    private static func graphStats(
+        lowered: PipelineGraph,
+        optimized: PipelineGraph
+    ) -> GraphStats {
+        var clusters = 0
+        var inlined = 0
+        var tailSunk = 0
+        var nativeCompute = 0
+        for node in optimized.nodes {
+            if case .fusedPixelLocalCluster = node.kind {
+                clusters += 1
+            }
+            if case .nativeCompute = node.kind {
+                nativeCompute += 1
+            }
+            if node.inlinedBodyBeforeSample != nil {
+                inlined += 1
+            }
+            if node.tailSinkedBody != nil {
+                tailSunk += 1
+            }
+        }
+        return GraphStats(
+            clusters: clusters,
+            inlinedBodies: inlined,
+            tailSunkBodies: tailSunk,
+            nativeCompute: nativeCompute
+        )
+    }
+
+    /// Approximate byte estimate for a `TextureInfo` — mirrors the
+    /// `TexturePool` table closely enough for the diagnostic log to
+    /// be comparable against pool readings.
+    private static func byteEstimate(_ info: TextureInfo) -> Int {
+        let bytesPerPixel: Int
+        switch info.pixelFormat {
+        case .rgba16Float:                         bytesPerPixel = 8
+        case .rgba32Float:                         bytesPerPixel = 16
+        case .bgra8Unorm, .rgba8Unorm,
+             .bgra8Unorm_srgb, .rgba8Unorm_srgb:   bytesPerPixel = 4
+        default:                                   bytesPerPixel = 8
+        }
+        return info.width * info.height * bytesPerPixel
     }
 
     /// Dispatch a single compiler-path node. Fusion-eligible kinds
@@ -814,6 +933,24 @@ internal func scheduleDeferredEnqueue(
     commandBuffer: MTLCommandBuffer
 ) {
     guard !textures.isEmpty else { return }
+    if DCRLogging.diagnosticPipelineLogging {
+        // Approximate bytes via the first texture's area × rough bpp —
+        // the deferred set is typically homogeneous for a given graph,
+        // and this signal exists only to cross-check with the
+        // allocator's `peakBytes` line above; precision isn't critical.
+        let totalBytes = textures.reduce(0) { acc, t in
+            acc + (t.width * t.height * 8)
+        }
+        DCRLogging.logger.debug(
+            "deferred enqueue scheduled",
+            category: "PipelineMem",
+            attributes: [
+                "textures": "\(textures.count)",
+                "approxBytes": "\(totalBytes)",
+                "approxMB": String(format: "%.1f", Double(totalBytes) / (1024 * 1024)),
+            ]
+        )
+    }
     // Box to satisfy `@Sendable` closure capture. `MTLTexture` is not
     // Sendable in Swift 6, but we only access it from the completion
     // callback (serial after GPU completion) and only hand it to
@@ -821,6 +958,17 @@ internal func scheduleDeferredEnqueue(
     let box = DeferredEnqueueBox(textures: textures, pool: pool)
     commandBuffer.addCompletedHandler { _ in
         box.flush()
+        if DCRLogging.diagnosticPipelineLogging {
+            DCRLogging.logger.debug(
+                "pool post-completion",
+                category: "PipelineMem",
+                attributes: [
+                    "poolBytes": "\(pool.currentBytes)",
+                    "poolTextures": "\(pool.cachedTextureCount)",
+                    "poolBuckets": "\(pool.bucketCount)",
+                ]
+            )
+        }
     }
 }
 

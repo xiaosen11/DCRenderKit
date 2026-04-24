@@ -231,4 +231,45 @@ public enum DCRLogging {
             _logger = newValue
         }
     }
+
+    // MARK: - Diagnostic pipeline logging
+
+    /// When `true`, pipeline-compiler hot paths (lowering, optimiser,
+    /// allocator, backend dispatch, texture pool, deferred enqueue)
+    /// emit one-line trace messages through ``DCRLogging/logger`` at
+    /// `.debug` level under the categories `PipelineCompiler`,
+    /// `PipelineMem`, and `PipelineBackend`. The logs are designed
+    /// for evidence-based real-device validation of the compiler's
+    /// decisions (Phase 9 of the pipeline-compiler refactor).
+    ///
+    /// Defaults to the value of the `DCR_DIAGNOSTIC_LOGGING`
+    /// environment variable at process launch (`1`/`true`/`yes`/`on`
+    /// enables, anything else disables). Apps that want to flip the
+    /// flag without a relaunch can assign directly at runtime; reads
+    /// are lock-free so hot-path call sites pay one atomic load per
+    /// check.
+    ///
+    /// ## Observable categories
+    ///
+    /// - `PipelineCompiler`: per-frame path taken (compiler vs
+    ///   fallback), optimiser cluster / inlined-body / tail-sunk
+    ///   counts, node-kind histogram.
+    /// - `PipelineMem`: per-frame allocator bucket count vs graph
+    ///   node count (compression ratio), bytes per bucket, pool
+    ///   state (`cachedTextureCount`, `currentBytes`, running peak).
+    /// - `PipelineBackend`: per-node uber-kernel dispatch + cache
+    ///   hit/miss.
+    ///
+    /// ## Enabling on iPhone
+    ///
+    /// Edit the Xcode scheme for DCRDemo → *Run → Arguments → Environment
+    /// Variables*, add `DCR_DIAGNOSTIC_LOGGING = 1`, then filter
+    /// Console.app by subsystem `com.dcrenderkit` to see the trace.
+    nonisolated(unsafe) public static var diagnosticPipelineLogging: Bool = {
+        let raw = ProcessInfo.processInfo.environment["DCR_DIAGNOSTIC_LOGGING"]?.lowercased()
+        switch raw {
+        case "1", "true", "yes", "on": return true
+        default: return false
+        }
+    }()
 }

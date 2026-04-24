@@ -75,10 +75,23 @@ internal enum ComputeBackend {
         try validateDestination(destination)
 
         let built = try MetalSourceBuilder.build(for: node)
+        let cacheHit = uberCache.containsPipelineState(named: built.functionName)
         let pso = try uberCache.pipelineState(
             source: built.source,
             functionName: built.functionName
         )
+        if DCRLogging.diagnosticPipelineLogging {
+            DCRLogging.logger.debug(
+                "uber kernel dispatch",
+                category: "PipelineBackend",
+                attributes: [
+                    "function": built.functionName,
+                    "nodeLabel": node.debugLabel,
+                    "nodeKind": Self.kindTag(node.kind),
+                    "cache": cacheHit ? "hit" : "miss",
+                ]
+            )
+        }
 
         guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
             throw PipelineError.device(.commandEncoderCreationFailed(kind: .compute))
@@ -253,6 +266,22 @@ internal enum ComputeBackend {
     }
 
     // MARK: - Private helpers
+
+    /// Compact tag for a node's kind used by the diagnostic log
+    /// line. Keeps the attribute value short enough to stay
+    /// readable in Console.app.
+    private static func kindTag(_ kind: NodeKind) -> String {
+        switch kind {
+        case .pixelLocal:              return "pixelLocal"
+        case .neighborRead:            return "neighborRead"
+        case .fusedPixelLocalCluster:  return "cluster"
+        case .nativeCompute:           return "nativeCompute"
+        case .downsample:              return "downsample"
+        case .upsample:                return "upsample"
+        case .reduce:                  return "reduce"
+        case .blend:                   return "blend"
+        }
+    }
 
     private static func validateDestination(_ texture: MTLTexture) throws {
         guard texture.usage.contains(.shaderWrite) else {
