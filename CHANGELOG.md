@@ -123,6 +123,18 @@ until `v1.0.0`. Each breaking change is flagged explicitly below.
 
 ### Internal / docs
 
+- **Public API freeze review document**
+  (`docs/api-freeze-review.md`, #49). Walks every `public`
+  declaration across 8 categories (SDK meta / pipeline execution /
+  filter protocols / 16 filters / infrastructure injection / filter-
+  author dispatchers / observability / error hierarchy) and assigns
+  each symbol a **Stable** / **Evolving** / **Experimental** tier.
+  Records the complete `[Unreleased]` breaking-change roster so
+  adopters upgrading through the pre-release period have a single
+  migration checklist. Codifies the post-0.1.0 deprecation
+  workflow (announce → log → carry one minor → remove) and the
+  consumer-facing "what you can count on" guarantees for the 0.x
+  series.
 - **SwiftDoc coverage sweep across filter layer** (#59 first pass).
   Added doc comments for the FilterProtocol / MultiPassFilter
   conformance members (`modifier`, `uniforms`, `additionalInputs`,
