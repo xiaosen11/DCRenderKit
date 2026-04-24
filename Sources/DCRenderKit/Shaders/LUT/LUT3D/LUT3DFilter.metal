@@ -133,16 +133,7 @@ inline half3 DCRLUT3DBody(
 }
 // @dcr:body-end
 
-kernel void DCRLUT3DFilter(
-    texture2d<half, access::write> output [[texture(0)]],
-    texture2d<half, access::read>  input  [[texture(1)]],
-    texture3d<float, access::read> lut    [[texture(2)]],
-    constant LUT3DUniforms& u             [[buffer(0)]],
-    uint2 gid [[thread_position_in_grid]])
-{
-    if (gid.x >= output.get_width() || gid.y >= output.get_height()) {
-        return;
-    }
-    const half4 inColor = input.read(gid);
-    output.write(half4(DCRLUT3DBody(inColor.rgb, u, gid, lut), inColor.a), gid);
-}
+// Standalone `DCRLUT3DFilter` kernel retired in Phase 5 step 5.5.
+// Dispatch now flows through the runtime-compiled uber kernel —
+// see docs/pipeline-compiler-design.md §4 and Tests/DCRenderKit
+// Tests/LegacyKernels/ for the frozen parity copy.

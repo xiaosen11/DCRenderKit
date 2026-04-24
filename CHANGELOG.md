@@ -12,17 +12,17 @@ until `v1.0.0`. Each breaking change is flagged explicitly below.
 
 ### Added
 
-- **Pipeline compiler (Phase 5 step 5.1 – 5.2).** SDK built-in filters
+- **Pipeline compiler Phase 5 (steps 5.1 – 5.5).** SDK built-in filters
   now dispatch through a runtime-compiled *uber kernel* produced by the
-  Phase 1–3 pipeline compiler instead of the pre-compiler standalone
-  `DCR<Name>Filter` symbols. Delivers the cross-filter fusion
-  infrastructure that Phase 5 step 5.3 will use to collapse chains of
-  pixel-local filters into a single dispatch. New additive public API:
-  - `PipelineOptimization` enum (`.full` default, `.none` disables
-    cross-filter fusion but keeps codegen). Introduced ahead of step 5.3
-    so the API is stable when fusion flips on; in steps 5.1 – 5.2 both
-    modes behave identically since each filter still dispatches
-    independently.
+  Phase 1–3 pipeline compiler. Chains of adjacent pixel-local filters
+  of matching signature shape collapse into a single fused uber kernel,
+  so an 8-filter tone chain now costs one dispatch and one intermediate
+  texture instead of eight and seven. Cross-filter fusion, kernel
+  inlining, and tail sink all run by default. New additive public API:
+  - `PipelineOptimization` enum (`.full` default runs every optimiser
+    pass; `.none` skips the optimiser but keeps codegen — each filter
+    still dispatches through its own uber kernel, there is no fallback
+    to pre-compiler standalone kernels).
   - `Pipeline.optimization: PipelineOptimization` property + new
     `optimization:` parameter on both initialisers (defaults `.full`;
     additive — every existing call site keeps compiling).
@@ -67,6 +67,23 @@ until `v1.0.0`. Each breaking change is flagged explicitly below.
 
 ### Changed (breaking)
 
+- **Standalone `DCR<Name>Filter` kernels retired** (Phase 5 step 5.5).
+  The twelve built-in single-pass filters — Exposure / Contrast /
+  Blacks / Whites / Saturation / Vibrance / WhiteBalance / Sharpen /
+  LUT3D / NormalBlend (`DCRBlendNormalFilter`) / FilmGrain / CCD — no
+  longer ship a compiled kernel symbol in the SDK Metal library. Each
+  filter's `.metal` file keeps its inline body function and uniform
+  struct; the SDK's runtime dispatcher generates the kernel wrapper
+  on-the-fly via `MetalSourceBuilder`. Consumers who pass a built-in
+  filter through `Pipeline` see no behaviour change. Consumers who
+  dispatched a filter's kernel *directly* through
+  `ComputeDispatcher.dispatch(kernel: "DCR<Name>Filter", ...)` against
+  the shared `ShaderLibrary` now hit `PipelineError.pipelineState
+  (.functionNotFound)` — and should route through `Pipeline` instead.
+  `FilterProtocol.modifier` on these twelve filters still advertises
+  `.compute(kernel: "DCR<Name>Filter")` as a structural hint; the
+  string no longer resolves in the SDK library and is preserved only
+  for API-shape stability.
 - **`ContrastFilter`** — replaced fitted cubic pivot with DaVinci Resolve
   log-space slope `y = pivot · (x/pivot)^slope`, `slope = exp2(contrast ·
   1.585)`. Pivot still scene-adaptive (from `lumaMean`). Response shape at

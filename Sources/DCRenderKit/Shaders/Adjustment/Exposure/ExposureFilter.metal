@@ -126,15 +126,11 @@ inline half3 DCRExposureBody(half3 rgbIn, constant ExposureUniforms& u) {
 }
 // @dcr:body-end
 
-kernel void DCRExposureFilter(
-    texture2d<half, access::write> output [[texture(0)]],
-    texture2d<half, access::read>  input  [[texture(1)]],
-    constant ExposureUniforms& u          [[buffer(0)]],
-    uint2 gid [[thread_position_in_grid]])
-{
-    if (gid.x >= output.get_width() || gid.y >= output.get_height()) {
-        return;
-    }
-    const half4 original = input.read(gid);
-    output.write(half4(DCRExposureBody(original.rgb, u), original.a), gid);
-}
+// The `DCRExposureFilter` kernel previously shipped here was
+// retired in Phase 5 step 5.5 of the pipeline-compiler refactor.
+// Every dispatch — including single-filter — now flows through the
+// runtime-compiled uber kernel produced by `MetalSourceBuilder`
+// from the body function above. See
+// `docs/pipeline-compiler-design.md` §4 for the body-function-only
+// shader convention and `Tests/DCRenderKitTests/LegacyKernels/`
+// for the frozen pre-refactor copy kept as a Phase 7 parity gate.

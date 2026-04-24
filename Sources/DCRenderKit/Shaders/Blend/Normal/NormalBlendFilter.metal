@@ -63,20 +63,7 @@ inline half4 DCRNormalBlendBody(
 }
 // @dcr:body-end
 
-kernel void DCRBlendNormalFilter(
-    texture2d<half, access::write> output  [[texture(0)]],
-    texture2d<half, access::read>  input   [[texture(1)]],
-    texture2d<half, access::read>  overlay [[texture(2)]],
-    constant NormalBlendUniforms& u        [[buffer(0)]],
-    uint2 gid [[thread_position_in_grid]])
-{
-    const uint outW = output.get_width();
-    const uint outH = output.get_height();
-    if (gid.x >= outW || gid.y >= outH) return;
-
-    const half4 inColor = input.read(gid);
-    output.write(
-        DCRNormalBlendBody(inColor, u, gid, overlay, uint2(outW, outH)),
-        gid
-    );
-}
+// Standalone `DCRBlendNormalFilter` kernel retired in Phase 5 step 5.5.
+// Dispatch now flows through the runtime-compiled uber kernel —
+// see docs/pipeline-compiler-design.md §4 and Tests/DCRenderKit
+// Tests/LegacyKernels/ for the frozen parity copy.

@@ -54,15 +54,7 @@ inline half3 DCRSharpenBody(
 }
 // @dcr:body-end
 
-kernel void DCRSharpenFilter(
-    texture2d<half, access::write> output [[texture(0)]],
-    texture2d<half, access::read>  input  [[texture(1)]],
-    constant SharpenUniforms& u           [[buffer(0)]],
-    uint2 gid [[thread_position_in_grid]])
-{
-    if (gid.x >= output.get_width() || gid.y >= output.get_height()) {
-        return;
-    }
-    const half4 center = input.read(gid);
-    output.write(half4(DCRSharpenBody(center.rgb, u, gid, input), center.a), gid);
-}
+// Standalone `DCRSharpenFilter` kernel retired in Phase 5 step 5.5.
+// Dispatch now flows through the runtime-compiled uber kernel —
+// see docs/pipeline-compiler-design.md §4 and Tests/DCRenderKit
+// Tests/LegacyKernels/ for the frozen parity copy.
