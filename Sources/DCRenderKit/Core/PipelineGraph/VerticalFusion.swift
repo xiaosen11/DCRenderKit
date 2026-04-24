@@ -157,7 +157,7 @@ internal struct VerticalFusion: OptimizerPass {
 
         // candidate must also be pixelLocal with a matching colour
         // space preference and unchanged output spec.
-        guard case let .pixelLocal(_, _, candLinear, _) = candidate.kind else {
+        guard case let .pixelLocal(candBody, _, candLinear, _) = candidate.kind else {
             return false
         }
         if candLinear != clusterWantsLinear { return false }
@@ -168,6 +168,21 @@ internal struct VerticalFusion: OptimizerPass {
         // future `.pixelLocal` that reads the source alongside a
         // prior node.
         guard candidate.inputs == [.node(prev.id)] else { return false }
+
+        // Both prev and candidate must share the same signature
+        // shape. Mixing shapes inside a cluster would require the
+        // uber-kernel builder to generate per-member call sites
+        // with different parameter lists (e.g. one member wanting
+        // only `(rgb, u)` and the next wanting `(rgb, u, gid,
+        // lut)`). The Phase-3 codegen for clusters only emits a
+        // single uniform call convention, so cross-shape fusion is
+        // deferred to a later pass.
+        guard
+            case let .pixelLocal(prevBody, _, _, _) = prev.kind,
+            prevBody.signatureShape == candBody.signatureShape
+        else {
+            return false
+        }
 
         return true
     }

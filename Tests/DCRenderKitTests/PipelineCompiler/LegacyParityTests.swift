@@ -130,6 +130,98 @@ final class LegacyParityTests: XCTestCase {
         )
     }
 
+    // MARK: - The five richer-shape filters
+
+    /// LUT3D parity: identity 2³ cube applied via both kernels.
+    /// Identity LUT + intensity 1.0 should pass through except
+    /// for triangular dither (±1/255 spatially), well within the
+    /// ±1-LSB tolerance.
+    func testLUT3DParity() throws {
+        let identity2Cube: [Float] = [
+            0, 0, 0, 1,  1, 0, 0, 1,
+            0, 1, 0, 1,  1, 1, 0, 1,
+            0, 0, 1, 1,  1, 0, 1, 1,
+            0, 1, 1, 1,  1, 1, 1, 1,
+        ]
+        let cubeData = identity2Cube.withUnsafeBufferPointer { Data(buffer: $0) }
+
+        // Two sliders: identity (intensity=1 on identity LUT ⇒ near-identity output)
+        // and half-blend (intensity=0.5 ⇒ mix of source and LUT output).
+        let filters: [any FilterProtocol] = [
+            try LUT3DFilter(cubeData: cubeData, dimension: 2, intensity: 1.0),
+            try LUT3DFilter(cubeData: cubeData, dimension: 2, intensity: 0.5),
+        ]
+        try runParity(
+            legacyKernel: "DCRLegacyLUT3DFilter",
+            filters: filters,
+            // LUT3D has triangular dither (±1/255) stacked on
+            // Float16 rounding; a 2-LSB tolerance covers both.
+            tolerance: 2
+        )
+    }
+
+    /// NormalBlend parity: 50%-opacity red overlay. Uber and
+    /// legacy must composite identically.
+    func testNormalBlendParity() throws {
+        let overlayDesc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .bgra8Unorm, width: 1, height: 1, mipmapped: false
+        )
+        overlayDesc.usage = [.shaderRead]
+        let overlay = device.makeTexture(descriptor: overlayDesc)!
+        let overlayBytes: [UInt8] = [0, 0, 255, 128]   // BGRA: red, 50% alpha
+        overlayBytes.withUnsafeBytes { raw in
+            overlay.replace(
+                region: MTLRegionMake2D(0, 0, 1, 1),
+                mipmapLevel: 0,
+                withBytes: raw.baseAddress!,
+                bytesPerRow: 4
+            )
+        }
+
+        try runParity(
+            legacyKernel: "DCRLegacyBlendNormalFilter",
+            filters: [NormalBlendFilter(overlay: overlay, intensity: 1.0),
+                      NormalBlendFilter(overlay: overlay, intensity: 0.5)]
+        )
+    }
+
+    /// Sharpen parity: zero-amount identity plus a mid-level
+    /// sharpen on the ramp.
+    func testSharpenParityAcrossSliders() throws {
+        try runParity(
+            legacyKernel: "DCRLegacySharpenFilter",
+            filters: [SharpenFilter(amount: 0),
+                      SharpenFilter(amount: 50)]
+        )
+    }
+
+    /// FilmGrain parity: identity (density=0) plus a low-density
+    /// grain that exercises the sin-trick hash.
+    func testFilmGrainParityAcrossSliders() throws {
+        try runParity(
+            legacyKernel: "DCRLegacyFilmGrainFilter",
+            filters: [FilmGrainFilter(density: 0, grainSize: 1),
+                      FilmGrainFilter(density: 0.3, grainSize: 2)]
+        )
+    }
+
+    /// CCD parity: identity (strength=0, all effects off) plus a
+    /// moderate aesthetic pass exercising every CCD stage.
+    func testCCDParityAcrossSliders() throws {
+        try runParity(
+            legacyKernel: "DCRLegacyCCDFilter",
+            filters: [CCDFilter(strength: 0),
+                      CCDFilter(strength: 50,
+                                digitalNoise: 20,
+                                chromaticAberration: 30,
+                                sharpening: 30,
+                                saturationBoost: 10,
+                                grainSize: 3,
+                                sharpStep: 1.5,
+                                caMaxOffset: 5)]
+        )
+    }
+
     // MARK: - Parity runner
 
     /// Core parity test: for every filter in `filters`, dispatch
@@ -164,13 +256,18 @@ final class LegacyParityTests: XCTestCase {
             cbLegacy.commit()
             cbLegacy.waitUntilCompleted()
 
-            // 2. Run via the codegen backend.
+            // 2. Run via the codegen backend. The filter's
+            //    `additionalInputs` propagate through Lowering
+            //    into `Node.additionalNodeInputs` as
+            //    `.additional(i)` refs, and ComputeBackend binds
+            //    them to texture slots starting at 2.
             let node = try singleNode(for: filter)
             let cbCodegen = queue.makeCommandBuffer()!
             try ComputeBackend.execute(
                 node: node,
                 source: input,
                 destination: codegenOut,
+                additionalInputs: filter.additionalInputs,
                 commandBuffer: cbCodegen,
                 uberCache: isolatedUberCache
             )

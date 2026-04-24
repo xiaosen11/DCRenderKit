@@ -84,15 +84,42 @@ internal enum MetalSourceBuilder {
     static func build(for node: Node) throws -> BuildResult {
         switch node.kind {
         case let .pixelLocal(body, _, _, additionalAux):
-            guard body.signatureShape == .pixelLocalOnly else {
+            switch body.signatureShape {
+            case .pixelLocalOnly:
+                guard additionalAux.isEmpty else {
+                    throw BuildError.unsupportedNodeKind(
+                        "pixelLocalOnly shape should not carry additionalNodeInputs"
+                    )
+                }
+                return try buildPixelLocalOnly(body: body)
+
+            case .pixelLocalWithLUT3D:
+                return try buildPixelLocalWithLUT3D(body: body)
+
+            case .pixelLocalWithOverlay:
+                return try buildPixelLocalWithOverlay(body: body)
+
+            case .pixelLocalWithGid:
+                // No built-in filter uses this shape yet; kept in
+                // the enum as a reserved slot. Surface the miss
+                // instead of generating untested source.
                 throw BuildError.unsupportedSignatureShape(body.signatureShape)
-            }
-            guard additionalAux.isEmpty else {
+            case .neighborReadWithSource:
+                // `.pixelLocal` with `.neighborReadWithSource`
+                // shape is a graph-construction error — the shape
+                // belongs on `.neighborRead` nodes.
                 throw BuildError.unsupportedNodeKind(
-                    "pixelLocalOnly shape should not carry additionalNodeInputs"
+                    ".pixelLocal node declared a neighborReadWithSource shape"
                 )
             }
-            return try buildPixelLocalOnly(body: body)
+
+        case let .neighborRead(body, _, _, _):
+            switch body.signatureShape {
+            case .neighborReadWithSource:
+                return try buildNeighborReadWithSource(body: body)
+            default:
+                throw BuildError.unsupportedSignatureShape(body.signatureShape)
+            }
 
         case let .fusedPixelLocalCluster(members, wantsLinear, aux):
             // Every member must use the `.pixelLocalOnly` shape —
@@ -211,6 +238,178 @@ internal enum MetalSourceBuilder {
                 auxiliaryTextureSlotCount: 0
             )
         )
+    }
+
+    // MARK: - Shape: pixelLocalWithLUT3D (LUT3D)
+
+    /// Build an uber kernel whose body reads a 3D LUT texture in
+    /// addition to `rgb / u / gid`. LUT binds at texture slot 2;
+    /// output and source stay at 0 and 1.
+    private static func buildPixelLocalWithLUT3D(body: FusionBody) throws -> BuildResult {
+        let (helpers, uniformStructText, bodyText) = try extractArtefacts(for: body)
+        let functionName = uberFunctionName(for: body)
+
+        let source = """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        // ── Injected helpers ────────────────────────────────────────
+        \(helpers)
+
+        // ── Filter uniform struct (from \(body.sourceMetalFile.lastPathComponent)) ──
+        \(uniformStructText)
+
+        // ── Filter body (from \(body.sourceMetalFile.lastPathComponent)) ──
+        \(bodyText)
+
+        // ── Uber kernel (pixelLocalWithLUT3D) ──────────────────────
+        kernel void \(functionName)(
+            texture2d<half, access::write> output [[texture(0)]],
+            texture2d<half, access::read>  input  [[texture(1)]],
+            texture3d<float, access::read> lut    [[texture(2)]],
+            constant \(body.uniformStructName)& u0 [[buffer(0)]],
+            uint2 gid [[thread_position_in_grid]])
+        {
+            if (gid.x >= output.get_width() || gid.y >= output.get_height()) return;
+            const half4 c = input.read(gid);
+            half3 rgb = \(body.functionName)(c.rgb, u0, gid, lut);
+            output.write(half4(rgb, c.a), gid);
+        }
+        """
+
+        return BuildResult(
+            source: source,
+            functionName: functionName,
+            bindings: Bindings(
+                uniformBufferCount: 1,
+                auxiliaryTextureSlotCount: 1
+            )
+        )
+    }
+
+    // MARK: - Shape: pixelLocalWithOverlay (NormalBlend)
+
+    /// Build an uber kernel whose body composites a 2D overlay on
+    /// top of the primary source. Overlay binds at texture slot 2;
+    /// `outputSize` is computed from the output texture and passed
+    /// as the body's last argument. Note the body takes and returns
+    /// `half4` (not `half3`) — alpha is needed for Porter-Duff.
+    private static func buildPixelLocalWithOverlay(body: FusionBody) throws -> BuildResult {
+        let (helpers, uniformStructText, bodyText) = try extractArtefacts(for: body)
+        let functionName = uberFunctionName(for: body)
+
+        let source = """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        // ── Injected helpers ────────────────────────────────────────
+        \(helpers)
+
+        // ── Filter uniform struct (from \(body.sourceMetalFile.lastPathComponent)) ──
+        \(uniformStructText)
+
+        // ── Filter body (from \(body.sourceMetalFile.lastPathComponent)) ──
+        \(bodyText)
+
+        // ── Uber kernel (pixelLocalWithOverlay) ────────────────────
+        kernel void \(functionName)(
+            texture2d<half, access::write> output  [[texture(0)]],
+            texture2d<half, access::read>  input   [[texture(1)]],
+            texture2d<half, access::read>  overlay [[texture(2)]],
+            constant \(body.uniformStructName)& u0 [[buffer(0)]],
+            uint2 gid [[thread_position_in_grid]])
+        {
+            const uint outW = output.get_width();
+            const uint outH = output.get_height();
+            if (gid.x >= outW || gid.y >= outH) return;
+            const half4 c = input.read(gid);
+            const half4 rgba = \(body.functionName)(c, u0, gid, overlay, uint2(outW, outH));
+            output.write(rgba, gid);
+        }
+        """
+
+        return BuildResult(
+            source: source,
+            functionName: functionName,
+            bindings: Bindings(
+                uniformBufferCount: 1,
+                auxiliaryTextureSlotCount: 1
+            )
+        )
+    }
+
+    // MARK: - Shape: neighborReadWithSource (Sharpen / FilmGrain / CCD)
+
+    /// Build an uber kernel whose body samples the primary source
+    /// at offsets relative to `gid`. No aux texture slot — the body
+    /// receives the input texture itself as its `src` parameter.
+    private static func buildNeighborReadWithSource(body: FusionBody) throws -> BuildResult {
+        let (helpers, uniformStructText, bodyText) = try extractArtefacts(for: body)
+        let functionName = uberFunctionName(for: body)
+
+        let source = """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        // ── Injected helpers ────────────────────────────────────────
+        \(helpers)
+
+        // ── Filter uniform struct (from \(body.sourceMetalFile.lastPathComponent)) ──
+        \(uniformStructText)
+
+        // ── Filter body (from \(body.sourceMetalFile.lastPathComponent)) ──
+        \(bodyText)
+
+        // ── Uber kernel (neighborReadWithSource) ───────────────────
+        kernel void \(functionName)(
+            texture2d<half, access::write> output [[texture(0)]],
+            texture2d<half, access::read>  input  [[texture(1)]],
+            constant \(body.uniformStructName)& u0 [[buffer(0)]],
+            uint2 gid [[thread_position_in_grid]])
+        {
+            if (gid.x >= output.get_width() || gid.y >= output.get_height()) return;
+            const half4 c = input.read(gid);
+            half3 rgb = \(body.functionName)(c.rgb, u0, gid, input);
+            output.write(half4(rgb, c.a), gid);
+        }
+        """
+
+        return BuildResult(
+            source: source,
+            functionName: functionName,
+            bindings: Bindings(
+                uniformBufferCount: 1,
+                auxiliaryTextureSlotCount: 0
+            )
+        )
+    }
+
+    /// Shared extraction for single-body shapes — pulls helper
+    /// blocks + uniform struct + body text, wrapping any
+    /// `ShaderSourceExtractor` failure in `BuildError
+    /// .extractionFailed`.
+    private static func extractArtefacts(
+        for body: FusionBody
+    ) throws -> (helpers: String, uniformStruct: String, body: String) {
+        let helperBlocks = FusionHelperSource.helpersForBody(named: body.functionName)
+        guard !helperBlocks.isEmpty else {
+            throw BuildError.unsupportedBodyHelpers(functionName: body.functionName)
+        }
+        let uniformStructText: String
+        let bodyText: String
+        do {
+            uniformStructText = try ShaderSourceExtractor.extractUniformStruct(
+                named: body.uniformStructName,
+                from: body.sourceMetalFile
+            )
+            bodyText = try ShaderSourceExtractor.extractBody(
+                named: body.functionName,
+                from: body.sourceMetalFile
+            )
+        } catch {
+            throw BuildError.extractionFailed(error)
+        }
+        return (helperBlocks.joined(separator: "\n\n"), uniformStructText, bodyText)
     }
 
     // MARK: - Shape: fusedPixelLocalCluster (pixelLocalOnly members)

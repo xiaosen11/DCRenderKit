@@ -177,6 +177,110 @@ internal enum FusionHelperSource {
     }
     """
 
+    /// MIRROR: `Shaders/LUT/LUT3D/LUT3DFilter.metal`
+    /// Software trilinear 3D-LUT sampler + triangular dither for
+    /// banding-free 8-bit output. Used by `DCRLUT3DBody`.
+    static let lut3DPrivate: String = """
+    inline float4 dcr_sampleLUT3D(texture3d<float, access::read> lut, float3 rgb) {
+        const float size = float(lut.get_width());
+        const float maxIdx = size - 1.0f;
+        const float3 coord = rgb * maxIdx;
+
+        const float3 lo = floor(coord);
+        const float3 hi = min(lo + 1.0f, maxIdx);
+        const float3 frac = coord - lo;
+
+        const uint3 c0 = uint3(lo);
+        const uint3 c1 = uint3(hi);
+
+        const float4 v000 = lut.read(uint3(c0.x, c0.y, c0.z));
+        const float4 v100 = lut.read(uint3(c1.x, c0.y, c0.z));
+        const float4 v010 = lut.read(uint3(c0.x, c1.y, c0.z));
+        const float4 v110 = lut.read(uint3(c1.x, c1.y, c0.z));
+        const float4 v001 = lut.read(uint3(c0.x, c0.y, c1.z));
+        const float4 v101 = lut.read(uint3(c1.x, c0.y, c1.z));
+        const float4 v011 = lut.read(uint3(c0.x, c1.y, c1.z));
+        const float4 v111 = lut.read(uint3(c1.x, c1.y, c1.z));
+
+        const float4 m00 = mix(v000, v100, frac.x);
+        const float4 m10 = mix(v010, v110, frac.x);
+        const float4 m01 = mix(v001, v101, frac.x);
+        const float4 m11 = mix(v011, v111, frac.x);
+
+        const float4 m0 = mix(m00, m10, frac.y);
+        const float4 m1 = mix(m01, m11, frac.y);
+
+        return mix(m0, m1, frac.z);
+    }
+
+    inline half3 dcr_triangularDither(uint2 pos, half3 color) {
+        float2 seed = float2(pos) * float2(12.9898f, 78.233f);
+        float noise1 = fract(sin(dot(seed, float2(1.0f, 1.0f))) * 43758.5453f);
+        float noise2 = fract(sin(dot(seed, float2(0.3183f, 0.7071f))) * 22578.1459f);
+        float tri = noise1 - noise2;
+        return color + half3(half(tri) * half(1.0f / 255.0f));
+    }
+    """
+
+    /// MIRROR: `Shaders/Blend/Normal/NormalBlendFilter.metal`
+    /// Manual bilinear read of the overlay texture. Used by
+    /// `DCRNormalBlendBody`.
+    static let normalBlendPrivate: String = """
+    inline half4 dcr_blendBilinear(texture2d<half, access::read> tex, float2 coord) {
+        int2 p = int2(floor(coord));
+        float2 f = fract(coord);
+        int maxX = int(tex.get_width()) - 1;
+        int maxY = int(tex.get_height()) - 1;
+        half4 c00 = tex.read(uint2(clamp(p.x,     0, maxX), clamp(p.y,     0, maxY)));
+        half4 c10 = tex.read(uint2(clamp(p.x + 1, 0, maxX), clamp(p.y,     0, maxY)));
+        half4 c01 = tex.read(uint2(clamp(p.x,     0, maxX), clamp(p.y + 1, 0, maxY)));
+        half4 c11 = tex.read(uint2(clamp(p.x + 1, 0, maxX), clamp(p.y + 1, 0, maxY)));
+        return mix(mix(c00, c10, half(f.x)), mix(c01, c11, half(f.x)), half(f.y));
+    }
+    """
+
+    /// MIRROR: `Shaders/Adjustment/Sharpen/SharpenFilter.metal`
+    /// `dcr_sharpenSafeRead` — edge-clamped texel read used by the
+    /// Laplacian unsharp mask body.
+    static let sharpenPrivate: String = """
+    inline half4 dcr_sharpenSafeRead(texture2d<half, access::read> tex, int2 pos) {
+        uint2 clamped = uint2(
+            clamp(pos.x, 0, int(tex.get_width()) - 1),
+            clamp(pos.y, 0, int(tex.get_height()) - 1)
+        );
+        return tex.read(clamped);
+    }
+    """
+
+    /// MIRROR: `Shaders/Effects/FilmGrain/FilmGrainFilter.metal`
+    /// Symmetric SoftLight (`dcr_softLight`) used by the grain
+    /// body to mix synthetic noise into the source pixel.
+    static let filmGrainPrivate: String = """
+    inline half dcr_softLight(half base, half blend) {
+        return base + (2.0h * blend - 1.0h) * base * (1.0h - base);
+    }
+    """
+
+    /// MIRROR: `Shaders/Effects/CCD/CCDFilter.metal`
+    /// Rec.709 luma constant + CCD-private SafeRead and SoftLight
+    /// helpers. Needed by `DCRCCDBody` for chromatic aberration
+    /// offset reads, grain block sampling, and luma-only sharpen.
+    static let ccdPrivate: String = """
+    constant float3 kDCRCCDLumaRec709 = float3(0.2126f, 0.7152f, 0.0722f);
+
+    inline half4 dcr_ccdSafeRead(texture2d<half, access::read> tex, int2 pos) {
+        uint2 clamped = uint2(
+            clamp(pos.x, 0, int(tex.get_width()) - 1),
+            clamp(pos.y, 0, int(tex.get_height()) - 1)
+        );
+        return tex.read(clamped);
+    }
+
+    inline half dcr_ccdSoftLight(half base, half blend) {
+        return base + (2.0h * blend - 1.0h) * base * (1.0h - base);
+    }
+    """
+
     // MARK: - Per-filter helper dependency map
 
     /// Return the helper text blocks that must precede the body
@@ -200,6 +304,16 @@ internal enum FusionHelperSource {
             return [oklab]
         case "DCRVibranceBody":
             return [oklab, vibrancePrivate]
+        case "DCRLUT3DBody":
+            return [srgbGamma, lut3DPrivate]
+        case "DCRNormalBlendBody":
+            return [normalBlendPrivate]
+        case "DCRSharpenBody":
+            return [sharpenPrivate]
+        case "DCRFilmGrainBody":
+            return [filmGrainPrivate]
+        case "DCRCCDBody":
+            return [ccdPrivate]
         default:
             // Unknown body name — caller handles this by detecting
             // an empty result; MetalSourceBuilder surfaces it as
@@ -221,5 +335,10 @@ internal enum FusionHelperSource {
         "DCRWhiteBalanceBody",
         "DCRSaturationBody",
         "DCRVibranceBody",
+        "DCRLUT3DBody",
+        "DCRNormalBlendBody",
+        "DCRSharpenBody",
+        "DCRFilmGrainBody",
+        "DCRCCDBody",
     ]
 }

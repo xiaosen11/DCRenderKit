@@ -37,13 +37,19 @@ internal enum ComputeBackend {
     ///
     /// - Parameters:
     ///   - node: Lowered / optimised pipeline graph node. Supported
-    ///     kinds at step 4 are `.pixelLocal` with signature
-    ///     `.pixelLocalOnly` and `.fusedPixelLocalCluster` whose
-    ///     members all have shape `.pixelLocalOnly`. Other node
-    ///     kinds throw `MetalSourceBuilder.BuildError`.
+    ///     shapes today: `.pixelLocalOnly`, `.pixelLocalWithLUT3D`,
+    ///     `.pixelLocalWithOverlay`, `.neighborReadWithSource`, and
+    ///     `.fusedPixelLocalCluster` with `.pixelLocalOnly` members.
     ///   - source: Primary input texture; bound at texture slot 1.
     ///   - destination: Output texture; must have `.shaderWrite`;
     ///     bound at texture slot 0.
+    ///   - additionalInputs: Auxiliary textures the node's body
+    ///     references via `NodeRef.additional(i)`. Each
+    ///     `.additional(i)` entry in `Node.additionalNodeInputs`
+    ///     binds `additionalInputs[i]` at texture slot `2 + k`,
+    ///     where `k` is the aux entry's position in the Node's
+    ///     additional list. Ignored for shapes that don't read
+    ///     auxiliaries (`.pixelLocalOnly`, `.neighborReadWithSource`).
     ///   - commandBuffer: Command buffer to encode into. Caller
     ///     commits / waits.
     ///   - uberCache: Library + PSO cache. Defaults to the shared
@@ -61,6 +67,7 @@ internal enum ComputeBackend {
         node: Node,
         source: MTLTexture,
         destination: MTLTexture,
+        additionalInputs: [MTLTexture] = [],
         commandBuffer: MTLCommandBuffer,
         uberCache: UberKernelCache = .shared,
         uniformPool: UniformBufferPool = .shared
@@ -79,13 +86,18 @@ internal enum ComputeBackend {
         encoder.label = "DCR.Fusion.\(built.functionName)"
         encoder.setComputePipelineState(pso)
 
-        // Texture slot convention: 0 = output, 1 = source. Step 3c
-        // will extend this for aux textures (LUT, overlay, mask).
+        // Texture slots 0, 1 are output and source; aux textures
+        // start at slot 2.
         encoder.setTexture(destination, index: 0)
         encoder.setTexture(source, index: 1)
+        try bindAuxiliaryTextures(
+            node: node,
+            additionalInputs: additionalInputs,
+            encoder: encoder
+        )
 
         // Bind uniforms — one buffer slot per cluster member, or a
-        // single slot for a standalone pixelLocal node.
+        // single slot for a standalone pixelLocal / neighborRead node.
         try bindUniforms(
             node: node,
             encoder: encoder,
@@ -102,6 +114,53 @@ internal enum ComputeBackend {
         encoder.dispatchThreads(grid, threadsPerThreadgroup: threadgroup)
 
         encoder.endEncoding()
+    }
+
+    /// Bind any `NodeRef.additional(i)` references in the node to
+    /// concrete textures from `additionalInputs`. The first such
+    /// aux ref lands at texture slot 2, the next at slot 3, and
+    /// so on. `NodeRef.source` / `.node(_)` entries are ignored
+    /// here — they're bound upstream (source) or resolved by the
+    /// Pipeline executor (inter-node node refs — not a concern for
+    /// the single-node execution path yet).
+    private static func bindAuxiliaryTextures(
+        node: Node,
+        additionalInputs: [MTLTexture],
+        encoder: MTLComputeCommandEncoder
+    ) throws {
+        let auxRefs: [NodeRef]
+        switch node.kind {
+        case let .pixelLocal(_, _, _, aux):             auxRefs = aux
+        case let .neighborRead(_, _, _, aux):           auxRefs = aux
+        case let .fusedPixelLocalCluster(_, _, aux):    auxRefs = aux
+        default:                                        auxRefs = []
+        }
+
+        var slot = 2
+        for ref in auxRefs {
+            switch ref {
+            case .additional(let index):
+                guard index >= 0, index < additionalInputs.count else {
+                    throw PipelineError.filter(.invalidPassGraph(
+                        filterName: String(describing: node.kind),
+                        reason: ".additional(\(index)) out of range of additionalInputs (count \(additionalInputs.count))"
+                    ))
+                }
+                encoder.setTexture(additionalInputs[index], index: slot)
+                slot += 1
+            case .source:
+                encoder.setTexture(nil, index: slot)   // will be set by primary binding
+                slot += 1
+            case .node:
+                // Single-node execution path: inter-node node refs
+                // aren't resolved here (the Pipeline executor
+                // will thread intermediate outputs as inputs in
+                // follow-up steps). Leave the slot empty so the
+                // uber kernel fails cleanly if it ever reads a
+                // non-supplied slot.
+                slot += 1
+            }
+        }
     }
 
     // MARK: - Uniform binding
@@ -126,6 +185,15 @@ internal enum ComputeBackend {
     ) throws {
         switch node.kind {
         case let .pixelLocal(_, uniforms, _, _):
+            try bindOneUniform(
+                uniforms,
+                at: 0,
+                encoder: encoder,
+                commandBuffer: commandBuffer,
+                uniformPool: uniformPool
+            )
+
+        case let .neighborRead(_, uniforms, _, _):
             try bindOneUniform(
                 uniforms,
                 at: 0,

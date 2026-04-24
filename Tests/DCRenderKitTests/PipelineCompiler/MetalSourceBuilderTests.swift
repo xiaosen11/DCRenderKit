@@ -178,9 +178,14 @@ final class MetalSourceBuilderTests: XCTestCase {
 
     // MARK: - Unsupported inputs
 
-    /// A `.neighborRead` Node is not supported by Step 3a — the
-    /// builder surfaces `.unsupportedNodeKind`.
-    func testNeighborReadNodeRejected() {
+    /// A `.neighborRead` Node whose body's signature shape is
+    /// not `.neighborReadWithSource` is rejected — the builder
+    /// surfaces `.unsupportedSignatureShape`. The fixture's
+    /// `neighborReadNode` helper constructs bodies with the
+    /// default `.pixelLocalOnly` shape, which is itself a
+    /// graph-construction bug (the shape should match the kind)
+    /// but is useful here to exercise the rejection path.
+    func testNeighborReadNodeWithMismatchedShapeRejected() {
         let node = PipelineCompilerTestFixtures.neighborReadNode(
             id: 0,
             bodyName: "DCRSharpenBody",
@@ -188,17 +193,17 @@ final class MetalSourceBuilderTests: XCTestCase {
             isFinal: true
         )
         XCTAssertThrowsError(try MetalSourceBuilder.build(for: node)) { error in
-            guard case MetalSourceBuilder.BuildError.unsupportedNodeKind = error else {
-                XCTFail("Expected .unsupportedNodeKind, got \(error)")
+            guard case MetalSourceBuilder.BuildError.unsupportedSignatureShape = error else {
+                XCTFail("Expected .unsupportedSignatureShape, got \(error)")
                 return
             }
         }
     }
 
-    /// Pixel-local with a non-`.pixelLocalOnly` signature shape
-    /// (e.g. LUT3D's `.pixelLocalWithLUT3D`) is also rejected by
-    /// Step 3a — the builder surfaces `.unsupportedSignatureShape`.
-    func testLUT3DSignatureShapeRejected() throws {
+    /// LUT3D now compiles via the `.pixelLocalWithLUT3D` codegen
+    /// path (Step 3c). Checks that build succeeds, source mentions
+    /// the LUT texture binding, and the Metal library compiles.
+    func testLUT3DShapeCompiles() throws {
         let identity2Cube: [Float] = [
             0, 0, 0, 1,  1, 0, 0, 1,
             0, 1, 0, 1,  1, 1, 0, 1,
@@ -209,11 +214,60 @@ final class MetalSourceBuilderTests: XCTestCase {
         let filter = try LUT3DFilter(cubeData: cubeData, dimension: 2)
         let node = loweredSingleNode(for: .single(filter))
 
-        XCTAssertThrowsError(try MetalSourceBuilder.build(for: node)) { error in
-            guard case MetalSourceBuilder.BuildError.unsupportedSignatureShape = error else {
-                XCTFail("Expected .unsupportedSignatureShape, got \(error)")
-                return
-            }
+        let result = try MetalSourceBuilder.build(for: node)
+        XCTAssertTrue(result.source.contains("texture3d<float, access::read> lut"))
+        XCTAssertTrue(result.source.contains("DCRLUT3DBody(c.rgb, u0, gid, lut)"))
+        XCTAssertEqual(result.bindings.auxiliaryTextureSlotCount, 1)
+
+        let library = try device.makeLibrary(source: result.source, options: nil)
+        XCTAssertNotNil(library.makeFunction(name: result.functionName))
+    }
+
+    /// NormalBlend compiles via the `.pixelLocalWithOverlay`
+    /// codegen path. Requires a dummy overlay texture for filter
+    /// construction.
+    func testNormalBlendShapeCompiles() throws {
+        let desc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .rgba8Unorm, width: 1, height: 1, mipmapped: false
+        )
+        desc.usage = [.shaderRead]
+        let overlay = device.makeTexture(descriptor: desc)!
+        let filter = NormalBlendFilter(overlay: overlay)
+        let node = loweredSingleNode(for: .single(filter))
+
+        let result = try MetalSourceBuilder.build(for: node)
+        XCTAssertTrue(result.source.contains("texture2d<half, access::read>  overlay"))
+        XCTAssertTrue(result.source.contains("DCRNormalBlendBody(c, u0, gid, overlay, uint2(outW, outH))"))
+        XCTAssertTrue(result.source.contains("output.write(rgba, gid)"),
+                      "NormalBlend returns rgba; uber kernel writes it directly")
+        XCTAssertEqual(result.bindings.auxiliaryTextureSlotCount, 1)
+
+        let library = try device.makeLibrary(source: result.source, options: nil)
+        XCTAssertNotNil(library.makeFunction(name: result.functionName))
+    }
+
+    /// Sharpen / FilmGrain / CCD all use the
+    /// `.neighborReadWithSource` shape: one body signature, no
+    /// aux texture slot (the body receives the source itself as
+    /// its `src` param).
+    func testNeighborReadWithSourceFiltersCompile() throws {
+        let filters: [any FilterProtocol] = [
+            SharpenFilter(),
+            FilmGrainFilter(),
+            CCDFilter(),
+        ]
+        for filter in filters {
+            let node = loweredSingleNode(for: .single(filter))
+            let result = try MetalSourceBuilder.build(for: node)
+            XCTAssertEqual(result.bindings.auxiliaryTextureSlotCount, 0,
+                           "\(type(of: filter)): neighbourhood-style bodies read primary source; no aux slot expected")
+            // Kernel signature must not introduce an extra texture
+            // parameter at slot 2.
+            XCTAssertFalse(result.source.contains("[[texture(2)]]"),
+                           "\(type(of: filter)): unexpected extra texture slot in generated kernel")
+            let library = try device.makeLibrary(source: result.source, options: nil)
+            XCTAssertNotNil(library.makeFunction(name: result.functionName),
+                            "\(type(of: filter)): uber kernel should resolve")
         }
     }
 
