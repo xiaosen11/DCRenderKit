@@ -9,7 +9,7 @@
 ## 0. 最重要的事（如果只读一段）
 
 - Repo: `/Users/xiaosenromangic.com/DevWorkSpace/DCRenderKit/`
-- 当前分支 `main`，`HEAD = 86b90c9`，**Session C 新增 18 commit 未 push**（禁止自动 push）
+- 当前分支 `main`，`HEAD = c46ab19`（handoff snapshot commit），**Session C 累计 18 commits ahead of origin/main 未 push**（禁止自动 push）。snapshot 状态锚定在 handoff commit 前一刻的 `86b90c9`，但 `git log` 实时 HEAD 永远是 handoff commit 自己 —— 这是不可避免的 handoff paradox，不是 bug
 - **326 tests pass / 0 failures / 0 warnings**
 - **权威 pending todo** 在 repo 根 `TODO.md`（Session C 已重写成分类清单）。**不要**声称 TaskList 丢了 —— 见 §1。
 - 硬约束 5 份 `.claude/rules/*.md` 必读 —— 见 §4。
@@ -116,8 +116,9 @@ DCRenderKit repo 自身没有 `.claude/skills/` 目录。session 可以继承使
 ### Git
 
 - 分支: `main`
-- HEAD: `86b90c9`
-- **18 commits ahead of origin/main**（Session C 新增，未 push，禁止自动 push）
+- HEAD: `c46ab19`（`docs(handoff): Session C end snapshot`，handoff 自身）
+- State snapshot 锚定: `86b90c9`（handoff commit 前一刻）—— 此 snapshot 里引用的测试数 / ahead 数 / breaking change 列表都是**写入 handoff 时的状态**，handoff commit 本身不改变 code 故 326 tests 两个 HEAD 上都 pass
+- **18 commits ahead of origin/main**（Session C 累计，**含 handoff commit 自身**，未 push，禁止自动 push）
 - Working tree: `Examples/DCRDemo/DCRDemo.xcodeproj/project.pbxproj` **持续脏**，属 Xcode IDE 自动编辑（`LastUpgradeCheck` + `DEVELOPMENT_TEAM` 位置漂移），**不要 stage**
 
 ### 测试
@@ -352,7 +353,7 @@ F. 工作流参考 (遇到对应场景时查)
      mkdir -p ~/.claude/tasks/<current>/
      cp ~/.claude/tasks/6afb8a49-4085-4fc3-9b37-557b14c24dba/*.json \
         ~/.claude/tasks/<current>/
-2. 运行 swift build + swift test，确认 **326 pass at HEAD 86b90c9**
+2. 运行 swift build + swift test，确认 **326 pass at HEAD c46ab19**（snapshot anchor 86b90c9 上也是 326 pass，handoff commit 不改 code）
 3. 确认 git status: `Examples/DCRDemo/DCRDemo.xcodeproj/project.pbxproj` 可能
    dirty (Xcode 自动编辑，不 stage)
 4. 查 TODO.md "Session C 保留做" 三条 + "foundation-capability-baseline"
