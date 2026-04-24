@@ -15,6 +15,17 @@
 //  own shader source. Mirrors must stay in sync with this file; grep
 //  for `// MIRROR: Foundation/OKLab.metal` to find copies.
 //
+//  Each helper is declared `static inline`. SwiftPM's per-file
+//  compilation tolerates plain external definitions (they never see
+//  each other), but `xcodebuild docbuild` and any consumer that
+//  builds the SDK as a single Metal library link every `.metal` file
+//  into one default.metallib. Without `static`, the duplicate
+//  definitions across Foundation + Saturation + Vibrance produced
+//  `air-lld: 12 duplicated symbols` errors. `static` gives each
+//  translation unit its own copy with internal linkage; `inline`
+//  allows the compiler to inline the helper into its caller and
+//  drop the standalone copy. Net cost is zero at runtime.
+//
 //  A future Phase 2 tech-debt item: replace the mirroring with a
 //  build-time Metal preprocessor that resolves `#include` across the
 //  Shaders tree. Tracked as informal follow-up to #76.
@@ -45,7 +56,7 @@ using namespace metal;
 ///
 /// Two matrix multiplications separated by a cube-root non-linearity.
 /// See Ottosson (2020) §"Converting from linear sRGB".
-float3 DCRLinearSRGBToOKLab(float3 rgb) {
+static inline float3 DCRLinearSRGBToOKLab(float3 rgb) {
     // M1: linear sRGB → LMS (long/medium/short cone responses).
     const float l = 0.4122214708f * rgb.r + 0.5363325363f * rgb.g + 0.0514459929f * rgb.b;
     const float m = 0.2119034982f * rgb.r + 0.6806995451f * rgb.g + 0.1073969566f * rgb.b;
@@ -67,7 +78,7 @@ float3 DCRLinearSRGBToOKLab(float3 rgb) {
 }
 
 /// Convert OKLab to linear sRGB (D65).
-float3 DCROKLabToLinearSRGB(float3 lab) {
+static inline float3 DCROKLabToLinearSRGB(float3 lab) {
     // Inverse M2: OKLab → LMS'.
     const float l_ = lab.x + 0.3963377774f * lab.y + 0.2158037573f * lab.z;
     const float m_ = lab.x - 0.1055613458f * lab.y - 0.0638541728f * lab.z;
@@ -95,14 +106,14 @@ float3 DCROKLabToLinearSRGB(float3 lab) {
 /// `L` is unchanged. `C = √(a² + b²)` is chroma (colourfulness at fixed
 /// lightness). `h = atan2(b, a)` is hue in radians, range `(-π, π]`.
 /// Callers that want `[0, 2π)` should add `2π` when `h < 0`.
-float3 DCROKLabToOKLCh(float3 lab) {
+static inline float3 DCROKLabToOKLCh(float3 lab) {
     const float C = length(lab.yz);
     const float h = atan2(lab.z, lab.y);
     return float3(lab.x, C, h);
 }
 
 /// Convert OKLCh back to OKLab.
-float3 DCROKLChToOKLab(float3 lch) {
+static inline float3 DCROKLChToOKLab(float3 lch) {
     const float a = lch.y * cos(lch.z);
     const float b = lch.y * sin(lch.z);
     return float3(lch.x, a, b);
@@ -117,7 +128,7 @@ float3 DCROKLChToOKLab(float3 lch) {
 constant float kDCROKLabGamutMargin = 1.0f / 4096.0f;
 
 /// True if the linear-sRGB triple is within `[0, 1]³` (± margin).
-bool DCROKLabIsInGamut(float3 rgb) {
+static inline bool DCROKLabIsInGamut(float3 rgb) {
     return all(rgb >= -kDCROKLabGamutMargin)
         && all(rgb <= 1.0f + kDCROKLabGamutMargin);
 }
@@ -137,7 +148,7 @@ bool DCROKLabIsInGamut(float3 rgb) {
 /// analytical method is faster but requires maintaining a gamut boundary
 /// LUT. Future-swap documented in the header comment at the top of this
 /// file.
-float3 DCROKLChGamutClamp(float3 lch) {
+static inline float3 DCROKLChGamutClamp(float3 lch) {
     // Fast path: already in gamut.
     const float3 rgb0 = DCROKLabToLinearSRGB(DCROKLChToOKLab(lch));
     if (DCROKLabIsInGamut(rgb0)) {

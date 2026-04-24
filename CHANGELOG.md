@@ -100,6 +100,24 @@ until `v1.0.0`. Each breaking change is flagged explicitly below.
     annotations tightened to `@available(iOS 17.0, *)`.
   - CI matrix no longer builds the AppKit framework configuration.
 
+### Fixed
+
+- **`xcodebuild docbuild` / xcframework metallib link**: `air-lld`
+  was failing with `12 duplicated symbols for target air64_v27`
+  on the OKLab helper functions. SwiftPM's per-`.metal` compilation
+  model never co-links the mirrors (Foundation/OKLab.metal +
+  SaturationFilter.metal + VibranceFilter.metal each become their
+  own MTLLibrary), but Xcode's framework / DocC build pulls every
+  shader source into a single default.metallib where `inline` was
+  not enough to deduplicate the six OKLab helpers. Marked the six
+  helpers `static inline` in all three files so each translation
+  unit owns its private copy and the linker has nothing to merge.
+  Inlining still drops the standalone copy at codegen, so runtime
+  cost is zero. SRGBGamma helpers (already `inline`) were not
+  affected by `air-lld` — left untouched. Xcode's
+  `Product → Build Documentation` and the CI `docs` job (#61) now
+  succeed.
+
 ### Removed (breaking)
 
 - **`MultiPassExecutor` is now internal** (#48). The type is only

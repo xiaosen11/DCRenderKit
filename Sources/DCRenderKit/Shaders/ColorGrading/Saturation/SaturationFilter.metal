@@ -32,7 +32,7 @@ using namespace metal;
 //
 // Reference: Ottosson (2020) — https://bottosson.github.io/posts/oklab/
 
-float3 DCRLinearSRGBToOKLab(float3 rgb) {
+static inline float3 DCRLinearSRGBToOKLab(float3 rgb) {
     const float l = 0.4122214708f * rgb.r + 0.5363325363f * rgb.g + 0.0514459929f * rgb.b;
     const float m = 0.2119034982f * rgb.r + 0.6806995451f * rgb.g + 0.1073969566f * rgb.b;
     const float s = 0.0883024619f * rgb.r + 0.2817188376f * rgb.g + 0.6299787005f * rgb.b;
@@ -48,7 +48,7 @@ float3 DCRLinearSRGBToOKLab(float3 rgb) {
     );
 }
 
-float3 DCROKLabToLinearSRGB(float3 lab) {
+static inline float3 DCROKLabToLinearSRGB(float3 lab) {
     const float l_ = lab.x + 0.3963377774f * lab.y + 0.2158037573f * lab.z;
     const float m_ = lab.x - 0.1055613458f * lab.y - 0.0638541728f * lab.z;
     const float s_ = lab.x - 0.0894841775f * lab.y - 1.2914855480f * lab.z;
@@ -64,13 +64,13 @@ float3 DCROKLabToLinearSRGB(float3 lab) {
     );
 }
 
-float3 DCROKLabToOKLCh(float3 lab) {
+static inline float3 DCROKLabToOKLCh(float3 lab) {
     const float C = length(lab.yz);
     const float h = atan2(lab.z, lab.y);
     return float3(lab.x, C, h);
 }
 
-float3 DCROKLChToOKLab(float3 lch) {
+static inline float3 DCROKLChToOKLab(float3 lch) {
     const float a = lch.y * cos(lch.z);
     const float b = lch.y * sin(lch.z);
     return float3(lch.x, a, b);
@@ -78,12 +78,12 @@ float3 DCROKLChToOKLab(float3 lch) {
 
 constant float kDCROKLabGamutMargin = 1.0f / 4096.0f;
 
-bool DCROKLabIsInGamut(float3 rgb) {
+static inline bool DCROKLabIsInGamut(float3 rgb) {
     return all(rgb >= -kDCROKLabGamutMargin)
         && all(rgb <= 1.0f + kDCROKLabGamutMargin);
 }
 
-float3 DCROKLChGamutClamp(float3 lch) {
+static inline float3 DCROKLChGamutClamp(float3 lch) {
     const float3 rgb0 = DCROKLabToLinearSRGB(DCROKLChToOKLab(lch));
     if (DCROKLabIsInGamut(rgb0)) {
         return lch;
