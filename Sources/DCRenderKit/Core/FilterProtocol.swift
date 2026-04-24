@@ -59,6 +59,18 @@ public protocol FilterProtocol: Sendable {
     /// the same group by `FilterGraphOptimizer`. Return `nil` to disable fusion.
     static var fuseGroup: FuseGroup? { get }
 
+    /// Metadata enabling this filter to participate in compiler-driven
+    /// fusion. SDK-built-in filters ship a descriptor pointing at an
+    /// inline Metal body function; third-party filters either do the
+    /// same or return ``FusionBodyDescriptor/unsupported`` (the default)
+    /// and ship a standalone kernel registered via
+    /// ``ShaderLibrary/register(_:)``.
+    ///
+    /// The default implementation returns ``FusionBodyDescriptor/unsupported``
+    /// so legacy `FilterProtocol` conformers continue to compile without
+    /// change. See `docs/pipeline-compiler-design.md` §4 and §9.
+    var fusionBody: FusionBodyDescriptor { get }
+
     /// Called before the filter's main dispatch. Default implementation is
     /// a no-op. Override for filters that need setup work (e.g. mask caching).
     func combinationBegin(
@@ -80,6 +92,8 @@ extension FilterProtocol {
     public var additionalInputs: [MTLTexture] { [] }
 
     public static var fuseGroup: FuseGroup? { nil }
+
+    public var fusionBody: FusionBodyDescriptor { .unsupported }
 
     public func combinationBegin(
         commandBuffer: MTLCommandBuffer,
