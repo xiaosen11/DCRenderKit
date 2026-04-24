@@ -123,6 +123,28 @@ until `v1.0.0`. Each breaking change is flagged explicitly below.
 
 ### Internal / docs
 
+- **CCD structural test suite** (#93). Adds four per-arm isolation
+  tests that run with the other CCD sub-effects disabled so each
+  branch's invariant is asserted independently:
+  chromatic-aberration R-left / B-right offset on a vertical colour
+  boundary; saturation-boost identity on a grey patch;
+  digital-noise block quantisation within a grain block with
+  cross-block difference; and strength-mix linearity
+  (`out_0.5 ≈ 0.5·(out_0 + out_1)`). `CCDFilter` test count rises
+  from 2 → 6.
+- **Typed-error regression suite** (`PipelineErrorTests`, #94).
+  Central catalogue of the `PipelineError` hierarchy: every case
+  across all five domains (`device` / `texture` / `pipelineState` /
+  `filter` / `resource`) gets instantiated and asserted for
+  non-empty diagnostic text and for payload surfacing
+  (parameter names, error tokens, CoreVideo return codes).
+  Pattern-match tests confirm `switch` on the top-level type
+  selects the correct domain, and trigger tests drive
+  `Invariant.require*` + `LUT3DFilter(cubeURL:)` +
+  `LUT3DFilter(cubeData:dimension:)` through the typed throw path.
+  15 new tests in a dedicated file — covers a gap the previous
+  tests filled implicitly across multiple dispatcher / loader
+  suites.
 - **Release-automation workflow** (`.github/workflows/release.yml`,
   #62). Triggers on `v*` tags pushed to the repository; runs a
   `swift build -Xswiftc -warnings-as-errors` + `swift test`

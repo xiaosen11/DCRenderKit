@@ -200,6 +200,212 @@ final class EffectsFilterTests: XCTestCase {
         }
     }
 
+    /// Chromatic aberration in isolation: R samples from `pos.x - caPx`,
+    /// B samples from `pos.x + caPx`. Construct a vertical colour
+    /// boundary — left half pure red, right half pure blue — and enable
+    /// only the CA slider. At a pixel inside the originally-blue region
+    /// but within `caPx` of the boundary, R should pull from the red
+    /// half (1.0) and B should remain blue (1.0) — the signature R/B
+    /// horizontal split.
+    ///
+    /// Derivation:
+    ///   caPx = caAmount · caMaxOffset = 1.0 · 6 = 6 pixels.
+    ///   Source: 16×8 texture, x<8 is (1,0,0), x≥8 is (0,0,1).
+    ///   Sample at x=10 (2 px right of boundary):
+    ///     R source coord = 10 − 6 = 4 (still in red half)   → R = 1
+    ///     B source coord = 10 + 6 = 16 → clamp to 15 (blue) → B = 1
+    ///   So the pixel reads R=1, B=1 where the un-CA pixel would
+    ///   read R=0, B=1.
+    ///
+    /// Sharpening and noise are off; saturationBoost=0 keeps the
+    /// multiplier at exactly 1.0 so it's an identity; strength=100
+    /// means output = processed directly.
+    func testCCDChromaticAberrationOffsetsRedLeftBlueRight() throws {
+        let width = 16
+        let height = 8
+        let source = try makeVerticalColorSplitSource(
+            leftR: 1, leftG: 0, leftB: 0,
+            rightR: 0, rightG: 0, rightB: 1,
+            width: width, height: height
+        )
+        let filter = CCDFilter(
+            strength: 100,
+            digitalNoise: 0,
+            chromaticAberration: 100,
+            sharpening: 0,
+            saturationBoost: 0,
+            grainSize: 2,
+            sharpStep: 1,
+            caMaxOffset: 6
+        )
+        let output = try runSingle(source, filter: filter)
+        let pixels = try readEffectTexture(output)
+
+        // Pixel in the blue half, within caPx of the boundary.
+        // Expect R pulled from red-half source and B retained.
+        let p = pixels[4][10]
+        XCTAssertEqual(p.r, 1.0, accuracy: 0.02,
+                       "R channel should offset left into red-half source")
+        XCTAssertEqual(p.g, 0.0, accuracy: 0.02,
+                       "G channel is not offset by CA; stays at source value 0")
+        XCTAssertEqual(p.b, 1.0, accuracy: 0.02,
+                       "B channel should offset right (clamped to edge); stays blue")
+    }
+
+    /// Saturation boost alone on a uniform grey patch is identity.
+    ///
+    /// Shader: `color.rgb = luma + (color.rgb − luma) · saturation`.
+    /// On grey input R=G=B, `color.rgb − luma = 0`, so the branch
+    /// becomes `color.rgb = luma + 0 · saturation = luma`. Multiplying
+    /// by `saturation` doesn't affect a zero vector. Grey stays grey.
+    ///
+    /// With CA / noise / sharp all off, this isolates the saturation
+    /// arm. The expected output equals input — a strong identity claim
+    /// that catches a regression that accidentally breaks the
+    /// grey-preservation property (e.g. by clamping the luma vector
+    /// before the subtraction).
+    func testCCDSaturationBoostIdentityOnGray() throws {
+        let source = try makeEffectSource(red: 0.5, green: 0.5, blue: 0.5,
+                                          width: 16, height: 16)
+        let filter = CCDFilter(
+            strength: 100,
+            digitalNoise: 0,
+            chromaticAberration: 0,
+            sharpening: 0,
+            saturationBoost: 100,   // maximum: saturation multiplier = 1.3
+            grainSize: 2,
+            sharpStep: 1,
+            caMaxOffset: 0
+        )
+        let output = try runSingle(source, filter: filter)
+        let pixels = try readEffectTexture(output)
+
+        // Grey patch must remain grey at tight tolerance.
+        for y in 4..<12 {
+            for x in 4..<12 {
+                let p = pixels[y][x]
+                XCTAssertEqual(p.r, 0.5, accuracy: 0.01,
+                               "grey R should be preserved at (\(x),\(y))")
+                XCTAssertEqual(p.g, 0.5, accuracy: 0.01,
+                               "grey G should be preserved at (\(x),\(y))")
+                XCTAssertEqual(p.b, 0.5, accuracy: 0.01,
+                               "grey B should be preserved at (\(x),\(y))")
+            }
+        }
+    }
+
+    /// Digital noise is block-quantised by `grainSize`: `grainPos =
+    /// floor(gid / grainSize)` and noise uses `grainPos` so every pixel
+    /// inside a `grainSize × grainSize` block reads the same noise value.
+    ///
+    /// Derivation:
+    ///   grainSize = 4 ⇒ blocks at (0..3, 0..3), (4..7, 0..3), etc.
+    ///   Inside one block, every pixel sees the same `grainPos` and
+    ///   therefore the same `nR / nG / nB` noise triple and the same
+    ///   softlight blend. Output values *within* a block are
+    ///   uniform (modulo the sharpening / CA branches, which we disable).
+    ///
+    /// With all other branches off, this isolates the block-quantisation
+    /// property. A regression that accidentally used `gid` directly
+    /// instead of `floor(gid/grainSize)` would produce per-pixel noise
+    /// and the within-block variance assertion below would catch it.
+    func testCCDDigitalNoiseIsBlockQuantized() throws {
+        let size = 16
+        let source = try makeEffectSource(red: 0.5, green: 0.5, blue: 0.5,
+                                          width: size, height: size)
+        let grainBlock: Float = 4
+        let filter = CCDFilter(
+            strength: 100,
+            digitalNoise: 100,
+            chromaticAberration: 0,
+            sharpening: 0,
+            saturationBoost: 0,
+            grainSize: grainBlock,
+            sharpStep: 1,
+            caMaxOffset: 0
+        )
+        let output = try runSingle(source, filter: filter)
+        let pixels = try readEffectTexture(output)
+
+        // Pick a block at (4..7, 4..7). Every pixel inside must equal
+        // the block's top-left value within Float16 quantisation.
+        let anchor = pixels[4][4]
+        for y in 4..<8 {
+            for x in 4..<8 {
+                let p = pixels[y][x]
+                XCTAssertEqual(p.r, anchor.r, accuracy: 0.005,
+                               "within-block R should be uniform at (\(x),\(y))")
+                XCTAssertEqual(p.g, anchor.g, accuracy: 0.005,
+                               "within-block G should be uniform at (\(x),\(y))")
+                XCTAssertEqual(p.b, anchor.b, accuracy: 0.005,
+                               "within-block B should be uniform at (\(x),\(y))")
+            }
+        }
+
+        // Cross-block variation must exist — otherwise the noise
+        // hashing collapsed to a constant.
+        let other = pixels[4][8]   // adjacent block
+        let diff = abs(other.r - anchor.r) + abs(other.g - anchor.g)
+                 + abs(other.b - anchor.b)
+        XCTAssertGreaterThan(diff, 0.001,
+                             "adjacent blocks must produce different noise hashes")
+    }
+
+    /// The final `strength` mix is `output = mix(original, processed,
+    /// strength)` — a linear interpolation. If `out_0 = original`
+    /// (strength=0) and `out_1 = processed` (strength=1), then
+    /// `out_0.5 = 0.5·out_0 + 0.5·out_1` at every pixel.
+    ///
+    /// Because `mix` is per-component linear, this must hold in
+    /// exact arithmetic and within Float16 / half-precision noise on
+    /// the GPU. Catches a regression that moves the strength mix to
+    /// a non-linear curve (e.g. slider² or a smoothstep) without
+    /// updating callers' expected behaviour.
+    func testCCDStrengthMixIsLinearBetweenOriginalAndProcessed() throws {
+        func runWithStrength(_ strength: Float) throws -> [[EffectPixel]] {
+            let source = try makeRampSource()   // horizontal 0→1 ramp, 16×16
+            let filter = CCDFilter(
+                strength: strength,
+                digitalNoise: 50,
+                chromaticAberration: 30,
+                sharpening: 40,
+                saturationBoost: 20,
+                grainSize: 2,
+                sharpStep: 1,
+                caMaxOffset: 2
+            )
+            let output = try runSingle(source, filter: filter)
+            return try readEffectTexture(output)
+        }
+
+        let out0 = try runWithStrength(0)
+        let out50 = try runWithStrength(50)
+        let out100 = try runWithStrength(100)
+
+        // Verify: out50 ≈ 0.5·out0 + 0.5·out100 at every pixel.
+        // Tolerance 0.02 covers the Float16 round-trip of the two
+        // independent GPU runs (each intermediate is 16-float but the
+        // final write goes through a 16-float texture; per-pixel
+        // accumulated drift sits well under 0.02 at half precision).
+        for y in 0..<out50.count {
+            for x in 0..<out50[y].count {
+                let midPixel = out50[y][x]
+                let expected = EffectPixel(
+                    r: 0.5 * (out0[y][x].r + out100[y][x].r),
+                    g: 0.5 * (out0[y][x].g + out100[y][x].g),
+                    b: 0.5 * (out0[y][x].b + out100[y][x].b),
+                    a: 0.5 * (out0[y][x].a + out100[y][x].a)
+                )
+                XCTAssertEqual(midPixel.r, expected.r, accuracy: 0.02,
+                               "strength mix non-linear at R (\(x),\(y))")
+                XCTAssertEqual(midPixel.g, expected.g, accuracy: 0.02,
+                               "strength mix non-linear at G (\(x),\(y))")
+                XCTAssertEqual(midPixel.b, expected.b, accuracy: 0.02,
+                               "strength mix non-linear at B (\(x),\(y))")
+            }
+        }
+    }
+
     // MARK: - LUT3D
 
     func testLUT3DIdentityLUTPreservesColor() throws {
@@ -461,6 +667,58 @@ private func makeEffectSource(
 /// A step-edge source: left half = `darkValue`, right half = `brightValue`.
 /// Edge is between column (width/2 - 1) and column (width/2). Useful for
 /// verifying neighbor-sampling filters' overshoot / undershoot math.
+private func makeVerticalColorSplitSource(
+    leftR: Float, leftG: Float, leftB: Float,
+    rightR: Float, rightG: Float, rightB: Float,
+    alpha: Float = 1.0,
+    width: Int, height: Int
+) throws -> MTLTexture {
+    guard let device = Device.tryShared?.metalDevice else {
+        throw XCTSkip("Metal device required")
+    }
+    let desc = MTLTextureDescriptor.texture2DDescriptor(
+        pixelFormat: .rgba16Float,
+        width: width, height: height, mipmapped: false
+    )
+    desc.usage = [.shaderRead, .shaderWrite]
+    desc.storageMode = .shared
+    let tex = try XCTUnwrap(device.makeTexture(descriptor: desc))
+
+    let mid = width / 2
+    var pixels = [UInt16](repeating: 0, count: width * height * 4)
+    let hA = Float16(alpha).bitPattern
+    let hLR = Float16(leftR).bitPattern
+    let hLG = Float16(leftG).bitPattern
+    let hLB = Float16(leftB).bitPattern
+    let hRR = Float16(rightR).bitPattern
+    let hRG = Float16(rightG).bitPattern
+    let hRB = Float16(rightB).bitPattern
+    for y in 0..<height {
+        for x in 0..<width {
+            let off = (y * width + x) * 4
+            if x < mid {
+                pixels[off + 0] = hLR
+                pixels[off + 1] = hLG
+                pixels[off + 2] = hLB
+            } else {
+                pixels[off + 0] = hRR
+                pixels[off + 1] = hRG
+                pixels[off + 2] = hRB
+            }
+            pixels[off + 3] = hA
+        }
+    }
+    pixels.withUnsafeBytes { bytes in
+        tex.replace(
+            region: MTLRegionMake2D(0, 0, width, height),
+            mipmapLevel: 0,
+            withBytes: bytes.baseAddress!,
+            bytesPerRow: width * 8
+        )
+    }
+    return tex
+}
+
 private func makeStepEdgeSource(
     darkValue: Float, brightValue: Float,
     width: Int, height: Int
