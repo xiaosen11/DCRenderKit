@@ -96,6 +96,19 @@ public struct WhitesFilter: FilterProtocol {
     /// Declared fuse group (`.toneAdjustment`). See
     /// ``FilterProtocol/fuseGroup``.
     public static var fuseGroup: FuseGroup? { .toneAdjustment }
+
+    /// Fusion metadata. See ``FilterProtocol/fusionBody`` and
+    /// `docs/pipeline-compiler-design.md` §4. The body function
+    /// `DCRWhitesBody` lands in `WhitesFilter.metal` in Phase 3.
+    public var fusionBody: FusionBodyDescriptor {
+        FusionBodyDescriptor(
+            functionName: "DCRWhitesBody",
+            uniformStructName: "WhitesUniforms",
+            kind: .pixelLocal,
+            wantsLinearInput: false,
+            sourceMetalFile: FusionBodyDescriptor.bundledSDKMetalURL("WhitesFilter")
+        )
+    }
 }
 
 /// Memory layout matches `constant WhitesUniforms& u [[buffer(0)]]`.

@@ -76,6 +76,24 @@ public struct SaturationFilter: FilterProtocol {
     /// Declared fuse group (`.colorGrading`). See
     /// ``FilterProtocol/fuseGroup``.
     public static var fuseGroup: FuseGroup? { .colorGrading }
+
+    /// Fusion metadata. See ``FilterProtocol/fusionBody`` and
+    /// `docs/pipeline-compiler-design.md` §4. The body function
+    /// `DCRSaturationBody` lands in `SaturationFilter.metal` in Phase 3.
+    ///
+    /// `wantsLinearInput = true` because the OKLab chroma-scaling math
+    /// is defined on linear sRGB (Ottosson 2020); the compiler wraps
+    /// the body with sRGB linearisation when the pipeline carries
+    /// gamma-encoded intermediates.
+    public var fusionBody: FusionBodyDescriptor {
+        FusionBodyDescriptor(
+            functionName: "DCRSaturationBody",
+            uniformStructName: "SaturationUniforms",
+            kind: .pixelLocal,
+            wantsLinearInput: true,
+            sourceMetalFile: FusionBodyDescriptor.bundledSDKMetalURL("SaturationFilter")
+        )
+    }
 }
 
 /// Memory layout matches `constant SaturationUniforms& u [[buffer(0)]]`.

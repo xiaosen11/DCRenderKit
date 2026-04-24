@@ -136,6 +136,28 @@ public struct CCDFilter: FilterProtocol {
     /// filter that already fuses four effects internally).
     /// See ``FilterProtocol/fuseGroup``.
     public static var fuseGroup: FuseGroup? { nil }
+
+    /// Fusion metadata. See ``FilterProtocol/fusionBody`` and
+    /// `docs/pipeline-compiler-design.md` §4. The body function
+    /// `DCRCCDBody` lands in `CCDFilter.metal` in Phase 3.
+    ///
+    /// `radius = 32` is the neighbour-sample upper bound: the CCD
+    /// shader reads horizontally-offset R/B channels for CA
+    /// (`caMaxOffset` pixels), samples a block-centre pixel for grain
+    /// luma (up to `grainSize`), and reads ± `sharpStep` for the luma
+    /// sharpening stage. All three defaults (`caMaxOffset = 15`,
+    /// `grainSize = 4.5`, `sharpStep = 1.5`) are in pixels at 3× screen
+    /// and scale with `pixelsPerPoint`; 32 covers the heaviest-zoom
+    /// preview context with margin.
+    public var fusionBody: FusionBodyDescriptor {
+        FusionBodyDescriptor(
+            functionName: "DCRCCDBody",
+            uniformStructName: "CCDUniforms",
+            kind: .neighborRead(radius: 32),
+            wantsLinearInput: false,
+            sourceMetalFile: FusionBodyDescriptor.bundledSDKMetalURL("CCDFilter")
+        )
+    }
 }
 
 /// Memory layout matches `constant CCDUniforms& u [[buffer(0)]]`.

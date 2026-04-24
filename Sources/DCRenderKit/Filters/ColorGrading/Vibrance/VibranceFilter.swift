@@ -94,6 +94,22 @@ public struct VibranceFilter: FilterProtocol {
     /// Declared fuse group (`.colorGrading`). See
     /// ``FilterProtocol/fuseGroup``.
     public static var fuseGroup: FuseGroup? { .colorGrading }
+
+    /// Fusion metadata. See ``FilterProtocol/fusionBody`` and
+    /// `docs/pipeline-compiler-design.md` §4. The body function
+    /// `DCRVibranceBody` lands in `VibranceFilter.metal` in Phase 3.
+    ///
+    /// `wantsLinearInput = true` because OKLab-based selective chroma
+    /// boost (Ottosson 2020) is defined on linear sRGB.
+    public var fusionBody: FusionBodyDescriptor {
+        FusionBodyDescriptor(
+            functionName: "DCRVibranceBody",
+            uniformStructName: "VibranceUniforms",
+            kind: .pixelLocal,
+            wantsLinearInput: true,
+            sourceMetalFile: FusionBodyDescriptor.bundledSDKMetalURL("VibranceFilter")
+        )
+    }
 }
 
 /// Memory layout matches `constant VibranceUniforms& u [[buffer(0)]]`.

@@ -90,6 +90,22 @@ public struct FilmGrainFilter: FilterProtocol {
     /// Declared fuse group (`nil` — grain is not fusable).
     /// See ``FilterProtocol/fuseGroup``.
     public static var fuseGroup: FuseGroup? { nil }
+
+    /// Fusion metadata. See ``FilterProtocol/fusionBody`` and
+    /// `docs/pipeline-compiler-design.md` §4. The body function
+    /// `DCRFilmGrainBody` lands in `FilmGrainFilter.metal` in Phase 3.
+    ///
+    /// Classified as `.pixelLocal` because the sin-trick hash reads
+    /// only the current grid position; it does not sample neighbours.
+    public var fusionBody: FusionBodyDescriptor {
+        FusionBodyDescriptor(
+            functionName: "DCRFilmGrainBody",
+            uniformStructName: "FilmGrainUniforms",
+            kind: .pixelLocal,
+            wantsLinearInput: false,
+            sourceMetalFile: FusionBodyDescriptor.bundledSDKMetalURL("FilmGrainFilter")
+        )
+    }
 }
 
 /// Memory layout matches `constant FilmGrainUniforms& u [[buffer(0)]]`.

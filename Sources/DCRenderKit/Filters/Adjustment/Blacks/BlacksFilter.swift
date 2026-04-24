@@ -96,6 +96,19 @@ public struct BlacksFilter: FilterProtocol {
     /// Declared fuse group (`.toneAdjustment`). See
     /// ``FilterProtocol/fuseGroup``.
     public static var fuseGroup: FuseGroup? { .toneAdjustment }
+
+    /// Fusion metadata. See ``FilterProtocol/fusionBody`` and
+    /// `docs/pipeline-compiler-design.md` §4. The body function
+    /// `DCRBlacksBody` lands in `BlacksFilter.metal` in Phase 3.
+    public var fusionBody: FusionBodyDescriptor {
+        FusionBodyDescriptor(
+            functionName: "DCRBlacksBody",
+            uniformStructName: "BlacksUniforms",
+            kind: .pixelLocal,
+            wantsLinearInput: false,
+            sourceMetalFile: FusionBodyDescriptor.bundledSDKMetalURL("BlacksFilter")
+        )
+    }
 }
 
 /// Memory layout matches `constant BlacksUniforms& u [[buffer(0)]]`.

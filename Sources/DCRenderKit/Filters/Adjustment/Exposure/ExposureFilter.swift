@@ -114,6 +114,19 @@ public struct ExposureFilter: FilterProtocol {
     /// Declared fuse group (`.toneAdjustment`). See
     /// ``FilterProtocol/fuseGroup``.
     public static var fuseGroup: FuseGroup? { .toneAdjustment }
+
+    /// Fusion metadata. See ``FilterProtocol/fusionBody`` and
+    /// `docs/pipeline-compiler-design.md` §4. The body function
+    /// `DCRExposureBody` lands in `ExposureFilter.metal` in Phase 3.
+    public var fusionBody: FusionBodyDescriptor {
+        FusionBodyDescriptor(
+            functionName: "DCRExposureBody",
+            uniformStructName: "ExposureUniforms",
+            kind: .pixelLocal,
+            wantsLinearInput: false,
+            sourceMetalFile: FusionBodyDescriptor.bundledSDKMetalURL("ExposureFilter")
+        )
+    }
 }
 
 /// Memory layout matches `constant ExposureUniforms& u [[buffer(0)]]`

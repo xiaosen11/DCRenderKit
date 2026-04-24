@@ -93,6 +93,37 @@ public struct FusionBodyDescriptor: Sendable {
     private init(body: FusionBody?) {
         self.body = body
     }
+
+    // MARK: - Internal helpers for SDK-built-in filters
+
+    /// Resolves the `.metal` source URL for an SDK-built-in filter
+    /// inside `Bundle.module`. This is the standard `sourceMetalFile`
+    /// used by every built-in filter's `fusionBody`.
+    ///
+    /// The SDK's `Package.swift` ships every `.metal` file under
+    /// `Shaders/` as a bundled resource (`.process("Shaders")`), so a
+    /// missing URL here is an internal bundling error, not a runtime
+    /// failure the consumer can recover from. The method logs a fault
+    /// and returns a placeholder URL in Release, and traps in Debug
+    /// via ``Invariant/unreachable(_:fallback:category:file:line:)``.
+    /// Third-party filter authors should use their own
+    /// `Bundle(for:)` / `Bundle.module` lookup and must not rely on
+    /// this helper.
+    ///
+    /// - Parameter baseName: The `.metal` file name without its
+    ///   extension, e.g. `"ExposureFilter"`.
+    internal static func bundledSDKMetalURL(_ baseName: String) -> URL {
+        guard let url = Bundle.module.url(
+            forResource: baseName,
+            withExtension: "metal"
+        ) else {
+            return Invariant.unreachable(
+                "Bundle.module missing \(baseName).metal — SDK resource bundling broken",
+                fallback: URL(fileURLWithPath: "/dev/null/\(baseName).metal")
+            )
+        }
+        return url
+    }
 }
 
 /// Internal value type carrying the actual body-function metadata.

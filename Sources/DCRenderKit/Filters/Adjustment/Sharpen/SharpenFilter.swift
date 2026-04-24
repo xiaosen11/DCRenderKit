@@ -73,6 +73,28 @@ public struct SharpenFilter: FilterProtocol {
     /// Declared fuse group (`nil` — Sharpen is not fusable).
     /// See ``FilterProtocol/fuseGroup``.
     public static var fuseGroup: FuseGroup? { nil }
+
+    /// Fusion metadata. See ``FilterProtocol/fusionBody`` and
+    /// `docs/pipeline-compiler-design.md` §4. The body function
+    /// `DCRSharpenBody` lands in `SharpenFilter.metal` in Phase 3.
+    ///
+    /// `radius = 8` is the neighbour-sample upper bound the Laplacian
+    /// unsharp mask ever uses: the shader samples `±step` pixels on
+    /// each axis, and `step = SharpenUniforms.step` is driven by
+    /// `pixelsPerPoint × 1.0pt`. At a 3× iPhone screen step ≈ 3;
+    /// preview contexts with heavier zoom can reach ~8; the bound is
+    /// an inclusive conservative ceiling used by the compiler for
+    /// tile-boundary analysis (TBDR backend, Phase 7) and does not
+    /// change shader behaviour.
+    public var fusionBody: FusionBodyDescriptor {
+        FusionBodyDescriptor(
+            functionName: "DCRSharpenBody",
+            uniformStructName: "SharpenUniforms",
+            kind: .neighborRead(radius: 8),
+            wantsLinearInput: false,
+            sourceMetalFile: FusionBodyDescriptor.bundledSDKMetalURL("SharpenFilter")
+        )
+    }
 }
 
 /// Memory layout matches `constant SharpenUniforms& u [[buffer(0)]]`.

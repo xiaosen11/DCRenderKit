@@ -134,6 +134,24 @@ public struct LUT3DFilter: FilterProtocol, @unchecked Sendable {
     /// See ``FilterProtocol/fuseGroup``.
     public static var fuseGroup: FuseGroup? { nil }
 
+    /// Fusion metadata. See ``FilterProtocol/fusionBody`` and
+    /// `docs/pipeline-compiler-design.md` §4. The body function
+    /// `DCRLUT3DBody` lands in `LUT3DFilter.metal` in Phase 3.
+    ///
+    /// Classified as `.pixelLocal` because the trilinear sample reads
+    /// the LUT 3D texture only — the 8 LUT texel reads are not
+    /// neighbourhood reads on the primary source and don't affect
+    /// tile-boundary analysis for the TBDR backend.
+    public var fusionBody: FusionBodyDescriptor {
+        FusionBodyDescriptor(
+            functionName: "DCRLUT3DBody",
+            uniformStructName: "LUT3DUniforms",
+            kind: .pixelLocal,
+            wantsLinearInput: false,
+            sourceMetalFile: FusionBodyDescriptor.bundledSDKMetalURL("LUT3DFilter")
+        )
+    }
+
     // MARK: - Private
 
     private static func make3DTexture(

@@ -114,33 +114,174 @@ final class FusionBodyDescriptorTests: XCTestCase {
         )
     }
 
-    /// Every SDK built-in filter inherits the default at Phase 1 (each
-    /// one's concrete descriptor lands in a later Phase 1 step, and
-    /// the targeted test for that step will flip this expectation).
-    /// Asserting the current state prevents a filter from silently
-    /// half-migrating: if a future commit adds a non-default
-    /// `fusionBody` to ExposureFilter but forgets to land the
-    /// corresponding body function in the `.metal` file, this test
-    /// will fail immediately rather than at runtime.
-    func testBuiltInFiltersCurrentlyUnsupported() {
-        // Snapshot of current state at Phase 1 step 1. Remove entries
-        // from this array as each filter adopts a concrete descriptor
-        // in follow-up commits.
-        let phaseOneStepOneExpectedUnsupported: [any FilterProtocol] = [
-            ExposureFilter(),
-            ContrastFilter(),
-            BlacksFilter(),
-            WhitesFilter(),
-            SaturationFilter(),
-            VibranceFilter(),
-            WhiteBalanceFilter(),
-            SharpenFilter(),
+    /// The SDK's 12 single-pass built-in filters each declare a
+    /// concrete `fusionBody` pointing at a `DCR<Name>Body` function
+    /// in their own `.metal` file. Phase 1 adds the descriptor; the
+    /// body function itself lands in Phase 3. This test asserts the
+    /// descriptor side of that contract — any filter that regresses
+    /// to `.unsupported` (or ships a malformed descriptor) fails here
+    /// before Phase 3 can consume it.
+    ///
+    /// Multi-pass filters (HighlightShadow / Clarity / SoftGlow /
+    /// PortraitBlur) conform to `MultiPassFilter`, not
+    /// `FilterProtocol`, so they are deliberately absent from this
+    /// list; their compiler integration lands in Phase 2 via the
+    /// `Pass`-level lowering path.
+    func testBuiltInSinglePassFiltersDeclareConcreteDescriptors() {
+        struct Expectation {
+            let filter: any FilterProtocol
+            let expectedFunctionName: String
+            let expectedUniformStructName: String
+            let expectedKind: FusionNodeKind
+            let expectedMetalFileBaseName: String
+        }
+
+        let expectations: [Expectation] = [
+            Expectation(filter: ExposureFilter(),
+                        expectedFunctionName: "DCRExposureBody",
+                        expectedUniformStructName: "ExposureUniforms",
+                        expectedKind: .pixelLocal,
+                        expectedMetalFileBaseName: "ExposureFilter"),
+            Expectation(filter: ContrastFilter(),
+                        expectedFunctionName: "DCRContrastBody",
+                        expectedUniformStructName: "ContrastUniforms",
+                        expectedKind: .pixelLocal,
+                        expectedMetalFileBaseName: "ContrastFilter"),
+            Expectation(filter: BlacksFilter(),
+                        expectedFunctionName: "DCRBlacksBody",
+                        expectedUniformStructName: "BlacksUniforms",
+                        expectedKind: .pixelLocal,
+                        expectedMetalFileBaseName: "BlacksFilter"),
+            Expectation(filter: WhitesFilter(),
+                        expectedFunctionName: "DCRWhitesBody",
+                        expectedUniformStructName: "WhitesUniforms",
+                        expectedKind: .pixelLocal,
+                        expectedMetalFileBaseName: "WhitesFilter"),
+            Expectation(filter: SharpenFilter(),
+                        expectedFunctionName: "DCRSharpenBody",
+                        expectedUniformStructName: "SharpenUniforms",
+                        expectedKind: .neighborRead(radius: 8),
+                        expectedMetalFileBaseName: "SharpenFilter"),
+            Expectation(filter: SaturationFilter(),
+                        expectedFunctionName: "DCRSaturationBody",
+                        expectedUniformStructName: "SaturationUniforms",
+                        expectedKind: .pixelLocal,
+                        expectedMetalFileBaseName: "SaturationFilter"),
+            Expectation(filter: VibranceFilter(),
+                        expectedFunctionName: "DCRVibranceBody",
+                        expectedUniformStructName: "VibranceUniforms",
+                        expectedKind: .pixelLocal,
+                        expectedMetalFileBaseName: "VibranceFilter"),
+            Expectation(filter: WhiteBalanceFilter(),
+                        expectedFunctionName: "DCRWhiteBalanceBody",
+                        expectedUniformStructName: "WhiteBalanceUniforms",
+                        expectedKind: .pixelLocal,
+                        expectedMetalFileBaseName: "WhiteBalanceFilter"),
+            Expectation(filter: FilmGrainFilter(),
+                        expectedFunctionName: "DCRFilmGrainBody",
+                        expectedUniformStructName: "FilmGrainUniforms",
+                        expectedKind: .pixelLocal,
+                        expectedMetalFileBaseName: "FilmGrainFilter"),
+            Expectation(filter: CCDFilter(),
+                        expectedFunctionName: "DCRCCDBody",
+                        expectedUniformStructName: "CCDUniforms",
+                        expectedKind: .neighborRead(radius: 32),
+                        expectedMetalFileBaseName: "CCDFilter"),
+            Expectation(filter: NormalBlendFilter(overlay: makeDummyOverlay()),
+                        expectedFunctionName: "DCRNormalBlendBody",
+                        expectedUniformStructName: "NormalBlendUniforms",
+                        expectedKind: .pixelLocal,
+                        expectedMetalFileBaseName: "NormalBlendFilter"),
+            // LUT3DFilter requires a LUT texture; tested separately.
         ]
-        for filter in phaseOneStepOneExpectedUnsupported {
-            XCTAssertNil(
-                filter.fusionBody.body,
-                "\(type(of: filter)) should still be .unsupported at Phase 1 step 1"
+
+        for e in expectations {
+            guard let body = e.filter.fusionBody.body else {
+                XCTFail("\(type(of: e.filter)) should ship a concrete fusionBody at Phase 1")
+                continue
+            }
+            XCTAssertEqual(
+                body.functionName, e.expectedFunctionName,
+                "\(type(of: e.filter)).fusionBody.functionName"
+            )
+            XCTAssertEqual(
+                body.uniformStructName, e.expectedUniformStructName,
+                "\(type(of: e.filter)).fusionBody.uniformStructName"
+            )
+            XCTAssertEqual(
+                body.kind, e.expectedKind,
+                "\(type(of: e.filter)).fusionBody.kind"
+            )
+            XCTAssertEqual(
+                body.sourceMetalFile.lastPathComponent,
+                "\(e.expectedMetalFileBaseName).metal",
+                "\(type(of: e.filter)).fusionBody.sourceMetalFile points at the expected .metal"
+            )
+            XCTAssertTrue(
+                FileManager.default.fileExists(atPath: body.sourceMetalFile.path),
+                "\(type(of: e.filter)).fusionBody.sourceMetalFile must resolve to a bundled resource"
             )
         }
+    }
+
+    /// LUT3DFilter is covered separately because its initialiser
+    /// consumes parsed rgba32Float binary LUT data (dimension³ ×
+    /// 16 bytes). We build a minimal identity 2³ cube inline and
+    /// verify the descriptor — the descriptor check itself never
+    /// dispatches, so cube correctness (beyond matching the byte
+    /// layout LUT3DFilter expects) is irrelevant.
+    func testLUT3DFilterDeclaresConcreteDescriptor() throws {
+        // 2³ identity LUT: each corner of the unit cube stored as
+        // (r, g, b, 1) in rgba32Float. Voxel order is x fastest, z
+        // slowest (matching `texture3d.write(voxel, uint3(x,y,z))`
+        // layout CubeFileParser produces).
+        let identity2Cube: [Float] = [
+            0, 0, 0, 1,  1, 0, 0, 1,
+            0, 1, 0, 1,  1, 1, 0, 1,
+            0, 0, 1, 1,  1, 0, 1, 1,
+            0, 1, 1, 1,  1, 1, 1, 1,
+        ]
+        let cubeData = identity2Cube.withUnsafeBufferPointer { Data(buffer: $0) }
+
+        let filter: LUT3DFilter
+        do {
+            filter = try LUT3DFilter(cubeData: cubeData, dimension: 2)
+        } catch {
+            throw XCTSkip(
+                "LUT3DFilter init failed (likely Metal device unavailable): \(error). " +
+                "Descriptor shape is indirectly covered by Phase 3's body-dispatch tests."
+            )
+        }
+
+        guard let body = filter.fusionBody.body else {
+            XCTFail("LUT3DFilter should ship a concrete fusionBody at Phase 1")
+            return
+        }
+        XCTAssertEqual(body.functionName, "DCRLUT3DBody")
+        XCTAssertEqual(body.uniformStructName, "LUT3DUniforms")
+        XCTAssertEqual(body.kind, .pixelLocal)
+        XCTAssertEqual(
+            body.sourceMetalFile.lastPathComponent,
+            "LUT3DFilter.metal"
+        )
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: body.sourceMetalFile.path)
+        )
+    }
+
+    // MARK: - Helpers
+
+    /// Build a tiny dummy overlay for NormalBlendFilter init; contents
+    /// are irrelevant because the descriptor-check never dispatches.
+    private func makeDummyOverlay() -> MTLTexture {
+        let device = MTLCreateSystemDefaultDevice()!
+        let desc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .rgba8Unorm,
+            width: 1,
+            height: 1,
+            mipmapped: false
+        )
+        desc.usage = [.shaderRead]
+        return device.makeTexture(descriptor: desc)!
     }
 }

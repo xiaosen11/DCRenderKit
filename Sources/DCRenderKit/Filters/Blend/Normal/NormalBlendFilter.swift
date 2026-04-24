@@ -87,6 +87,24 @@ public struct NormalBlendFilter: FilterProtocol, @unchecked Sendable {
     /// Declared fuse group (`nil` — blends are not fusable).
     /// See ``FilterProtocol/fuseGroup``.
     public static var fuseGroup: FuseGroup? { nil }
+
+    /// Fusion metadata. See ``FilterProtocol/fusionBody`` and
+    /// `docs/pipeline-compiler-design.md` §4. The body function
+    /// `DCRNormalBlendBody` lands in `NormalBlendFilter.metal` in Phase 3.
+    ///
+    /// Classified as `.pixelLocal`: the shader reads the source at
+    /// the thread's own gid and the overlay at the mapped pixel
+    /// centre — neither is a neighbourhood read on the primary input,
+    /// so no tile-boundary guard is needed.
+    public var fusionBody: FusionBodyDescriptor {
+        FusionBodyDescriptor(
+            functionName: "DCRNormalBlendBody",
+            uniformStructName: "NormalBlendUniforms",
+            kind: .pixelLocal,
+            wantsLinearInput: false,
+            sourceMetalFile: FusionBodyDescriptor.bundledSDKMetalURL("NormalBlendFilter")
+        )
+    }
 }
 
 /// Memory layout matches `constant NormalBlendUniforms& u [[buffer(0)]]`.
