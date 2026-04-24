@@ -24,10 +24,12 @@ enum FilterChainBuilder {
     /// - Parameters:
     ///   - params: Current slider state.
     ///   - lumaMean: Pre-computed mean luminance of the source, in
-    ///     `[0, 1]`. Drives `ContrastFilter` and `WhitesFilter`
-    ///     adaptation. Pass `0.5` as a neutral default when the value
-    ///     isn't known (e.g. first camera frame before the first
-    ///     reduction completes).
+    ///     `[0, 1]`. Drives `ContrastFilter`'s scene-adaptive pivot.
+    ///     Pass `0.5` as a neutral default when the value isn't known
+    ///     (e.g. first camera frame before the first reduction
+    ///     completes). Note: `WhitesFilter` no longer consumes this
+    ///     value (Session C dropped the `lumaMean:` argument; the
+    ///     Filmic shoulder doesn't need a scene-adaptive pivot).
     ///   - pixelsPerPoint: Display-context multiplier for visual-texture
     ///     parameters. Capture preview = `UIScreen.main.scale` (3 on
     ///     modern iPhones); editing preview = `imageWidth / viewWidthPt`.
@@ -63,12 +65,11 @@ enum FilterChainBuilder {
             )))
         }
 
-        // 4. Whites (luma-mean adaptive)
+        // 4. Whites — Filmic-shoulder operator. Session C dropped the
+        // `lumaMean:` argument (the shoulder concentrates effect at
+        // x → 1 by construction; no scene-adaptive pivot needed).
         if params.whites != 0 {
-            chain.append(.single(WhitesFilter(
-                whites: params.whites,
-                lumaMean: lumaMean
-            )))
+            chain.append(.single(WhitesFilter(whites: params.whites)))
         }
 
         // 5. Blacks
@@ -157,9 +158,12 @@ enum FilterChainBuilder {
         }
 
         // 14. Portrait blur (needs a mask — skip in camera preview
-        //     unless the caller has pre-computed one via Vision)
+        //     unless the caller has pre-computed one via Vision).
+        //     Session C upgraded `PortraitBlurFilter` from
+        //     `FilterProtocol` to `MultiPassFilter` (two-pass Poisson
+        //     with 90°-rotated pattern); call site uses `.multi(...)`.
         if params.portraitBlurStrength > 0, let mask = portraitMask {
-            chain.append(.single(PortraitBlurFilter(
+            chain.append(.multi(PortraitBlurFilter(
                 strength: params.portraitBlurStrength,
                 maskTexture: mask
             )))
