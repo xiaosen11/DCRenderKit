@@ -1,8 +1,11 @@
 # Pipeline Compiler Refactor — Session Handoff
 
-**Last updated**: 2026-04-24, end of session-1 (Phases 0-4 done).
-**Target**: Phase 5 (Pipeline integration + real-device benchmark).
-**Remote state**: `origin/main` tracks every commit in this session.
+**Last updated**: 2026-04-24, end of session-2 (Phase 5 done —
+awaiting user-gate real-device benchmark on iPhone 14 Pro Max).
+**Target**: Phase 6 (fragment shader bodies) — **blocked on Phase 5
+user gate** below.
+**Remote state**: local `main` is ahead of `origin/main` by the
+session-2 commits; `git push` is **user-gated**, not yet pushed.
 
 This document is the authoritative hand-off for any Claude Code
 session picking up the pipeline-compiler refactor. Read §0 first;
@@ -38,6 +41,84 @@ opening-prompt contract.
    they delete too.
 6. **User gate at the end of Phase 5**: consumer must benchmark
    on real iPhone 14 Pro Max before Phase 6 unlocks.
+
+---
+
+## 0.1 Session-2 Phase 5 retrospective (2026-04-24)
+
+Status: **code done, user gate open**.
+
+| Step | Status | Commit | Delivered |
+|---|---|---|---|
+| 5.1 | ✅ | `de5a997` | `Pipeline.executeSinglePass` routes built-in filters through `ComputeBackend` |
+| 5.2 | ✅ | `93ff6c3` | `PipelineOptimization` enum + `Pipeline.optimization` property |
+| 5.3 | ✅ | `61be943` | Graph-level compiler path with cross-filter fusion; `DeferredEnqueueTests` adjusted for aliasing planner |
+| 5.4 | ✅ | (no-op) | No tests hard-coded the 12 production kernel names — nothing to migrate |
+| 5.5 | ✅ | `c8256b1` | 12 production standalone kernels deleted; body functions retained |
+| 5.6 | ✅ | `c0b621b` | `PipelineCompilerWarmUp.preheat(combinations:)` async API |
+| 5.7 | ⏳ | (this commit) | macOS benchmark harness + Phase 5 user gate (below) |
+
+Test delta session-2: 504 → 517 (+13), zero warnings, zero
+regressions through the whole session.
+
+### 0.1.1 macOS benchmark (informational — user-gate runs on iPhone)
+
+`Phase5BenchmarkTests.testFullModeFusesFourFilterChainIntoOneUberKernel`
+A/B-tests `.full` vs `.none` on `[Exposure, Contrast, Blacks,
+Whites]` at 1080×1080 with 2 warmup + 8 measured iterations.
+Representative run on the session-2 CI host (Apple Silicon Mac,
+idle thermal state):
+
+| Mode | Uber kernels compiled | GPU median | GPU p95 |
+|---|---|---|---|
+| `.full` | 1 (fused cluster) | 0.279 ms | 0.280 ms |
+| `.none` | 4 (per-filter) | 0.794 ms | 0.878 ms |
+
+**Fusion speedup (median `.none` / median `.full`): 2.85×** on
+macOS. The iPhone number will differ — Apple Silicon desktops
+amortise dispatch overhead differently than mobile chips — but
+the cache-hit expectation holds.
+
+### 0.1.2 **PHASE 5 USER GATE — iPhone 14 Pro Max**
+
+The compiler path is merge-ready behaviourally; the user-gate step
+is the real-device perf + visual confirmation required before
+Phase 6 unlocks. Do **not** open Phase 6 until this gate passes.
+
+Perform the following on iPhone 14 Pro Max:
+
+1. **Pull** the `main` branch of this repo (local only — the
+   session-2 commits have NOT been pushed; `git log origin/main..HEAD`
+   lists the seven outstanding commits to push first).
+2. **Build + run** `DCRDemo` in Release configuration on device.
+3. **Live preview benchmark**: apply the `[Exposure, Contrast,
+   Blacks, Whites, Saturation, Sharpen, FilmGrain, Clarity]` 8-
+   filter stack on the default sample photo. Observe:
+   - Preview must remain smooth while dragging every slider.
+   - No visible banding / colour shift versus pre-Phase-5 baseline
+     (pull `e6e0739` for a side-by-side reference if needed).
+   - No crashes / Metal validation errors in the Xcode console.
+4. **Tier 2 visual sign-off**: the CLAUDE.md red-line against
+   "先 MVP 再完善" means any visible regression on Tier 2 curves
+   (Exposure / Contrast / Blacks / Whites / Highlights / Shadows)
+   is a Phase-5-blocker. Sample five representative scenes
+   (portrait / landscape / low-light / high-DR / macro) and
+   confirm parity with the pre-Phase-5 baseline.
+5. **Thumbs-up reply** to close the gate and unlock Phase 6.
+
+If any of the above fails: file a Phase 5 regression in this doc
+at §12 (create if missing) and **do not** open Phase 6. The most
+likely root-cause buckets, in descending priority:
+   (a) VerticalFusion crossing a `wantsLinearInput` boundary by
+       accident (currently guarded; verify `canMerge` hasn't been
+       relaxed).
+   (b) LifetimeAwareTextureAllocator aliasing the final bucket's
+       texture onto a still-live intermediate (planner's
+       `Int.max` end-of-life for final nodes should prevent this;
+       confirm in `TextureAliasingPlanner`).
+   (c) Runtime Metal compile failure under device-specific
+       toolchain (would throw early; check `XCTMetric` / Xcode
+       console).
 
 ---
 

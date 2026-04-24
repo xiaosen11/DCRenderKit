@@ -16,7 +16,7 @@ session-2 opening prompt all live in that document.
 | 2 | ✅ | 5 optimiser passes (DCE, VerticalFusion, CSE, KernelInlining, TailSink) |
 | 3 | ✅ | MetalSourceBuilder (5 shapes + cluster), ComputeBackend + UberKernelCache, 12-filter + 2/3/5-member cluster legacy parity all pass |
 | 4 | ✅ | TextureAliasingPlanner + LifetimeAwareTextureAllocator |
-| 5 | ⏭️ next session, **user gate** | Pipeline integration, delete production kernels, real-device benchmark |
+| 5 | ✅ code, ⏳ **user-gate iPhone 14 Pro Max** | Pipeline integration (steps 5.1 – 5.3), 12 production kernels deleted (5.5), `PipelineCompilerWarmUp.preheat(...)` API (5.6), macOS benchmark 2.85× fusion speedup; real-device gate open — see handoff §0.1.2 |
 | 6 |  | Fragment shader bodies + compute/fragment parity |
 | 7 | **user gate** | TBDR render pipeline, final legacy cleanup |
 
