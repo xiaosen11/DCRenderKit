@@ -2,18 +2,24 @@
 
 **目的**: 让任何一个新 Claude Code session 能在 5 分钟内接管上一个 session 的全部上下文，零信息丢失。本文是每次 session 结束前必须更新的握手状态。
 
-**最后更新**: 2026-04-23，Session B 结束
+**最后更新**: 2026-04-24，Session C 结束
 
 ---
 
 ## 0. 最重要的事（如果只读一段）
 
 - Repo: `/Users/xiaosenromangic.com/DevWorkSpace/DCRenderKit/`
-- 当前分支 `main`，`HEAD = 9b3aa50`，62 commits ahead of `origin/main`（**未 push**，禁止自动 push）
-- 299 tests pass，0 warnings
-- **权威 pending todo** 在 repo 根 `TODO.md`。**不要**声称 TaskList 丢了 —— 见 §1。
+- 当前分支 `main`，`HEAD = 86b90c9`，**Session C 新增 18 commit 未 push**（禁止自动 push）
+- **326 tests pass / 0 failures / 0 warnings**
+- **权威 pending todo** 在 repo 根 `TODO.md`（Session C 已重写成分类清单）。**不要**声称 TaskList 丢了 —— 见 §1。
 - 硬约束 5 份 `.claude/rules/*.md` 必读 —— 见 §4。
-- 已有的 Tier 3 五 filter 完整闭环（Saturation/Vibrance/HighlightShadow/Clarity/SoftGlow 契约 + 验证 + 算法依据 + 参数依据），**不要推倒重做**。
+- **Session C 的四个一致性 axiom（任何 session 继承，不可 revisit）**:
+  1. **DCR 独立于 Harbeth** — 代码注释不引 Harbeth lineage，仅保留学术引用（Reinhard / DaVinci / OKLab / He & Sun / Mitchell / Ottosson / Hable / Eilertsen / IEC 61966-2-1 / Bjørge 等）
+  2. **iOS-only SDK** — `Package.swift.platforms` 保留 `.macOS(.v15)` 仅作 `swift test` host，business-layer NSImage/AppKit 路径**已删尽**，不要重新加回
+  3. **不追外部 pixel-level parity** — 任何 SSIM / Pixel Cake JPEG / Lightroom TIFF 对比方案都是 dropped；fitted Tier 2 filter 已全部替换为原理派，不要"为了对齐外部 app"重新 fit
+  4. **原理派 tone operators** — Contrast (DaVinci log-slope) / Blacks (Reinhard toe) / Whites (Filmic shoulder) / ExposureNeg (pure linear gain) 全部已落地；新增 tone filter 必须走 filter-development.md 4 步，原理派是 Tier 0 候选
+- **Session B 遗留的 Tier 3 五 filter 完整闭环**（Saturation/Vibrance/HS/Clarity/SoftGlow 契约 + 验证 + 算法依据 + 参数依据）**不要推倒重做**。
+- **Session C 新增基础设施不要弃置**: `SnapshotAssertion`（Tier 4 snapshot 用）、`PipelineBenchmark`（性能用）、`LinearPerceptualParityTests`（feel drift 护栏）、`Foundation/SRGBGamma.metal`（IEC sRGB canonical）、`PackageManifestTests`（零依赖守护）、GitHub Actions CI / Issue-PR templates。
 
 ---
 
@@ -45,13 +51,25 @@ Claude Code 的 TaskList 数据持久化在：
 
 | Session | UUID | 最后 commit |
 |---|---|---|
-| B (结束于 2026-04-23) | `5d660bae-cb61-4c43-b626-12c921a9ac53` | `9b3aa50` |
+| C (结束于 2026-04-24) | `6afb8a49-4085-4fc3-9b37-557b14c24dba` | `86b90c9` |
+| B (结束于 2026-04-23) | `5d660bae-cb61-4c43-b626-12c921a9ac53` | `b327214` |
 | A (结束于 2026-04-22) | `1ece456e-1d62-4dea-91d2-137f310c2a3a` | `2e5df4c` |
 | 更早 | `67404015-6221-4bc5-bf0a-217ab8cedbf8` | — |
 
-### 诚实记录：Session B 初时犯的错
+### 诚实记录：Session B 初时犯的错（警世）
 
-我上一次接 Session A 时，先查 `TaskList` 看到空，然后**谎称**"跨 session 不保留"—— 这是**错的**。实际只是新 session 的 task 目录未创建 / 未迁移。**绝不要再犯这个错**。新 session 的第一个 action 应是：查上一个 session 的 task 目录存在与否、迁移。如果仍有问题，读 `TODO.md`（repo 根）也能立刻拿到 pending 列表。
+Session B 初次接 Session A 时，先查 `TaskList` 看到空，然后**谎称**"跨 session 不保留"—— 这是**错的**。实际只是新 session 的 task 目录未创建 / 未迁移。**绝不要再犯这个错**。新 session 的第一个 action 应是：查上一个 session 的 task 目录存在与否、迁移。如果仍有问题，读 `TODO.md`（repo 根）也能立刻拿到 pending 列表。
+
+### Session C 接任时的经验（与上条形成对照）
+
+Session C 开始时：
+1. 读 `docs/session-handoff.md` 全文
+2. 按 §7 Phase 2.1 执行 `cp ~/.claude/tasks/<B>/*.json ~/.claude/tasks/<C>/` — 75 tasks 继承成功（31 completed + 44 pending）
+3. `swift test` 验证 299-test 基线匹配 handoff §3 snapshot（Session B 交接时的 contract）
+4. 发现 HEAD 与 handoff §3 说的 `9b3aa50 + 62 ahead 未 push` 不一致（实际已 push 到 `b327214`），以**当下 git 状态为准**，在汇报里标注 drift
+5. 开始按用户指示推进，不再自证 TaskList 问题
+
+**Session D 继续这个 pattern**。
 
 ---
 
@@ -59,81 +77,103 @@ Claude Code 的 TaskList 数据持久化在：
 
 ### Repo 根（新 session 先看这里）
 
-- **`TODO.md`** ← 权威 pending todo，分类清单，人类可读
+- **`TODO.md`** ← 权威 pending todo，分类清单，Session C 重写成 12 条收尾 + 3 条真机阻塞 + 3 条保留 artifact + 2 条 v1.0 远期
+- **`CHANGELOG.md`** ← `[Unreleased]` 段累积 Session B/C 所有 breaking changes 与新增，format keep-a-changelog 1.1.0 / SemVer 2.0.0
 - **`docs/session-handoff.md`** ← 本文件
-- `README.md` / `CONTRIBUTING.md` / `CODE_OF_CONDUCT.md` / `LICENSE` — 常规开源基础
-- `Package.swift` — iOS 18+ / macOS 15+ / Swift 6 strict concurrency / 零外部依赖
+- **`docs/release-criteria.md`** ← Session C 写，三级 v0.1.0 GA 定义（minimal / consumer-grade / visual-quality）
+- `README.md` / `CONTRIBUTING.md` / `CODE_OF_CONDUCT.md` / `LICENSE` — Session C 全刷过一遍（中英双语 README + 5 份 rules 引用 + 零依赖 / iOS-only 声明）
+- `Package.swift` — iOS 18+ / macOS 15+（**macOS 仅 test host**）/ Swift 6 strict concurrency / 零外部依赖
 - `CLAUDE.md` — 项目级 Claude 指令
+- `.github/workflows/ci.yml` — Session C 重写：macos-15 + Xcode 16，合并为 `test` + `ios-build` 两 job，lint 检测 FIXME/TODO 必带 `(§…)` 或 `(#…)` 引用
+- `.github/ISSUE_TEMPLATE/*.yml` + `PULL_REQUEST_TEMPLATE.md` — bug / feature / PR 模板
 
-### `docs/`（审计 + 契约）
+### `docs/`（审计 + 契约 + 历史）
 
-- **`docs/findings-and-plan.md`** ← 权威 plan，§8 是当前审计状态（§8.1/§8.2/§8.3/§8.4 均 ✓，§8.5 B.1 pending user，§8.6 签 no，§8.7 纯文档 wording，§8.10 Phase 2+ 未来）
-- **`docs/contracts/*.md`** ← 5 份 Tier 3 filter 契约（vibrance / saturation / highlight_shadow / clarity / soft_glow）。每份 6-7 条可测条款，每条款写了测法 + 依据 fetched URL
+- **`docs/findings-and-plan.md`** ← 历史 audit plan。**§7.3 / §8.4 / §8.5 / §8.6 均带 `ARCHIVED (2026-04-23)` 横幅**：Session C 做完了 §8.4 全部 / 完成了 §8.5 B.1 决策（换原理派）/ 丢弃了 §8.6 Tier 2 外部 parity 思路。内容保留作历史上下文
+- **`docs/contracts/*.md`** ← 5 份 Tier 3 filter 契约（vibrance / saturation / highlight_shadow / clarity / soft_glow）。每份 6-7 条可测条款，每条款写了测法 + 依据 fetched URL。Session C 清理了各自 "实现归属" 格子里的 Harbeth lineage 字样
+- **`docs/release-criteria.md`** ← Session C 写，本文件 §3 state snapshot 对应的 release readiness
 
 ### `.claude/rules/*.md`（5 份硬约束，必读）
 
-见 §4 详列。
+见 §4 详列。Session C 未新增 rules（所有既有 rules 都适用）。
 
-### `.claude/agents/*.md`（未触达的 sub-agent 配置）
+### `.claude/agents/*.md`
 
-用户未启用，跳过。
+用户未启用 sub-agents（Session C 也没调过），跳过。
+
+### Skills
+
+DCRenderKit repo 自身没有 `.claude/skills/` 目录。session 可以继承使用 DigiCam 项目级的 skills（`pixel-fitting`, `ci-cd`, `perf`, `debug`, `native-ios` 等），但 **SDK 的"真 source of truth"是 5 份 rules + 本文件**；skills 是工具，rules 是硬约束。
 
 ### memory 自动加载
 
-`~/.claude/projects/-Users-xiaosenromangic-com-DevWorkSpace-wayshot-pm-agent-Digi-Cam/memory/MEMORY.md` 是索引，加载完整文件 `project_dcrenderkit.md`、`user_preferences.md`、`feedback_commit_verification.md`。**新 session 会自动看到**，但里面记录的状态可能滞后，以 `TODO.md` + git log + 本文件为准。
+`~/.claude/projects/-Users-xiaosenromangic-com-DevWorkSpace-wayshot-pm-agent-Digi-Cam/memory/MEMORY.md` 是索引，加载完整文件 `project_dcrenderkit.md`、`user_preferences.md`、`feedback_commit_verification.md`。**新 session 会自动看到**，但里面记录的状态可能滞后，以 `TODO.md` + git log + 本文件为准。Session C 已更新 `project_dcrenderkit.md` 到当前状态。
 
 ---
 
-## 3. 当前 state snapshot（2026-04-23 Session B 结束）
+## 3. 当前 state snapshot（2026-04-24 Session C 结束）
 
 ### Git
 
 - 分支: `main`
-- HEAD: `9b3aa50`
-- Commits ahead of origin/main: 62（**未 push**）
-- Working tree: `Examples/DCRDemo/DCRDemo.xcodeproj/project.pbxproj` **持续脏**，属 Xcode IDE 自动编辑（`LastUpgradeCheck` + `DEVELOPMENT_TEAM` 位置漂移等），**不要 stage**，除非实际改了 Demo 代码
+- HEAD: `86b90c9`
+- **18 commits ahead of origin/main**（Session C 新增，未 push，禁止自动 push）
+- Working tree: `Examples/DCRDemo/DCRDemo.xcodeproj/project.pbxproj` **持续脏**，属 Xcode IDE 自动编辑（`LastUpgradeCheck` + `DEVELOPMENT_TEAM` 位置漂移），**不要 stage**
 
 ### 测试
 
-- 299 tests pass / 0 warnings / 0 regressions
-- 契约测试在 `Tests/DCRenderKitTests/Contracts/`：
-  - `ContractTestHelpers.swift`（共享 helpers + OKLab Swift mirror + ColorChecker constants + zone Y + texture builders）
-  - `VibranceContractTests.swift`（7 tests）
-  - `SaturationContractTests.swift`（7 tests）
-  - `HighlightShadowContractTests.swift`（8 tests，HS C.2 拆 2 条）
-  - `ClarityContractTests.swift`（7 tests）
-  - `SoftGlowContractTests.swift`（6 tests）
-  - 总计 35 contract tests + 13 OKLabConversion + 2 新 Vibrance + 先前 249 = 299
+- **326 tests pass / 0 failures / 0 warnings**
+- 新增测试文件（Session C）：
+  - `Tests/DCRenderKitTests/PackageManifestTests.swift`（1 test — `.package(url:)` 守护）
+  - `Tests/DCRenderKitTests/SRGBGammaConversionTests.swift`（12 tests — IEC 61966-2-1 piecewise 正反 + Zone midpoint 圆舍）
+  - `Tests/DCRenderKitTests/LinearPerceptualParityTests.swift`（5 tests — 5 tone filter × 7 slider × 9 input = 315 grid-point parity 扫描）
+  - `Tests/DCRenderKitTests/SnapshotAssertionTests.swift`（6 tests — snapshot framework self-test）
+  - `Tests/DCRenderKitTests/PipelineBenchmarkTests.swift`（4 tests — benchmark primitive）
+- 已更新测试：`MultiPassAndLoaderTests.swift`（删 `testNSImageLoad`）、`SmokeTests.swift`（PortraitBlur `.single` → `.multi`）、`PortraitBlurAndStatisticsTests.swift`（`runSingle` → `runMulti`）、`ToneAdjustmentFilterTests.swift`（Contrast/Blacks/Whites/ExposureNeg 断言按新原理派公式重推）、`Bgra8UnormSourceContractTests.swift`（Contrast expected 从 0.181 → 0.108）
+- Contract tests (Session B 遗留) 继续保留全部：Vibrance 7 / Saturation 7 / HighlightShadow 8 / Clarity 7 / SoftGlow 6 = 35
 
-### Filter 状态（Tier 分类）
+### Filter 状态（Tier 分类 — Session C 更新）
 
 | Tier | Filters | 验证方式 | 状态 |
 |---|---|---|---|
-| 1（formula is spec） | Sharpen, Normal Blend, LUT3D, Exposure+ | unit test（已有） | ✓ 维护 |
-| 2（fitted MSE） | Contrast, Blacks, Whites, Exposure-, WhiteBalance | Tier 2 SSIM spot-check（§8.6 C）— **user signed no，改 snapshot 路径** | pending |
-| 3（perception-based） | Saturation, Vibrance, HighlightShadow, Clarity, SoftGlow | 契约 C.1-C.x **全部闭环** | ✓ |
-| 4（aesthetic） | FilmGrain, CCD, PortraitBlur | snapshot regression（#36-39） | 待做 |
+| 1 formula-is-spec | Sharpen, NormalBlend, LUT3D, Exposure+ | unit test | ✓ 维护 |
+| 2 **principled tone operators** (Session C 重写) | Contrast → DaVinci log-slope · Blacks → Reinhard toe · Whites → Filmic shoulder · ExposureNeg → linear gain · WhiteBalance 保留（YIQ + Kelvin 已原理化） | unit test + `LinearPerceptualParityTests` 315-点扫描 | ✓ 全绿 |
+| 3 perception-based | Saturation / Vibrance (OKLCh) · HighlightShadow / Clarity (Guided Filter) · SoftGlow (pyramid bloom) | 契约 C.1-C.x 全部闭环 (Session B) | ✓ |
+| 4 aesthetic | FilmGrain · CCD · PortraitBlur (Session C 升级为 two-pass Poisson) | Snapshot framework ready (`SnapshotAssertion`), **baselines 需真机 approve 再 freeze** | framework ✓ / baseline ⏳ 真机 |
 
-### Session B 完成项（commit hash 索引）
+### Session C 完成项（commit hash 索引，18 条）
 
-- `ab2b932` — Vibrance + Saturation 契约 spec
-- `1cce611` — OKLab helper metal + 13 tests
-- `05f8463` — Saturation OKLCh 重构（breaking change: s=0 anchor Rec.709 → OKLab L）
-- `e635cb5` — Vibrance Adobe OKLCh 重构（breaking change: max-anchor → selective+skin protect）
-- `cadc1e7` — Vibrance + Saturation 契约验证（14 tests）
-- `4c65482` — HS 契约 spec
-- `f08d417` — Clarity + SoftGlow 契约 spec
-- `04aa8bc` — HS + SoftGlow + Clarity 契约验证（21 tests）
-- `56f447d` — §8.4 Audit.1/2/5 industry 校准（fetched URL 补 SoftGlow/Clarity/HS 算法依据）
-- `e28bb76` — B 系列参数推导（ε / pyramid anchor / Weber-Fechner）
-- `fd6cc92` — B.4 本质参数硬依据（HS smoothstep = Zone midpoints 精确匹配；guided radius 论文范围内）
-- `9b3aa50` — §8.4 Audit.6/7 收尾（FilmGrain sin-trick + Tone curve families）
+**阶段 1 — Pre-convergence（Session C 前半）**:
+- `8268686` — 标 #74 typed Error enum 已完成（代码早就是 typed enum，TODO 过期）
+- `00e38d9` — `PackageManifestTests` 守护零外部依赖（#73）
+- `998060d` — 抽 `Foundation/SRGBGamma.metal` canonical + 12 conversion tests（8 shader 统一到 `DCRSRGBLinearToGamma` / `DCRSRGBGammaToLinear`，MIRROR 模式）
+- `173ff17` — PortraitBlur 重构为 MultiPassFilter（#75）：两遍 Poisson + 90° rotated pattern + 0.030 shortSide + SDK 扩展 `PassInput.additional(Int)` / `MultiPassFilter.additionalInputs`
+- `5f32b2e` — Contrast → DaVinci log-space slope（`y = pivot · (x/pivot)^slope`, slope = `exp2(contrast · 1.585)`）
+- `f402839` — Blacks → Reinhard toe with scale（`y = x / (x + ε·(1−x))`, ε = `exp2(−slider)`）
+- `7760a0c` — Whites → Filmic shoulder（`y = ε·x / ((1−x) + ε·x)`）；**移除** `lumaMean:` 参数（breaking change）
+- `cbeb3e3` — Exposure 负向 → pure linear gain（ev<0 不需要 Reinhard 因为 `gain<1` 无 overshoot）
+- `6256d9a` — `LinearPerceptualParityTests`：5 tone filter × 315 grid-point parity（formalises findings §7.3 "feel drift" concept）
+- `15a528b` — `SnapshotAssertion` + self-tests（#36，为 Tier 4 baseline freeze 铺路）
+- `0b56b49` — `PipelineBenchmark` + self-tests（#40，SDK-internal timing，`MTLCommandBuffer.gpuStart/EndTime`，无 Instruments 依赖）
+- `f65da03` — README 中英双语重写 + CONTRIBUTING 补 rules 引用 + 新建 CHANGELOG.md（`[Unreleased]` 含全部 Session C breaking changes）
+- `40feef5` — CI workflow 重写（macos-15 + Xcode 16）+ Issue / PR templates
+- `c8df797` — `docs/release-criteria.md`（v0.1.0 GA 三级定义）
+
+**阶段 2 — Session C 收敛（HEAD side）**:
+- `d10bbf7` — **macOS 业务层全删**（删 `PipelineInput.nsImage` / `TextureLoader(from: NSImage)` / `typealias DCRImage = NSImage` / `@available(iOS 17.0, macOS 14.0, *)` → `@available(iOS 17.0, *)` / CI matrix macOS job / 所有 README / CONTRIBUTING / release-criteria 的 macOS 声明）
+- `641bde2` — **Harbeth lineage 清理**（42 处 Sources/ 注释 + README + CHANGELOG + contracts + release-criteria；保留 findings-and-plan / session-handoff 的历史记录；保留全部学术 fetched URL）
+- `86b90c9` — findings-and-plan §7.3 / §8.4 / §8.5 / §8.6 加 `ARCHIVED (2026-04-23)` 横幅 + TODO.md 全量重写
 
 ### 未 push 的含义
 
-62 commits 包括 Saturation + Vibrance 的**破坏性行为变更**（s=0 灰点 / vibrance skin protect）。push 前建议：
-- DigiCam 端回归测试（真机跑一遍 Saturation + Vibrance slider 体验）
-- 确认无意外 regression
+18 commits 包括多组**破坏性行为变更**：
+- Contrast / Blacks / Whites / ExposureNeg 曲线形状
+- PortraitBlur `FilterProtocol → MultiPassFilter`（调用点必须改 `.single` → `.multi`）
+- Whites 删 `lumaMean:` 参数
+- macOS 业务层路径全删（NSImage API 不存在了）
+- Swift sRGB helper 函数名统一（`dcr_{filter}LinearToGamma` → `DCRSRGBLinearToGamma`）
+
+push 前建议：**DigiCam 端真机回归一遍 Tier 3-4 slider 体验**，尤其 Tier 2 新原理派曲线 + PortraitBlur 新强度。`CHANGELOG.md [Unreleased]` 里登记了每条 breaking change 的迁移说明。
 
 ---
 
@@ -171,30 +211,50 @@ Claude Code 的 TaskList 数据持久化在：
 
 ---
 
-## 5. 用户偏好（继承）
+## 5. 用户偏好（继承 + Session C 新增）
 
+**继承自 A/B**：
 - **严谨 > 快速**，愿意投入时间做彻底严谨化，不要求"快速 ship"
-- **不用 Instruments**，performance 测量通过 SDK-internal tooling (PipelineProfiler)
+- **不用 Instruments**，performance 测量通过 SDK-internal tooling（Session C 落地 `PipelineBenchmark`，基于 `MTLCommandBuffer.gpuStart/EndTime`）
 - 聊天简体中文，代码 + commit + SwiftDoc 英文
-- 破坏性变更前明确告知，等用户确认
+- 破坏性变更前明确告知，等用户确认（pre-1.0 期间 breaking 自由，**登记 CHANGELOG.md `[Unreleased]`** 即可）
 - 遇到"激进/保守/perception-based 所以没法/肉眼不可见"这类 framing 立刻停下，引规则重写
-- **禁止**"Harbeth 继承"作为参数依据 —— DCRenderKit 存在意义是不依赖 Harbeth（2026-04-23 user 明确）
+- **禁止**"Harbeth 继承"作为参数依据 — DCRenderKit 存在意义是不依赖 Harbeth
+
+**Session C 新增的口径/风格偏好**：
+- **完美主义**：2026-04-23 user 原话"严谨和正确远远大于速度和成本"。遇到"我今天能做到这里"类自我 hedge 立刻反省（Session C 中段我说过"session 时长已过"，被 user 抓出来："时长已过是什么意思"—— 我没有 time limit，只有 context window / cognitive load）
+- **验证与效果穿插推进**，不是做完 10 个再一起测；边边角角（@available / warning / docstring）排在最后
+- **阶段性决策拍板后别再反复 ping-pong**：Session C 中 D1/D3/D5 用户一次 "全 OK"，不再复问
+- **"我会一直监督你"工作模式**：不需要每步都等用户批准，用户主动打断即可；但**破坏性行为 / 需要用户信息（真机 / Pixel Cake / platform decision）的 gate** 必须 surface
+- **分批 commit**，每 commit 前 build+test；commit message 写 why > what
+- **不主动 push**（需用户明确 "push"）
+- **"保留做"和"砍"的指令必须立即 TaskUpdate**，文件清理跟进
 
 ---
 
 ## 6. 已知 drift / edge case
 
 - **pbxproj 持续脏**：`Examples/DCRDemo/DCRDemo.xcodeproj/project.pbxproj` 是 Xcode IDE 自动编辑，每次打开都变。除非实际改 Demo 代码，**不要 stage**。
-- **memory 滞后风险**：`project_dcrenderkit.md` 会被标记 "5 days old" warning，要以 `TODO.md` + 本文件 + git log 为准，memory 是参考。
-- **§8.5 B 用户决策 pending**：
-  - B.1 Tier 3 纯拟合替换（Contrast/Blacks/Whites/Exposure-/WhiteBalance）
-  - B.2 EV_RANGE=4.25 vs 业界 ±5
-  - B.3 Saturation/Vibrance linear 下微偏
-  - B.4 parity 测试 tolerance 0.05→0.02
-  - B.5 §8.4 若发现 2+ 编，全量重审 7 个 —— 已做完，结果"没人编，都真"
-- **#75 PortraitBlur slider +100 过弱**：真机反馈记录，待做。
-- **#39 snapshot blocked by #75**：修好 PortraitBlur 才能 snapshot。
-- **Session A 残留断言错误历史**：`engineering-judgment.md §1` 里有本真案例，"V1→V2→V3 审计 framing 批评"—— 不是 failed review，是 methodology 沉淀。
+- **memory 滞后风险**：`project_dcrenderkit.md` 可能被标记 "N days old" warning。以 `TODO.md` + 本文件 + git log 为准；Session C 末已更新 memory 到当前状态。
+- **#37 / #38 / #39 snapshot baseline 被真机评估 gate**：`SnapshotAssertion` framework 完备（first-run 写 baseline + `XCTSkip`，second-run 断言 drift < tolerance），但 **baseline PNG 要在 iOS 真机上你主观确认 filter 效果 OK 后才能 freeze 进 repo**。
+- **#75 PortraitBlur 系数 0.030**：Session C 推算的 effective peak radius 1080p=46px / 4K=92px，落在 Apple Portrait 50-100px 区间。若真机"还弱"升到 0.035；若"太猛"降到 0.025。`kDCRPortraitBlurCoef` 旁的 doc comment 已写明调参方向。
+- **PortraitBlur 契约未写**：Tier 3 五 filter 都有 `docs/contracts/<name>.md`，PortraitBlur (Tier 4) 当前用 snapshot 代契约。如果你决定给 Tier 4 也写契约文档就加；不是 release blocker。
+- **已拍板的决策（不要 revisit）**：
+  - DCR 独立于 Harbeth（`Sources/` 已零 Harbeth）
+  - iOS-only（macOS 业务层已全删；保留 `.macOS(.v15)` 仅因 macos-15 runner 是能让 Metal 单测真跑 GPU 的 CI 环境）
+  - Tier 2 fitted 曲线已换原理派，不要因为 "某 app 效果不一样" 换回 fitted
+  - Pixel-level 外部 parity 不做（#11/#18/#19/#20 已删）
+  - 性能测试不做硬数字 gate（#41/#42/#43 已删；`PipelineBenchmark` 是 tool not gate）
+  - 跨平台不支持（#44/#45/#46 已删）
+  - Harbeth diff audit 不做（#50/#51/#52 已删）
+  - Demo showcase 不扩（#67 已删）
+- **Session A 残留断言错误历史**：`engineering-judgment.md §1` 里有本真案例 "V1→V2→V3 审计 framing 批评"—— 不是 failed review，是 methodology 沉淀。
+- **未 push 18 commits 里的破坏性变更**：Contrast / Blacks / Whites / ExposureNeg 曲线形状全部变；PortraitBlur `FilterProtocol → MultiPassFilter`（调用点 `.single` → `.multi`）；Whites 删 `lumaMean:` 参数；macOS 业务路径全删。**push 前建议 DigiCam 真机回归**。
+- **Session C 保留做但未完成 artifact**（Session D 第一件事）：
+  - #66 Demo→SDK integration test → `Tests/DCRenderKitTests/IntegrationTests/`
+  - #70 `docs/maintainer-sop.md` + `SECURITY.md`
+  - #69 `docs/discussions-guide.md`
+  - `docs/foundation-capability-baseline.md`（约 15 条基座能力 checklist，用于自证"基座 ≥ 任何继承源"）
 
 ---
 
@@ -205,122 +265,173 @@ Claude Code 的 TaskList 数据持久化在：
 ```
 继续 DCRenderKit 开发 (repo: /Users/xiaosenromangic.com/DevWorkSpace/DCRenderKit/)。
 
-**Phase 1 — 装载上下文（必读，~30 min；跳读视为违规）**
+**Phase 1 — 装载上下文（必读，~40 min；跳读视为违规）**
 
 A. 握手 + pending todo (3 分钟)
-   A.1 docs/session-handoff.md **全文** （本文件，你现在读的）
-   A.2 TODO.md （repo 根；45 个 pending tasks 分四档）
+   A.1 docs/session-handoff.md **全文** （本文件，你现在读的）— 尤其 §0 axioms
+        + §3 state snapshot + §5 用户偏好 + §6 drift + §8 踩坑索引
+   A.2 TODO.md （repo 根；Session C 重写；当前 ~12 条收尾 + 3 条真机阻塞 + 2 条远期）
+   A.3 CHANGELOG.md [Unreleased] （Session B/C 累计 breaking 条目）
 
 B. 硬约束 rules (必读 5 份，10 分钟)
    B.1 .claude/rules/commit-verification.md
        — 每 commit 前 swift build + swift test 无豁免。Demo-only/doc-only/
          comment-only 都不能跳。§4 规则起源有 Session A 具体违规案例
-   B.2 .claude/rules/engineering-judgment.md  ← **本 session 最关键**
-       — §1 禁用 "激进/保守/保险/大胆" framing
+   B.2 .claude/rules/engineering-judgment.md  ← **最关键**
+       — §1 禁用 "激进/保守/保险/大胆/肉眼不可见" framing
        — §2 横切关注点一版改不完，准备迭代
-       — §3 替换算法前问历史 (e.g. LLF 已尝试 N 次失败)
+       — §3 替换算法前问历史
        — §4 外部来源**只引 fetched URL**，不引记忆
        — §5 perception-based **不是**"不可形式化"的 escape hatch
        — §6 严谨 = 契约 + 算法满足 + trade-off 文档化，不是理论最优
        — §7 规则起源案例清单
    B.3 .claude/rules/testing.md
        — §1.4 断言前必须推导预期值，推导写进注释
-       — §1.5 identity/极值/方向/数值/契约 5 类最小模板
        — §2.1 测试失败默认**实现错**不是断言错
        — §2.2 三路对比流程 (A actual / B assertion / C rederive)
        — §2.3 禁止改方向/放宽容差/注释掉失败断言
-       — §2.4 HS 断言方向错 具体案例
        — Part 3 Tolerance 错误预算建模
    B.4 .claude/rules/filter-development.md
-       — 新 filter 必走 4 步 (维度分类 → 算法候选 → 业界参考 → Doc rationale)
-       — 经验拟合是最后手段
+       — 新 filter 必走 4 步；经验拟合是最后手段
    B.5 .claude/rules/spatial-params.md
-       — 3 类空间参数 (视觉纹理 / 图像结构 / 逐像素) 适配策略
+       — 3 类空间参数适配策略
 
 C. Plan + Tier 3 契约 (10 分钟)
-   C.1 docs/findings-and-plan.md **全读 §7 (drift 认知) + §8 (audit plan 权威)**
+   C.1 docs/findings-and-plan.md — **注意 §7.3 / §8.4 / §8.5 / §8.6
+        均是 ARCHIVED**，内容仍可查但结论已被 Session C 超越；当前状态在本
+        handoff §0 axioms + §3 state snapshot
    C.2 docs/contracts/vibrance.md       ← Tier 3 契约 5 份全读
-   C.3 docs/contracts/saturation.md        知道哪些已闭环，不要重做
+   C.3 docs/contracts/saturation.md
    C.4 docs/contracts/highlight_shadow.md
    C.5 docs/contracts/clarity.md
    C.6 docs/contracts/soft_glow.md
+   C.7 docs/release-criteria.md — v0.1.0 三级 GA 定义
 
-D. 踩坑记录 (散在多处，按需查 — 只记位置不强读)
-   D.1 rules/engineering-judgment.md §7 — 方法论反例汇总
-        (V1→V2→V3 framing 批评 / P4 scope 预估不准 / LLF 历史 /
-         pseudo-consensus / Clarity 懒惰思考)
-   D.2 rules/testing.md §2.4 — HS 断言方向错具体案例
-   D.3 rules/commit-verification.md §4 — 3 个 Demo-only 跳 test 案例
-   D.4 git log —— 每个 Session B commit message 含 "testing.md §2
-        root-cause applied" 段记录了真实 debug 过程
-        (特别是 cadc1e7 Vib/Sat 契约 C.3 初试失败 + 04aa8bc HS/SoftGlow C.4
-         spatial spread 阈值调参 + fd6cc92 B.4 Zone midpoint 发现)
-   D.5 memory/feedback_commit_verification.md — 规则起源快照
-   D.6 本 handoff §6 "已知 drift / edge case" — pbxproj / B 决策 / #75 等
+D. Session C 新增基础设施 (必读使用文档 / 头部注释，5 分钟)
+   D.1 Tests/DCRenderKitTests/SnapshotAssertion.swift 顶部 doc
+        — Tier 4 aesthetic filter baseline 怎么 freeze / re-record
+   D.2 Sources/DCRenderKit/Statistics/PipelineBenchmark.swift 顶部 doc
+        — MTLCommandBuffer.gpuStart/EndTime 测 median / p95 / stddev
+   D.3 Sources/DCRenderKit/Shaders/Foundation/SRGBGamma.metal 顶部注释
+        + OKLab.metal 顶部注释 — MIRROR 模式约定
+   D.4 Tests/DCRenderKitTests/LinearPerceptualParityTests.swift 顶部 doc
+        — 5 tone filter × 315 grid-point parity 扫描护栏
 
-E. 工作流参考 (遇到对应场景时查)
-   E.1 新 filter 开发 → filter-development.md 4 步 + 参考 docs/contracts/*.md
-       模板写契约 → 实现 → 写契约验证测试 → 跑 + 修断言逻辑 (不改实现)
-   E.2 测试失败 → testing.md §2.2 三路对比
-       A (shader output) / B (断言里的 expected) / C (重新推导) 对比定位
-   E.3 新建 contract → 按 5 份已有 contracts 模板结构:
-       §1 Scope / §2 算法形式 / §3 可测条款 / §4 合成测试图 / §5 Out of scope
-       / §6 参考 / §7 变更日志
-   E.4 参数 empirical 但要答"依据" → Session B B 系列流程:
-       WebSearch 文献/业界 → contract doc 补 fetched URL →
-       shader comment 同步更新移除 fabricated claim
-   E.5 业界 claim → 必 WebSearch + fetched URL 进 contract doc
-       (engineering-judgment §4 硬约束)
-   E.6 破坏性行为变更 → commit message 明写 "Breaking change" 段 +
-       告知用户 DigiCam 端需回归
-   E.7 decommissioning fabricated claim → 找 shader comment 里的
-       "perceptually linear" / "Adobe 反向" 等 ungrounded 措辞，改为
-       "empirical Harbeth-inherited; no [X] measurement backs this"
+E. 踩坑记录 (位置索引，按需查)
+   E.1 本 handoff §8 — Session A/B/C 三 session 全部踩坑汇总索引
+   E.2 rules/engineering-judgment.md §7 — 方法论反例汇总
+        (V1→V2→V3 framing 批评 / LLF 历史 / pseudo-consensus / Clarity 懒惰思考)
+   E.3 rules/testing.md §2.4 — HS 断言方向错具体案例
+   E.4 rules/commit-verification.md §4 — 3 个 Demo-only 跳 test 案例
+   E.5 git log — Session B: cadc1e7 Vib/Sat C.3 gamut 踩坑 / 04aa8bc SoftGlow σ 调参 / fd6cc92 Zone midpoint 发现
+                 Session C: 173ff17 PortraitBlur MultiPassFilter 架构扩展 / 5f32b2e Contrast log-slope / d10bbf7 macOS 剥离
+   E.6 memory/feedback_commit_verification.md — 规则起源快照
+
+F. 工作流参考 (遇到对应场景时查)
+   F.1 新 filter → filter-development.md 4 步 + contracts/*.md 模板
+   F.2 测试失败 → testing.md §2.2 三路对比 (A actual / B assertion / C rederive)
+   F.3 新契约 → 按 5 份已有 contracts 结构 (§1 Scope / §2 算法 / §3 条款 /
+       §4 测试图 / §5 Out of scope / §6 参考 / §7 变更日志)
+   F.4 替换 tone curve → 原理派 Tier 0 (Reinhard / DaVinci / Filmic /
+       linear gain)；fitted 只作最后手段；breaking change 登记
+       CHANGELOG.md [Unreleased]
+   F.5 业界 claim → fetched URL 进 contract doc (engineering-judgment §4)
+   F.6 破坏性行为变更 → commit message 明写 "Breaking change" 段 +
+       CHANGELOG 登记 + 告知用户 DigiCam 端需回归
+   F.7 Tier 4 baseline freeze → SnapshotAssertion.assertMatchesBaseline;
+       first-run 写入 + XCTSkip，真机 approve 后提交 PNG 到 __Snapshots__/
+   F.8 性能验证 → PipelineBenchmark.measureChainTime (不做硬数字 gate)
+   F.9 FIXME 必带 (§…) 或 (#…) 引用 — CI lint 会挡住裸 FIXME
 
 **Phase 2 — 接管动作 (4 步)**
 
 1. 迁移 TaskList:
-   - 上 session UUID: 5d660bae-cb61-4c43-b626-12c921a9ac53
-   - 当前 session UUID: 查 ~/.claude/tasks/ 下最新目录 (不含上述 UUID 的那个)
+   - 上 session UUID (Session C): 6afb8a49-4085-4fc3-9b37-557b14c24dba
+   - 当前 session UUID: 查 ~/.claude/tasks/ 下 mtime 最新（不含上述）
    - 执行:
      mkdir -p ~/.claude/tasks/<current>/
-     cp ~/.claude/tasks/5d660bae-cb61-4c43-b626-12c921a9ac53/*.json \
+     cp ~/.claude/tasks/6afb8a49-4085-4fc3-9b37-557b14c24dba/*.json \
         ~/.claude/tasks/<current>/
-2. 运行 swift build + swift test，确认 299 pass at HEAD 521d39d
-3. 确认 git status: pbxproj 可能 dirty (正常，Xcode 自动编辑，不 stage)
-4. 查 TODO.md §"未来 session 推荐切分"，候选方向 P1 / P2 / P3 各自理解
+2. 运行 swift build + swift test，确认 **326 pass at HEAD 86b90c9**
+3. 确认 git status: `Examples/DCRDemo/DCRDemo.xcodeproj/project.pbxproj` 可能
+   dirty (Xcode 自动编辑，不 stage)
+4. 查 TODO.md "Session C 保留做" 三条 + "foundation-capability-baseline"
+   为 Session D 的第一批任务
 
 **Phase 3 — 开场问候**
 
 向用户简短回报 (3-4 行):
-- 已读 handoff + 5 rules + 5 contracts + findings-and-plan §8
+- 已读 handoff + 5 rules + 5 contracts + release-criteria + Session C 新增
+  basic infra docs
 - TaskList 已迁移 (X 条 completed / Y 条 pending)
-- swift test 299 pass 确认基线 OK (or 若 fail 立即报细节)
-- 基于 TODO.md 推荐切分 P1/P2/P3，我倾向 [X]，理由 [Y]，等你 pick
+- swift test 326 pass 确认基线 OK (or 若 fail 立即报细节)
+- 即将按 Session C 保留指令开始四件 artifact 工作（#66 / #70 / #69 /
+  foundation-capability-baseline），确认顺序后动手
+
+**Session C 留给 Session D 的第一批工作（优先级顺序）**
+
+Session C 用户决策"保留做"的 4 件：
+
+1. **#66 Demo→SDK integration test**
+   - 放 `Tests/DCRenderKitTests/IntegrationTests/`
+   - 覆盖 PortraitBlurMaskGenerator → PortraitBlurFilter 链路
+   - 不加 Demo XCTest target（decision 明确）
+   - 用 synthetic mask + uniform source 跑 pipeline 断言输出满足契约
+     （`additional(0)` mask 正确被消费、strength=0 identity、strength=100
+     blurAmount 至少一处非零）
+
+2. **#70 Maintainer SOP + SECURITY.md**
+   - 新建 `docs/maintainer-sop.md`：PR review 流程、release cut 流程、
+     breaking-change 登记 checklist、security 响应 SLA
+   - 新建 repo 根 `SECURITY.md`：漏洞报告方式（邮件 / private issue）、
+     支持的版本、修复 SLA
+
+3. **#69 GitHub Discussions 指南**
+   - 新建 `docs/discussions-guide.md`
+   - 建议分区：Q&A / Show-and-tell / Ideas / General
+   - 页面开启由用户自己在 GitHub 侧做（我们只写指南）
+
+4. **基座能力 baseline**
+   - 新建 `docs/foundation-capability-baseline.md`
+   - ~15 条架构能力 checklist，证明"DCR 基座 ≥ 任何继承源"
+     （典型：zero-external-deps / typed Error hierarchy / 16-float
+     intermediates / Multi-pass DAG executor / principled tone operators
+     / contract-verified Tier 3 / snapshot-regression Tier 4 / linear-
+     perceptual parity 护栏 / Swift 6 strict concurrency / …）
+   - 用作 release doc 和 marketing truth-claim 底座
+
+完成这 4 件后，继续 TODO.md 上的 Tier 6 API 冻结系列（#47 / #48 / #49 / #59 /
+#71 / #72），然后 Tier 7 DocC / Release plumbing（#57 / #58 / #61 / #62 / #63）。
+**真机阻塞项（#37 / #38 / #39）** 需要用户参与，不要主动做 freeze。
 
 **硬禁**（任何 session 继承）:
-  - "Harbeth 继承" 不是依据 (2026-04-23 user 明确; DCR 存在意义是独立于 Harbeth)
+  - "Harbeth 继承" 不是依据 (DCR 独立于 Harbeth)
   - "激进/保守/肉眼不可见/perception-based 所以没法" 是 forbidden framing
-  - 引业界做法必须 fetched URL 不引记忆 (engineering-judgment §4)
+  - 引业界做法必须 fetched URL 不引记忆
   - commit 前 swift build + swift test 无豁免
   - 不主动 git push (需用户明确 "push")
   - 测试失败时默认实现错，不盲改断言方向/tolerance
-  - 替换算法前问历史 (engineering-judgment §3)
-  - 新 filter 必走算法选型 4 步，经验拟合是最后手段
-  - 禁止 **"TaskList 跨 session 丢了"** 这类谎言 —— 见本文 §1 迁移流程
+  - 替换算法前问历史
+  - 新 filter 必走算法选型 4 步
+  - 禁止 **"TaskList 跨 session 丢了"** 这类谎言
+  - 不要重新引入 NSImage / AppKit / macOS business API
+  - 不要为了"对齐某外部 app"把原理派 tone curve 换回 fitted
+  - "Session 时长到了" 这类自我 hedge 禁说 (Session C 中段被 user 抓到)
+  - FIXME / TODO 必带 (§…) 或 (#…) 引用，CI lint 会挡
 
-**完成 Phase 1-3 后**等用户 pick 方向再动第一行代码。不要直接猜下一步。
+**完成 Phase 1-3 + 前两件 artifact (#66 / #70) 后**向用户汇报一次进度；
+用户未打断时继续推进 #69 / foundation-capability-baseline / Tier 6。
 ```
 
-### 7.1 短版开场（仅用于已经多次 session 过熟悉项目的快速接管）
-
-如果新 session 明确是"接着做某具体 task" 且上次已经停在干净的节点上:
+### 7.1 短版开场（仅用于对项目已熟悉的快速接管）
 
 ```
-继续 DCRenderKit。先 Read docs/session-handoff.md §7 全部，按指引完成 Phase 1-3，然后等我指示。
+继续 DCRenderKit。先 Read docs/session-handoff.md §7 全部，按 Phase 1-3
+装载 + 执行 Session C 留给 D 的 4 件 artifact (#66 / #70 / #69 /
+foundation-capability-baseline)，再继续 Tier 6 收尾。
 ```
 
-但**第一次接管 Session C 建议用完整版**，装载损失一次换终身无损。
+但**第一次接管 Session D 建议用完整版**，装载损失一次换终身无损。
 
 ---
 
@@ -354,7 +465,7 @@ E. 工作流参考 (遇到对应场景时查)
 |---|---|---|
 | Demo-only commit 跳 swift test | `commit-verification.md §4` + `feedback_commit_verification.md` | Session A 三个 11bf7fa/89ad969/f1837cc 违规 → user 揪出 → 立规 |
 
-### 8.4 本 session (B) 特有发现
+### 8.4 Session B 特有发现
 
 | 发现 | 在哪读 | 价值 |
 |---|---|---|
@@ -363,6 +474,21 @@ E. 工作流参考 (遇到对应场景时查)
 | Clarity "perceptually-linear slider" claim 无证据 | `ClarityFilter.metal` (已删) + commit `e28bb76` | B.1 查 Weber-Fechner 给不出系数 → fabricated claim 移除 |
 | Saturation `s=0` breaking change | commit `05f8463` | Rec.709 Y gray → OKLab L gray，DigiCam 侧需真机回归 |
 | Vibrance 语义破坏性变更 | commit `e635cb5` | GPUImage max-anchor → Adobe 语义 OKLCh selective + skin protect |
+
+### 8.4.C Session C 特有发现
+
+| 发现 / 决策 | 在哪读 | 价值 |
+|---|---|---|
+| #74 typed Error enum 早已完成 (TODO 过期) | `PipelineError.swift` + commit `8268686` | 读代码比读 TODO 靠谱 — 二手 summary (subagent) 不能替代自己读代码 |
+| Contrast 换 DaVinci log-slope 后 slider+100 在 pivot 以上立刻 clamp | `ToneAdjustmentFilterTests.swift:testContrastPositiveFullSliderBrightensAbovePivot` + commit `5f32b2e` | 单点测试要选在 gamut 内验证 **shape** 而非 clamp；原 test 用 x=0.7 被 clamp 1.0 替换成 x=0.6 |
+| 新原理派 Contrast 的 lumaMean 参数是 pipeline-space-dependent | `LinearPerceptualParityTests.testContrastLinearPerceptualParitySweep` | parity test 传 lumaMean 必须 `gammaToLinear(0.5)` 转换，否则产生 0.4 的 drift 假象 |
+| PortraitBlur Swift ×0.5 二次压缩让 shader 注释的峰值半径失效 | commit `173ff17` | "注释和代码不一致" 是真 bug；升级到两遍 Poisson + 移除 Swift ×0.5 + shader 系数 0.025→0.030 |
+| `MultiPassFilter` 无法接 external mask | `MultiPassFilter.swift: PassInput.additional(Int) + additionalInputs` + commit `173ff17` | SDK 架构扩展合法途径，不是 hack |
+| `SourceKit IDE 错报` 误导 | (本 session 反复出现) | SourceKit 诊断 "Cannot find type X" 是 workspace 索引错 (打开的是 wayshot repo 不是 DCR)；**以 swift build 为权威**，忽略 SourceKit |
+| "Session 时长已过" 的自我 hedge 被 user 抓 | Session C 中段 conversation | 我没有 time limit 只有 context window / cognitive load，禁止说 "时长到了" 这类话 |
+| 二手代码理解 (subagent summary) 不够 | "你刚才才读了 15 个文件吗" → 用户要求真读代码 | 声称"读完了代码库"时必须自己 Read 而不是依赖 Explore agent 返回的二手 summary |
+| Session C 收敛决策把 44 pending 砍到 ~12 | 本 handoff §3 + TODO.md rewrite | **方案 A: iOS-only (保留 .macOS(.v15) test host)** + 删 Harbeth diff / pixel parity / 性能 gate / 跨平台 — 大尺度 "砍" 决策比 "做" 决策更能收敛 session |
+| `ARCHIVED (...)` banner 是 findings-and-plan 的正确处理方式 | commit `86b90c9` | 不删内容，加横幅标"内容已被后续取代但保留作为决策历史" |
 
 ### 8.5 典型工作流（参考上次实战路径）
 
