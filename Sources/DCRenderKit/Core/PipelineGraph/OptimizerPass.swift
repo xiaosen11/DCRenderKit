@@ -78,6 +78,7 @@ internal enum Optimizer {
     /// later Phase-2 steps append to this list.
     nonisolated(unsafe) internal static var defaultPasses: [any OptimizerPass] = [
         DeadCodeElimination(),
+        VerticalFusion(),
     ]
 
     /// Run every pass in `defaultPasses` against `graph`, in order.

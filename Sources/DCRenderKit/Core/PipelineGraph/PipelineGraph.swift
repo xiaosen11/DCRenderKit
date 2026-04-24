@@ -248,6 +248,9 @@ internal struct PipelineGraph: Sendable {
             return "blend(\(op))"
         case .nativeCompute(let kernel, _, _):
             return "nativeCompute(\(kernel))"
+        case .fusedPixelLocalCluster(let members, let linear, _):
+            let names = members.map { $0.body.functionName }.joined(separator: "→")
+            return "fusedCluster[\(names)], linear=\(linear)"
         }
     }
 }

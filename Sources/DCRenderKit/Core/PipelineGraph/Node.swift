@@ -164,6 +164,42 @@ internal enum NodeKind: Sendable {
         uniforms: FilterUniforms,
         additionalNodeInputs: [NodeRef]
     )
+
+    /// Phase-2 `VerticalFusion` output: a run of adjacent
+    /// `.pixelLocal` nodes merged into a single cluster the Phase-3
+    /// codegen will emit as one uber compute kernel. Members
+    /// execute in array order inside the uber kernel — the output
+    /// of member `i` is fed as the input to member `i+1` via a
+    /// shader-local register, not through a texture.
+    ///
+    /// `additionalNodeInputs` is the **union** of every member's
+    /// auxiliary inputs (LUT, overlay, mask, …) in cluster order;
+    /// each `FusedClusterMember` carries a `Range<Int>` slice
+    /// identifying which slots of this union the member reads, so
+    /// the codegen can assign one texture binding per member while
+    /// keeping the cluster-level input list flat.
+    case fusedPixelLocalCluster(
+        members: [FusedClusterMember],
+        wantsLinearInput: Bool,
+        additionalNodeInputs: [NodeRef]
+    )
+}
+
+// MARK: - FusedClusterMember
+
+/// One element of a `fusedPixelLocalCluster`. Carries the member's
+/// body metadata, uniforms snapshot, debug label, and the range of
+/// cluster-level additional inputs it consumes.
+internal struct FusedClusterMember: Sendable {
+    let body: FusionBody
+    let uniforms: FilterUniforms
+    let debugLabel: String
+    /// Which cluster-level `additionalNodeInputs` slots this member
+    /// reads. Empty range ⇒ the member has no auxiliary textures
+    /// (the common case for 1D tone / colour filters). The range is
+    /// a half-open interval over cluster-level slot indices: slot
+    /// `start..<end` in the enclosing node's `additionalNodeInputs`.
+    let additionalRange: Range<Int>
 }
 
 // MARK: - Node
@@ -227,6 +263,8 @@ extension Node {
         case .neighborRead(_, _, _, let additional):
             refs.append(contentsOf: additional)
         case .nativeCompute(_, _, let additional):
+            refs.append(contentsOf: additional)
+        case .fusedPixelLocalCluster(_, _, let additional):
             refs.append(contentsOf: additional)
         case .blend(_, let aux):
             refs.append(aux)
