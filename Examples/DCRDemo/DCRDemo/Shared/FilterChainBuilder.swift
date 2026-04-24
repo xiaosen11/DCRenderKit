@@ -23,13 +23,19 @@ enum FilterChainBuilder {
     ///
     /// - Parameters:
     ///   - params: Current slider state.
-    ///   - lumaMean: Pre-computed mean luminance of the source, in
-    ///     `[0, 1]`. Drives `ContrastFilter`'s scene-adaptive pivot.
-    ///     Pass `0.5` as a neutral default when the value isn't known
-    ///     (e.g. first camera frame before the first reduction
-    ///     completes). Note: `WhitesFilter` no longer consumes this
-    ///     value (Session C dropped the `lumaMean:` argument; the
-    ///     Filmic shoulder doesn't need a scene-adaptive pivot).
+    ///   - lumaMean: Pre-computed mean luminance of the source in the
+    ///     **gamma (perceptual) domain**, `[0, 1]`. Drives
+    ///     `ContrastFilter`'s scene-adaptive pivot. Pass `0.5` as a
+    ///     neutral "perceived mid grey" default when the value isn't
+    ///     known (e.g. first camera frame before the first reduction
+    ///     completes). The builder converts to a linear-domain value
+    ///     before handing it to ContrastFilter when
+    ///     `DCRenderKit.defaultColorSpace == .linear` — the shader's
+    ///     internal `linear → gamma` step then re-anchors at the same
+    ///     perceived-brightness location regardless of pipeline mode.
+    ///     Note: `WhitesFilter` no longer consumes this value
+    ///     (Session C dropped the `lumaMean:` argument; the Filmic
+    ///     shoulder doesn't need a scene-adaptive pivot).
     ///   - pixelsPerPoint: Display-context multiplier for visual-texture
     ///     parameters. Capture preview = `UIScreen.main.scale` (3 on
     ///     modern iPhones); editing preview = `imageWidth / viewWidthPt`.
@@ -49,11 +55,20 @@ enum FilterChainBuilder {
             chain.append(.single(ExposureFilter(exposure: params.exposure)))
         }
 
-        // 2. Contrast (luma-mean adaptive)
+        // 2. Contrast (luma-mean adaptive). `lumaMean` enters this
+        // function in the gamma (perceptual) domain; ContrastFilter's
+        // shader expects it in the pipeline's current numerical
+        // domain. In `.linear` mode the shader runs
+        // `linearToGamma(pivot)` internally to anchor the slope, so
+        // we have to undo that — un-gamma the value before handing it
+        // off. Without this conversion, `0.5` would be treated as
+        // linear-mid-grey (perceptually 0.7355), pivot would land at
+        // gamma 0.7355, and the contrast slider would no longer
+        // pivot around perceived mid grey in `.linear` mode.
         if params.contrast != 0 {
             chain.append(.single(ContrastFilter(
                 contrast: params.contrast,
-                lumaMean: lumaMean
+                lumaMean: contrastPivot(perceptualMid: lumaMean)
             )))
         }
 
@@ -179,5 +194,27 @@ enum FilterChainBuilder {
         }
 
         return chain
+    }
+
+    /// Map a gamma-domain perceptual mid (e.g. `0.5` for "perceived
+    /// mid grey") to the pivot value ContrastFilter needs in the
+    /// SDK's current colour space.
+    ///
+    /// In `.perceptual` mode the value is passed through unchanged.
+    /// In `.linear` mode the IEC 61966-2-1 piecewise inverse-gamma
+    /// is applied so the shader's internal `linearToGamma` step
+    /// re-anchors at the same perceived-brightness location.
+    private static func contrastPivot(perceptualMid: Float) -> Float {
+        switch DCRenderKit.defaultColorSpace {
+        case .perceptual:
+            return perceptualMid
+        case .linear:
+            // IEC 61966-2-1 piecewise sRGB gamma → linear (matches
+            // Foundation/SRGBGamma.metal's `DCRSRGBGammaToLinear`).
+            let cc = max(perceptualMid, 0)
+            return cc <= 0.04045
+                ? cc / 12.92
+                : powf((cc + 0.055) / 1.055, 2.4)
+        }
     }
 }

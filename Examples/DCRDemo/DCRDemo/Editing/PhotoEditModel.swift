@@ -303,9 +303,11 @@ final class PhotoEditModel {
     }
 
     /// IEC 61966-2-1 piecewise sRGB encode (linear → sRGB byte domain).
-    /// Mirrors the SDK-side Metal helpers (`dcr_*LinearToGamma`) so the
-    /// Demo's CPU-side gamma encode on export matches what the shader
-    /// would have produced in `.perceptual` mode pixel-for-pixel.
+    /// Mirrors the SDK-side Metal helper `DCRSRGBLinearToGamma` (in
+    /// `Foundation/SRGBGamma.metal`, was renamed from the per-shader
+    /// `dcr_*LinearToGamma` legacy names in Session C) so the Demo's
+    /// CPU-side gamma encode on export matches what the shader would
+    /// have produced in `.perceptual` mode pixel-for-pixel.
     private static func dcrLinearToSRGB(_ c: Float) -> Float {
         let cc = max(c, 0)
         if cc <= 0.0031308 {
