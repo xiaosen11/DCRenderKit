@@ -42,7 +42,14 @@ import Metal
 ///
 /// If a future use case needs mixed compute+render multi-pass, the
 /// executor can be extended. Until then, simplicity beats generality.
-public struct MultiPassExecutor {
+//  Demoted from `public` to internal in Session D (#48): the
+//  executor is only ever reached through ``Pipeline`` by passing a
+//  `MultiPassFilter` via `.multi(filter)`, so no consumer has
+//  legitimate reason to invoke `execute(...)` directly. Keeping it
+//  internal during the 0.1.0 cut is cheap; restoring `public` in a
+//  future release if a real use case surfaces is also cheap. Tests
+//  reach the type through `@testable import DCRenderKit`.
+struct MultiPassExecutor {
 
     /// Execute a pass graph, returning the final output texture.
     ///
@@ -71,7 +78,7 @@ public struct MultiPassExecutor {
     ///   validation failures; `PipelineError.filter(.emptyPassGraph)` if
     ///   `passes` is empty AND `source` should not be returned directly;
     ///   various texture/PSO errors propagated from the dispatchers.
-    public static func execute(
+    static func execute(
         passes: [Pass],
         source: MTLTexture,
         additionalInputs: [MTLTexture] = [],

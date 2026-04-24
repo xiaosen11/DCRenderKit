@@ -100,6 +100,15 @@ until `v1.0.0`. Each breaking change is flagged explicitly below.
     annotations tightened to `@available(iOS 17.0, *)`.
   - CI matrix no longer builds the AppKit framework configuration.
 
+### Removed (breaking)
+
+- **`MultiPassExecutor` is now internal** (#48). The type is only
+  reached through ``Pipeline`` via `.multi(filter)`; no consumer
+  invoked `MultiPassExecutor.execute` directly, and pre-1.0 is the
+  last window where the demotion is free (per the release-criteria
+  note that #48 downgrading becomes breaking in 0.2+). Tests reach
+  it through `@testable import DCRenderKit`.
+
 ### Removed
 
 - `dcr_{filter}LinearToGamma` / `dcr_{filter}GammaToLinear` per-shader
