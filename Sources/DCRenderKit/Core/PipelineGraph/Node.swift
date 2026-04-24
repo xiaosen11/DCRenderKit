@@ -97,13 +97,22 @@ internal enum BlendOp: Sendable, Hashable {
 internal enum NodeKind: Sendable {
 
     /// Per-pixel function. Its body reads only the pixel at the
-    /// thread's own grid coordinate. Candidate for vertical fusion
-    /// with any adjacent `.pixelLocal` whose `wantsLinearInput`
-    /// matches (Phase 2).
+    /// thread's own grid coordinate (on the primary source and on
+    /// any auxiliary inputs the filter declared, such as LUT3D's
+    /// lookup texture or NormalBlend's overlay). Candidate for
+    /// vertical fusion with any adjacent `.pixelLocal` whose
+    /// `wantsLinearInput` matches (Phase 2).
+    ///
+    /// `additionalNodeInputs` carries references to non-primary
+    /// texture inputs — LUT, overlay, mask — that the body reads at
+    /// the same coordinate as the source. The allocator (Phase 4)
+    /// resolves these to concrete textures via the graph's
+    /// `totalAdditionalInputs` contract.
     case pixelLocal(
         body: FusionBody,
         uniforms: FilterUniforms,
-        wantsLinearInput: Bool
+        wantsLinearInput: Bool,
+        additionalNodeInputs: [NodeRef]
     )
 
     /// Neighbourhood read function. Its body samples `radiusHint`

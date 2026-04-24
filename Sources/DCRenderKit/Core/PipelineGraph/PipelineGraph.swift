@@ -227,13 +227,15 @@ internal struct PipelineGraph: Sendable {
     private func allRefs(node: Node) -> [NodeRef] {
         var refs = node.inputs
         switch node.kind {
+        case .pixelLocal(_, _, _, let additional):
+            refs.append(contentsOf: additional)
         case .neighborRead(_, _, _, let additional):
             refs.append(contentsOf: additional)
         case .nativeCompute(_, _, let additional):
             refs.append(contentsOf: additional)
         case .blend(_, let aux):
             refs.append(aux)
-        case .pixelLocal, .downsample, .upsample, .reduce:
+        case .downsample, .upsample, .reduce:
             break
         }
         return refs
@@ -253,7 +255,7 @@ internal struct PipelineGraph: Sendable {
 
     private func describe(kind: NodeKind) -> String {
         switch kind {
-        case .pixelLocal(let body, _, let linear):
+        case .pixelLocal(let body, _, let linear, _):
             return "pixelLocal(\(body.functionName), linear=\(linear))"
         case .neighborRead(let body, _, let r, _):
             return "neighborRead(\(body.functionName), r=\(r))"

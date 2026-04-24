@@ -46,7 +46,8 @@ final class PipelineGraphIRTests: XCTestCase {
                 kind: .pixelLocal(
                     body: dummyBody("DCRBody\(i)"),
                     uniforms: .empty,
-                    wantsLinearInput: false
+                    wantsLinearInput: false,
+                    additionalNodeInputs: []
                 ),
                 inputs: [input],
                 outputSpec: .sameAsSource,
@@ -100,7 +101,8 @@ final class PipelineGraphIRTests: XCTestCase {
                 kind: .pixelLocal(
                     body: dummyBody("A"),
                     uniforms: .empty,
-                    wantsLinearInput: false
+                    wantsLinearInput: false,
+                    additionalNodeInputs: []
                 ),
                 inputs: [.source],
                 outputSpec: .sameAsSource,
@@ -119,7 +121,7 @@ final class PipelineGraphIRTests: XCTestCase {
         let nodes = [
             Node(
                 id: 0,
-                kind: .pixelLocal(body: dummyBody("A"), uniforms: .empty, wantsLinearInput: false),
+                kind: .pixelLocal(body: dummyBody("A"), uniforms: .empty, wantsLinearInput: false, additionalNodeInputs: []),
                 inputs: [.source],
                 outputSpec: .sameAsSource,
                 isFinal: true,
@@ -127,7 +129,7 @@ final class PipelineGraphIRTests: XCTestCase {
             ),
             Node(
                 id: 1,
-                kind: .pixelLocal(body: dummyBody("B"), uniforms: .empty, wantsLinearInput: false),
+                kind: .pixelLocal(body: dummyBody("B"), uniforms: .empty, wantsLinearInput: false, additionalNodeInputs: []),
                 inputs: [.node(0)],
                 outputSpec: .sameAsSource,
                 isFinal: true,
@@ -146,7 +148,7 @@ final class PipelineGraphIRTests: XCTestCase {
         let nodes = [
             Node(
                 id: 0,
-                kind: .pixelLocal(body: dummyBody("A"), uniforms: .empty, wantsLinearInput: false),
+                kind: .pixelLocal(body: dummyBody("A"), uniforms: .empty, wantsLinearInput: false, additionalNodeInputs: []),
                 inputs: [.node(1)],         // forward ref
                 outputSpec: .sameAsSource,
                 isFinal: false,
@@ -154,7 +156,7 @@ final class PipelineGraphIRTests: XCTestCase {
             ),
             Node(
                 id: 1,
-                kind: .pixelLocal(body: dummyBody("B"), uniforms: .empty, wantsLinearInput: false),
+                kind: .pixelLocal(body: dummyBody("B"), uniforms: .empty, wantsLinearInput: false, additionalNodeInputs: []),
                 inputs: [.source],
                 outputSpec: .sameAsSource,
                 isFinal: true,
@@ -172,7 +174,7 @@ final class PipelineGraphIRTests: XCTestCase {
         let nodes = [
             Node(
                 id: 0,
-                kind: .pixelLocal(body: dummyBody("A"), uniforms: .empty, wantsLinearInput: false),
+                kind: .pixelLocal(body: dummyBody("A"), uniforms: .empty, wantsLinearInput: false, additionalNodeInputs: []),
                 inputs: [.node(0)],
                 outputSpec: .sameAsSource,
                 isFinal: true,
@@ -190,7 +192,7 @@ final class PipelineGraphIRTests: XCTestCase {
         let nodes = [
             Node(
                 id: 0,
-                kind: .pixelLocal(body: dummyBody("A"), uniforms: .empty, wantsLinearInput: false),
+                kind: .pixelLocal(body: dummyBody("A"), uniforms: .empty, wantsLinearInput: false, additionalNodeInputs: []),
                 inputs: [.source],
                 outputSpec: .sameAsSource,
                 isFinal: false,
@@ -198,7 +200,7 @@ final class PipelineGraphIRTests: XCTestCase {
             ),
             Node(
                 id: 0,                                   // duplicate
-                kind: .pixelLocal(body: dummyBody("B"), uniforms: .empty, wantsLinearInput: false),
+                kind: .pixelLocal(body: dummyBody("B"), uniforms: .empty, wantsLinearInput: false, additionalNodeInputs: []),
                 inputs: [.source],
                 outputSpec: .sameAsSource,
                 isFinal: true,
@@ -242,7 +244,7 @@ final class PipelineGraphIRTests: XCTestCase {
         let nodes = [
             Node(
                 id: 0,
-                kind: .pixelLocal(body: dummyBody("A"), uniforms: .empty, wantsLinearInput: false),
+                kind: .pixelLocal(body: dummyBody("A"), uniforms: .empty, wantsLinearInput: false, additionalNodeInputs: []),
                 inputs: [.source],
                 outputSpec: .explicit(width: 0, height: 100),
                 isFinal: true,
@@ -260,7 +262,7 @@ final class PipelineGraphIRTests: XCTestCase {
         let nodes = [
             Node(
                 id: 0,
-                kind: .pixelLocal(body: dummyBody("A"), uniforms: .empty, wantsLinearInput: false),
+                kind: .pixelLocal(body: dummyBody("A"), uniforms: .empty, wantsLinearInput: false, additionalNodeInputs: []),
                 inputs: [.source],
                 outputSpec: .scaled(factor: 0),
                 isFinal: true,
@@ -279,7 +281,7 @@ final class PipelineGraphIRTests: XCTestCase {
         let nodes = [
             Node(
                 id: 0,
-                kind: .pixelLocal(body: dummyBody("A"), uniforms: .empty, wantsLinearInput: false),
+                kind: .pixelLocal(body: dummyBody("A"), uniforms: .empty, wantsLinearInput: false, additionalNodeInputs: []),
                 inputs: [.source],
                 outputSpec: .matching(passName: "NoSuchPeer"),
                 isFinal: true,
@@ -327,7 +329,7 @@ final class PipelineGraphIRTests: XCTestCase {
     private func assertInvalidPassGraph(
         _ error: Error,
         reasonContains substring: String,
-        file: StaticString = #file,
+        file: StaticString = #filePath,
         line: UInt = #line
     ) {
         guard case let PipelineError.filter(.invalidPassGraph(_, reason)) = error else {
