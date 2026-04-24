@@ -255,9 +255,25 @@ internal struct Node: Sendable, Identifiable {
     /// points into the owning node's `additionalNodeInputs`.
     let inlinedBodyBeforeSample: FusedClusterMember?
 
-    /// Designated initialiser. `inlinedBodyBeforeSample` defaults
-    /// to `nil` so every existing construction site compiles
-    /// without change.
+    /// Phase-2 `TailSink` marker: a pixel-local body that the
+    /// Phase-3 codegen should apply **after** this node's own body
+    /// produces its output, immediately before the `output.write`.
+    /// Used when a downstream pixel-local filter (e.g. Saturation
+    /// following HighlightShadow) has no other consumer — its body
+    /// can ride out of the preceding node's dispatch, sparing an
+    /// extra kernel launch and intermediate texture.
+    ///
+    /// Set by `TailSink` on `.neighborRead` nodes; `.pixelLocal`
+    /// clusters absorb the downstream body by appending a new
+    /// cluster member instead of using this field, and
+    /// `.nativeCompute` nodes are skipped (the compiler can't
+    /// splice into opaque kernels). The field is `nil` everywhere
+    /// else.
+    let tailSinkedBody: FusedClusterMember?
+
+    /// Designated initialiser. Both inlined-body fields default to
+    /// `nil` so every existing construction site compiles without
+    /// change.
     init(
         id: NodeID,
         kind: NodeKind,
@@ -265,7 +281,8 @@ internal struct Node: Sendable, Identifiable {
         outputSpec: TextureSpec,
         isFinal: Bool,
         debugLabel: String,
-        inlinedBodyBeforeSample: FusedClusterMember? = nil
+        inlinedBodyBeforeSample: FusedClusterMember? = nil,
+        tailSinkedBody: FusedClusterMember? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -274,6 +291,7 @@ internal struct Node: Sendable, Identifiable {
         self.isFinal = isFinal
         self.debugLabel = debugLabel
         self.inlinedBodyBeforeSample = inlinedBodyBeforeSample
+        self.tailSinkedBody = tailSinkedBody
     }
 }
 
