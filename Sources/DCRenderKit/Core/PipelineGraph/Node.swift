@@ -204,3 +204,35 @@ internal struct Node: Sendable, Identifiable {
     /// Typically `"Exposure#3"` (filter name + index in chain).
     let debugLabel: String
 }
+
+// MARK: - Node dependency traversal
+
+extension Node {
+
+    /// Every `NodeRef` this node consumes — primary `inputs` plus
+    /// any kind-specific auxiliary references (pixelLocal
+    /// `additionalNodeInputs`, neighborRead `additionalNodeInputs`,
+    /// nativeCompute `additionalNodeInputs`, blend `aux`).
+    ///
+    /// Used by the `PipelineGraph` validator (forward-reference
+    /// check) and by every optimiser pass (reachability for DCE,
+    /// fan-out tests for VerticalFusion / KernelInlining, etc.).
+    /// Return order matches input order so diagnostics see deps in
+    /// the order the shader sees them.
+    internal var dependencyRefs: [NodeRef] {
+        var refs = inputs
+        switch kind {
+        case .pixelLocal(_, _, _, let additional):
+            refs.append(contentsOf: additional)
+        case .neighborRead(_, _, _, let additional):
+            refs.append(contentsOf: additional)
+        case .nativeCompute(_, _, let additional):
+            refs.append(contentsOf: additional)
+        case .blend(_, let aux):
+            refs.append(aux)
+        case .downsample, .upsample, .reduce:
+            break
+        }
+        return refs
+    }
+}

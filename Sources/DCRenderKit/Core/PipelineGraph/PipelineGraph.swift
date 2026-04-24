@@ -147,7 +147,7 @@ internal struct PipelineGraph: Sendable {
         //        ordered.
         var declaredBefore = Set<NodeID>()
         for node in nodes {
-            for ref in allRefs(node: node) {
+            for ref in node.dependencyRefs {
                 switch ref {
                 case .source:
                     break   // always resolvable
@@ -218,27 +218,6 @@ internal struct PipelineGraph: Sendable {
                 break
             }
         }
-    }
-
-    // MARK: - Helpers
-
-    /// Collects every `NodeRef` a node depends on — both primary
-    /// `inputs` and kind-specific `additionalNodeInputs` / blend aux.
-    private func allRefs(node: Node) -> [NodeRef] {
-        var refs = node.inputs
-        switch node.kind {
-        case .pixelLocal(_, _, _, let additional):
-            refs.append(contentsOf: additional)
-        case .neighborRead(_, _, _, let additional):
-            refs.append(contentsOf: additional)
-        case .nativeCompute(_, _, let additional):
-            refs.append(contentsOf: additional)
-        case .blend(_, let aux):
-            refs.append(aux)
-        case .downsample, .upsample, .reduce:
-            break
-        }
-        return refs
     }
 
     // MARK: - Diagnostics
