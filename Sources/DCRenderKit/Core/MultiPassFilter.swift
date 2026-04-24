@@ -58,6 +58,7 @@ import Metal
 ///   output of the final pass becomes this filter's output.
 /// - Empty array: filter is a no-op; the input texture is passed through
 ///   unchanged (useful for conditional filters with strength==0).
+@available(iOS 18.0, *)
 public protocol MultiPassFilter: Sendable {
 
     /// Declare the pass graph for the given input dimensions.
@@ -91,6 +92,7 @@ extension MultiPassFilter {
 /// Immutable descriptor of a texture's dimensions and format.
 /// Passed to `passes(input:)` so the filter can size intermediate textures
 /// proportionally.
+@available(iOS 18.0, *)
 public struct TextureInfo: Sendable, Hashable {
 
     public let width: Int
@@ -123,6 +125,7 @@ public struct TextureInfo: Sendable, Hashable {
 ///
 /// The framework inspects `inputs` to build the DAG, allocates `output`
 /// according to the given `TextureSpec`, and dispatches the kernel.
+@available(iOS 18.0, *)
 public struct Pass: Sendable {
 
     /// Unique name within this filter's pass graph. Referenced by other
@@ -215,6 +218,7 @@ public struct Pass: Sendable {
 /// Reference to a texture consumed by a `Pass`. Either the original
 /// source, the output of a previously named pass, or one of the
 /// filter's caller-supplied auxiliary textures.
+@available(iOS 18.0, *)
 public enum PassInput: Sendable, Hashable {
 
     /// The source texture supplied to the filter (the chain input).
@@ -237,6 +241,7 @@ public enum PassInput: Sendable, Hashable {
 /// The framework resolves this against the filter's input `TextureInfo` to
 /// determine actual allocation size. The texture pool then provides a matching
 /// texture or allocates a new one.
+@available(iOS 18.0, *)
 public enum TextureSpec: Sendable, Hashable {
 
     /// Same dimensions as the filter's source input.

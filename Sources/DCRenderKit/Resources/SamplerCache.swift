@@ -15,6 +15,7 @@ import Metal
 /// `MTLSamplerState` creation is cheap individually but quickly adds up when
 /// hundreds of filters each ask for a sampler every frame. This cache ensures
 /// each unique configuration is built once and reused.
+@available(iOS 18.0, *)
 public final class SamplerCache: @unchecked Sendable {
 
     // MARK: - Shared instance
@@ -88,6 +89,7 @@ public final class SamplerCache: @unchecked Sendable {
 
 /// The subset of `MTLSamplerDescriptor` fields that affect sampler behavior
 /// in DCRenderKit's use cases.
+@available(iOS 18.0, *)
 public struct SamplerConfig: Sendable, Hashable {
 
     public var minFilter: MTLSamplerMinMagFilter

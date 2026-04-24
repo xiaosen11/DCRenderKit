@@ -19,6 +19,7 @@ import Metal
 /// - `.text` — plain ASCII tree suitable for log output.
 /// - `.mermaid` — Mermaid flowchart syntax suitable for Markdown docs or
 ///   GitHub issue bodies.
+@available(iOS 18.0, *)
 public enum PassGraphVisualizer {
 
     public enum Format: String, Sendable {

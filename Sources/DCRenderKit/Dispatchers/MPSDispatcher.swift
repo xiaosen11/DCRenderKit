@@ -48,6 +48,7 @@ import MetalPerformanceShaders
 /// - Small operations where the MPS kernel setup cost dominates the
 ///   actual work (e.g. small-radius blurs).
 /// - Any code path that might need to run on non-Apple platforms.
+@available(iOS 18.0, *)
 public struct MPSDispatcher {
 
     // MARK: - Availability

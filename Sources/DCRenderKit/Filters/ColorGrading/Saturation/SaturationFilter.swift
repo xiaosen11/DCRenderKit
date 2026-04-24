@@ -52,6 +52,7 @@ import Foundation
 /// so the visual effect at `saturation = 0` is subtly different but
 /// both are "perceptually valid" greys. Reference values for the
 /// default saturation slider position remain unchanged (identity).
+@available(iOS 18.0, *)
 public struct SaturationFilter: FilterProtocol {
 
     /// Saturation multiplier. Range `0 ... 2`; identity at `1`.

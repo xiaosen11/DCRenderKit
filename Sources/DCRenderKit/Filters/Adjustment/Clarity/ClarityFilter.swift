@@ -40,6 +40,7 @@ import Foundation
 ///   slider from feeling harsh.
 ///
 /// Identity at `intensity = 0` short-circuits to an empty pass graph.
+@available(iOS 18.0, *)
 public struct ClarityFilter: MultiPassFilter {
 
     /// Clarity slider `-100 ... +100`. Positive amplifies mid-frequency

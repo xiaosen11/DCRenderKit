@@ -33,6 +33,7 @@ import Metal
 ///
 /// Your shaders can now be referenced by name in `ModifierEnum.compute(kernel:)`
 /// or `ModifierEnum.render(vertex:fragment:)`.
+@available(iOS 18.0, *)
 public final class ShaderLibrary: @unchecked Sendable {
 
     /// The shared registry. Thread-safe.

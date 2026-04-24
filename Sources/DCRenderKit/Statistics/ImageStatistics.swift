@@ -33,6 +33,7 @@ import Metal
 ///
 /// The static method is thread-safe (no shared mutable state). Each
 /// call creates and commits its own command buffer.
+@available(iOS 18.0, *)
 public enum ImageStatistics {
 
     /// Compute the mean Rec.709 luminance of the given texture.

@@ -23,6 +23,7 @@ import Metal
 ///
 /// 2. **Label-and-log** — tags every buffer with a caller-supplied label and
 ///    logs submission/completion events at debug level for diagnostics.
+@available(iOS 18.0, *)
 public final class CommandBufferPool: @unchecked Sendable {
 
     // MARK: - Shared instance

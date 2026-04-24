@@ -36,6 +36,7 @@ import Foundation
 /// constant; see `docs/metal-engine-plan.md §5.4`).
 ///
 /// Identity at `density = 0` is exact (dead-zone short-circuit).
+@available(iOS 18.0, *)
 public struct FilmGrainFilter: FilterProtocol {
 
     /// Noise amplitude `0 ... 1` — offset from the SoftLight neutral

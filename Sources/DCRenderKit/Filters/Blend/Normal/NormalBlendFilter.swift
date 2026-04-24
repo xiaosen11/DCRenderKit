@@ -52,6 +52,7 @@ import Metal
 /// because the overlay is immutable after init and used only for
 /// `shaderRead`; Metal textures with read-only usage are thread-safe
 /// once the producer has written to them.
+@available(iOS 18.0, *)
 public struct NormalBlendFilter: FilterProtocol, @unchecked Sendable {
 
     /// Mix weight `0 ... 1`. `0` returns the pipeline input unchanged;

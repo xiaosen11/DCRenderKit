@@ -21,6 +21,7 @@ import Metal
 /// - Provide a consistent encoding entry point (labeled encoder for
 ///   Instruments, standardized error types)
 /// - Centralize mipmap generation and fill operations
+@available(iOS 18.0, *)
 public struct BlitDispatcher {
 
     // MARK: - Texture copy

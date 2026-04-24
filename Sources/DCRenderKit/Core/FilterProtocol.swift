@@ -38,6 +38,7 @@ import Metal
 /// `factors: [Float]` array with per-value buffer-index binding. The
 /// single-struct approach eliminates per-frame `setBytes` overhead and
 /// provides compile-time type safety against uniform-layout drift.
+@available(iOS 18.0, *)
 public protocol FilterProtocol: Sendable {
 
     /// Routes execution to the appropriate backend dispatcher.
@@ -124,6 +125,7 @@ extension FilterProtocol {
 ///
 /// The `FilterUniforms` wrapper captures the byte size and provides access to
 /// a contiguous memory region for Metal buffer binding.
+@available(iOS 18.0, *)
 public struct FilterUniforms: Sendable {
 
     /// Byte size of the underlying struct. Zero means no uniforms.

@@ -54,6 +54,7 @@ import Foundation
 /// are visual-texture parameters; consumers inject the pt×pixelsPerPoint
 /// product so the effect looks pt-identical across capture / editing /
 /// export. Defaults correspond to a 3× Retina capture preview.
+@available(iOS 18.0, *)
 public struct CCDFilter: FilterProtocol {
 
     /// Overall effect strength, `0 ... 100`. Maps to a linear mix between

@@ -59,6 +59,7 @@ import Metal
 /// - `dispatchBatch(...)` — multiple draw calls sharing one render encoder.
 ///   Used for sticker batches (N stickers in one pass) and any scenario
 ///   where you want to avoid encoder churn.
+@available(iOS 18.0, *)
 public struct RenderDispatcher {
 
     // MARK: - Single-draw API
@@ -320,6 +321,7 @@ public struct RenderDispatcher {
 /// resources are created on the CPU, handed to the GPU via encoders, and
 /// retrieved after completion). Callers should not mutate a `DrawCall` after
 /// enqueuing it.
+@available(iOS 18.0, *)
 public struct DrawCall: @unchecked Sendable {
 
     /// Vertex data buffer (bound at `buffer(0)` in the vertex shader).

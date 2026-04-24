@@ -57,6 +57,7 @@ import Foundation
 ///   - Blacks ε = `exp2(−blacks · 1.0)`, Whites ε = `exp2(+whites · 1.0)`.
 ///   - `+100` on either slider halves the respective `(1−x)` / `x`
 ///     factor in the denominator; `−100` doubles it.
+@available(iOS 18.0, *)
 public struct WhitesFilter: FilterProtocol {
 
     /// Whites slider. Range `-100 ... +100`.

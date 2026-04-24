@@ -16,6 +16,7 @@ import CoreVideo
 
 #if canImport(UIKit)
 import UIKit
+@available(iOS 18.0, *)
 public typealias DCRImage = UIImage
 #endif
 
@@ -38,6 +39,7 @@ public typealias DCRImage = UIImage
 ///
 /// YUV multi-plane `CVPixelBuffer` support is deferred until video capture
 /// workflows require it.
+@available(iOS 18.0, *)
 public final class TextureLoader: @unchecked Sendable {
 
     // MARK: - Shared instance

@@ -88,6 +88,7 @@ import CoreVideo
 /// mask is immutable after `init` and read by the shader with
 /// `.shaderRead` — the standard safe-to-share pattern for read-only
 /// Metal resources. `@unchecked Sendable` carries that justification.
+@available(iOS 18.0, *)
 public struct PortraitBlurFilter: MultiPassFilter, @unchecked Sendable {
 
     /// Blur strength slider, `0 ... 100`. Internally normalised to
@@ -170,6 +171,7 @@ struct PortraitBlurUniforms {
 /// Vision detects any foreground subject (person, pet, food, object) —
 /// equivalent to the system Camera "Portrait" mode / "Lift subject"
 /// feature. Available on iOS 17+.
+@available(iOS 18.0, *)
 public enum PortraitBlurMaskGenerator {
 
     /// Generate a subject mask from a `CGImage`. Call once per photo
@@ -178,7 +180,7 @@ public enum PortraitBlurMaskGenerator {
     ///
     /// Returns `nil` when Vision fails to detect any foreground subject
     /// or when the platform predates iOS 17.
-    @available(iOS 17.0, *)
+    @available(iOS 18.0, *)
     public static func generate(
         from image: CGImage,
         device: Device = .shared
@@ -193,7 +195,7 @@ public enum PortraitBlurMaskGenerator {
     /// Generate a subject mask from a `CVPixelBuffer`. Intended for
     /// camera-preview frames; typically re-run every N frames rather than
     /// every frame (Vision is not realtime-cheap).
-    @available(iOS 17.0, *)
+    @available(iOS 18.0, *)
     public static func generate(
         from pixelBuffer: CVPixelBuffer,
         device: Device = .shared
@@ -207,7 +209,7 @@ public enum PortraitBlurMaskGenerator {
 
     // MARK: - Private
 
-    @available(iOS 17.0, *)
+    @available(iOS 18.0, *)
     private static func maskTexture(
         from observation: VNInstanceMaskObservation,
         handler: VNImageRequestHandler,

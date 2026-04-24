@@ -28,6 +28,7 @@ import Metal
 /// - **Render PSOs** are keyed by a composite of `(vertex, fragment,
 ///   colorPixelFormat, blendDescriptor, rasterSampleCount)`. Two filters
 ///   using the same shaders but different blend modes get different PSOs.
+@available(iOS 18.0, *)
 public final class PipelineStateCache: @unchecked Sendable {
 
     // MARK: - Shared instance
@@ -205,6 +206,7 @@ public final class PipelineStateCache: @unchecked Sendable {
 /// Use one of the factory methods on `RenderPSODescriptor` for common
 /// configurations (opaque quad, alpha-blended overlay, additive light leak,
 /// etc.) rather than constructing directly.
+@available(iOS 18.0, *)
 public struct RenderPSODescriptor: Sendable, Hashable {
 
     public var vertexFunction: String
@@ -242,6 +244,7 @@ public struct RenderPSODescriptor: Sendable, Hashable {
 
 /// Color attachment blending configuration. Covers the blending modes we
 /// actually need for stickers, glows, and masked composites.
+@available(iOS 18.0, *)
 public struct BlendConfig: Sendable, Hashable {
 
     public var isEnabled: Bool

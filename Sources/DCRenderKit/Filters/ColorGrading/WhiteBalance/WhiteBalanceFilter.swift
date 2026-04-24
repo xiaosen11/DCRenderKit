@@ -43,6 +43,7 @@ import Foundation
 ///   identity at `0`.
 ///
 /// Identity at `(temperature=5000, tint=0)` is exact.
+@available(iOS 18.0, *)
 public struct WhiteBalanceFilter: FilterProtocol {
 
     /// Colour temperature in Kelvin. Range `4000 ... 8000`; identity at

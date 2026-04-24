@@ -50,6 +50,7 @@ import Metal
 /// allocated once at init, never mutated afterwards, and used only for
 /// `shaderRead` — Metal textures with read-only usage are safe to share
 /// across threads once the producer has finished writing to them.
+@available(iOS 18.0, *)
 public struct LUT3DFilter: FilterProtocol, @unchecked Sendable {
 
     /// Blend between source colour (`0`) and fully-LUT colour (`1`).

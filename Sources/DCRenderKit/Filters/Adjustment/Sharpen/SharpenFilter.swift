@@ -30,6 +30,7 @@ import Foundation
 /// is the display-context multiplier from `rules/spatial-params.md`.
 ///
 /// Identity at `amount = 0` is exact (dead-zone short-circuit).
+@available(iOS 18.0, *)
 public struct SharpenFilter: FilterProtocol {
 
     /// Sharpen amount slider, `0 ... 100`.

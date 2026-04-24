@@ -35,6 +35,7 @@ import Foundation
 ///     // ...
 /// }
 /// ```
+@available(iOS 18.0, *)
 public enum Invariant {
 
     // MARK: - require: input validation

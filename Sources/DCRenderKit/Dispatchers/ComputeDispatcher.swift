@@ -47,6 +47,7 @@ import Metal
 /// which correctly handles the non-integer-multiple case: the kernel's own
 /// `bounds check` (required by DCRenderKit's shader rules) handles threads
 /// that fall outside the texture.
+@available(iOS 18.0, *)
 public struct ComputeDispatcher {
 
     // MARK: - Public API

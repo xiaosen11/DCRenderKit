@@ -35,6 +35,7 @@ import UIKit
 /// added). macOS is retained as a `swift test` host for the Metal
 /// compute kernels but is not a business-layer target — the
 /// `.uiImage` case is only compiled under `canImport(UIKit)`.
+@available(iOS 18.0, *)
 public enum PipelineInput: @unchecked Sendable {
 
     /// A Metal texture ready for use. Zero-cost path.

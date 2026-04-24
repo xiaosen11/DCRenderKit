@@ -15,6 +15,7 @@ import Foundation
 /// DCRenderKit supports only four backends that we actively need. Core
 /// Image is intentionally excluded to avoid GPU-CPU synchronization
 /// overhead and Apple-specific dependencies.
+@available(iOS 18.0, *)
 public enum ModifierEnum: Sendable {
 
     /// Metal compute kernel. Primary backend for per-pixel, neighborhood, and

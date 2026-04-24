@@ -42,6 +42,7 @@ import Foundation
 ///   (fusion must be semantically equivalent at pixel level).
 /// - Debug logging of "fused N filters into M" can be wired up now and
 ///   start producing useful output the moment templates land.
+@available(iOS 18.0, *)
 public struct FilterGraphOptimizer {
 
     // MARK: - Configuration

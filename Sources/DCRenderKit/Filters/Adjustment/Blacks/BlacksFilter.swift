@@ -59,6 +59,7 @@ import Foundation
 /// for shadow-heavy content at extreme slider positions —
 /// intentional per Tier 2 "replace fitted curves with principled
 /// operators".
+@available(iOS 18.0, *)
 public struct BlacksFilter: FilterProtocol {
 
     /// Blacks slider. Range `-100 ... +100`.

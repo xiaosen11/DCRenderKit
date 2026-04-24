@@ -52,6 +52,7 @@ import Metal
 /// The method is synchronous — it blocks on `waitUntilCompleted`
 /// for each iteration. Callers that want to run benchmarks off the
 /// main thread should dispatch this call to a background queue.
+@available(iOS 18.0, *)
 public struct PipelineBenchmark: Sendable {
 
     /// Result of a timing run. All times are in milliseconds.

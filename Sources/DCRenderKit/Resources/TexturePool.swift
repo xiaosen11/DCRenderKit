@@ -45,6 +45,7 @@ import UIKit
 ///   not retain references after enqueuing.
 /// - Textures handed back to the consumer of a `Pipeline` should NOT be
 ///   enqueued (they are the final output); the pipeline handles this.
+@available(iOS 18.0, *)
 public final class TexturePool: @unchecked Sendable {
 
     // MARK: - Shared instance
@@ -319,6 +320,7 @@ public final class TexturePool: @unchecked Sendable {
 // MARK: - TexturePoolSpec
 
 /// Fully specifies a request to the `TexturePool`.
+@available(iOS 18.0, *)
 public struct TexturePoolSpec: Sendable, Hashable {
 
     public let width: Int

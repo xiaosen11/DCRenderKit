@@ -44,6 +44,7 @@ import Metal
 /// pending GPU execution. That was the original design of this class and
 /// was fixed here before it could surface in a consumer's long filter
 /// chain.
+@available(iOS 18.0, *)
 public final class UniformBufferPool: @unchecked Sendable {
 
     // MARK: - Shared instance

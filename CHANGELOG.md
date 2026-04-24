@@ -123,6 +123,17 @@ until `v1.0.0`. Each breaking change is flagged explicitly below.
 
 ### Internal / docs
 
+- **`@available(iOS 18.0, *)` sweep** (#47). Every top-level public
+  declaration now carries the annotation — 64 types across Sources/
+  (enums, structs, classes, protocols, typealiases). The SDK
+  deployment target set in `Package.swift` already enforces
+  iOS 18.0, so the annotations are redundant at the language level,
+  but they give every public symbol an explicit per-API anchor for
+  future `@available(*, deprecated, message:)` markers (see the
+  deprecation workflow in `docs/api-freeze-review.md` §4). The
+  three `@available(iOS 17.0, *)` annotations inside
+  `PortraitBlurMaskGenerator` were raised to iOS 18 to match the
+  enclosing type.
 - **Public API freeze review document**
   (`docs/api-freeze-review.md`, #49). Walks every `public`
   declaration across 8 categories (SDK meta / pipeline execution /

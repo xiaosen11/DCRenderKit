@@ -48,6 +48,7 @@ import Metal
 /// space-sensitive code; their shader math runs on whatever numeric
 /// distribution the intermediate carries. "Same math, different feel" —
 /// the product-side tuning is the variable, not the math.
+@available(iOS 18.0, *)
 public enum DCRColorSpace: Sendable, Equatable {
 
     /// Gamma-encoded values. DigiCam parity.

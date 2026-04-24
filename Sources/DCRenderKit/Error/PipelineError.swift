@@ -27,6 +27,7 @@ import Foundation
 ///     // Handle other categories
 /// }
 /// ```
+@available(iOS 18.0, *)
 public enum PipelineError: Error, Sendable {
 
     /// Metal device, command queue, or command buffer related errors.
@@ -48,6 +49,7 @@ public enum PipelineError: Error, Sendable {
 // MARK: - Device domain
 
 /// Errors originating from Metal device initialization or command encoding.
+@available(iOS 18.0, *)
 public enum DeviceError: Error, Sendable {
 
     /// No Metal-capable device is available on this system.
@@ -76,6 +78,7 @@ public enum DeviceError: Error, Sendable {
 // MARK: - Texture domain
 
 /// Errors related to texture creation, loading, and format handling.
+@available(iOS 18.0, *)
 public enum TextureError: Error, Sendable {
 
     /// Failed to load a texture from the given source.
@@ -103,6 +106,7 @@ public enum TextureError: Error, Sendable {
 // MARK: - Pipeline state domain
 
 /// Errors related to `MTLComputePipelineState` or `MTLRenderPipelineState` creation.
+@available(iOS 18.0, *)
 public enum PipelineStateError: Error, Sendable {
 
     /// Compute kernel compilation failed.
@@ -121,6 +125,7 @@ public enum PipelineStateError: Error, Sendable {
 // MARK: - Filter domain
 
 /// Errors reported by individual filters during configuration or execution.
+@available(iOS 18.0, *)
 public enum FilterError: Error, Sendable {
 
     /// A required parameter is out of range.
@@ -145,6 +150,7 @@ public enum FilterError: Error, Sendable {
 // MARK: - Resource domain
 
 /// Errors related to pool management (texture pool, buffer pool, sampler cache).
+@available(iOS 18.0, *)
 public enum ResourceError: Error, Sendable {
 
     /// Texture pool allocation failed (memory pressure or device limit).

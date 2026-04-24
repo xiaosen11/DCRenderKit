@@ -48,6 +48,7 @@ import Metal
 /// `encode(into:)` / `outputSync()` / `output()` on the same instance
 /// concurrently, and multiple `Pipeline` instances can run concurrently
 /// without coordination.
+@available(iOS 18.0, *)
 public final class Pipeline: @unchecked Sendable {
 
     // MARK: - Input

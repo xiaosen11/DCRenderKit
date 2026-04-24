@@ -52,6 +52,7 @@ import Foundation
 ///   - 1 final Screen blend
 ///
 /// Identity at `strength ≤ 0.001` short-circuits to an empty graph.
+@available(iOS 18.0, *)
 public struct SoftGlowFilter: MultiPassFilter {
 
     /// Overall strength slider `0 ... 100`. Drives the final Screen-blend

@@ -65,6 +65,7 @@ import Foundation
 /// exact midtone curvature need retuning; this is intentional per the
 /// Session C "replace fitted tone curves with principled operators"
 /// decision.
+@available(iOS 18.0, *)
 public struct ContrastFilter: FilterProtocol {
 
     /// Contrast slider. Range `-100 ... +100`.

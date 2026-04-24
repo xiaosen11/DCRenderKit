@@ -27,6 +27,7 @@ import Foundation
 /// eliminating 3 intermediate 8-bit quantization steps.
 ///
 /// See `docs/harbeth-architecture-audit.md` §13.2 for design details.
+@available(iOS 18.0, *)
 public enum FuseGroup: String, Hashable, Sendable, CaseIterable {
 
     /// Tone curve adjustments (exposure, contrast, whites, blacks).

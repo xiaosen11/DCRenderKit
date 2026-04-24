@@ -15,6 +15,7 @@ import os
 /// Severity levels for structured logging.
 ///
 /// These map 1:1 to `os.Logger` / `os_log`'s log types.
+@available(iOS 18.0, *)
 public enum DCRLogLevel: String, Sendable, Comparable, CaseIterable {
 
     /// Verbose diagnostic messages. Typically stripped in Release builds by
@@ -68,6 +69,7 @@ public enum DCRLogLevel: String, Sendable, Comparable, CaseIterable {
 /// }
 /// DCRLogging.logger = MyLogger()
 /// ```
+@available(iOS 18.0, *)
 public protocol DCRLogger: Sendable {
 
     /// Record a log event.
@@ -164,6 +166,7 @@ extension DCRLogger {
 ///
 /// Uses `os.Logger` for efficient, privacy-respecting, Console.app-visible
 /// logging. Log messages are routed to the `com.dcrenderkit` subsystem.
+@available(iOS 18.0, *)
 public struct OSLoggerBackend: DCRLogger {
 
     private let subsystem: String
@@ -209,6 +212,7 @@ public struct OSLoggerBackend: DCRLogger {
 ///
 /// Thread-safe: reading returns the current logger; writing atomically
 /// replaces it. Consumers typically set this once at app startup.
+@available(iOS 18.0, *)
 public enum DCRLogging {
 
     private static let lock = NSLock()

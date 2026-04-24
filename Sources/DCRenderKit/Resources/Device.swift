@@ -21,6 +21,7 @@ import Metal
 ///
 /// `Device` is `Sendable` and safe to access from any thread. Its internal
 /// state (shared command queue) is protected by a lock.
+@available(iOS 18.0, *)
 public final class Device: @unchecked Sendable {
 
     // MARK: - Shared instance

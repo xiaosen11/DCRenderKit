@@ -33,6 +33,7 @@ import Foundation
 /// single-pass filters or restrict multi-pass filters to the single-pass
 /// execution contract. An `enum` keeps each contract clean and lets the
 /// `Pipeline` dispatch on case pattern matching.
+@available(iOS 18.0, *)
 public enum AnyFilter: Sendable {
 
     /// A single-pass filter (one compute kernel dispatch).

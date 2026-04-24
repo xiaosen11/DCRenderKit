@@ -28,6 +28,7 @@ import Foundation
 ///
 /// 1D LUTs (`LUT_1D_SIZE`) are **not** supported by this parser; the filter
 /// pipeline's 3D texture contract requires cube-shaped data.
+@available(iOS 18.0, *)
 public enum CubeFileParser {
 
     /// Parse a `.cube` file from disk.

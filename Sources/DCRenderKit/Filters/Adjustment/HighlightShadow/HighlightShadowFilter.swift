@@ -44,6 +44,7 @@ import Foundation
 ///
 /// Identity at `highlights == 0 && shadows == 0` short-circuits to an
 /// empty pass graph — the framework passes the source through unchanged.
+@available(iOS 18.0, *)
 public struct HighlightShadowFilter: MultiPassFilter {
 
     /// Highlight slider, `-100 ... +100`. Positive recovers highlight

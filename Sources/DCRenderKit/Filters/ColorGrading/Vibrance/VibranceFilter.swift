@@ -67,6 +67,7 @@ import Foundation
 /// hue protection). Slider handfeel and visual response differ
 /// noticeably; existing presets that depend on the old curve will
 /// need retuning. See CHANGELOG.md `[Unreleased]` for migration notes.
+@available(iOS 18.0, *)
 public struct VibranceFilter: FilterProtocol {
 
     /// Vibrance slider. Range `-1 ... +1`; identity at `0`. Positive

@@ -64,6 +64,7 @@ import Foundation
 /// the shadow-lift shoulder, that work belongs to ``BlacksFilter``
 /// now — which itself is a Reinhard toe and addresses the same
 /// shadow-lift intent with a grading-primitive.
+@available(iOS 18.0, *)
 public struct ExposureFilter: FilterProtocol {
 
     /// Exposure slider in stops-like units. Range `-100 ... +100`.

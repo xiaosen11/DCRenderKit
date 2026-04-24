@@ -40,6 +40,7 @@ import Foundation
 /// Consumers don't normally touch this; `Pipeline` is the working
 /// entry point. Included here to standardize version reporting plus the
 /// SDK-wide color-space switch.
+@available(iOS 18.0, *)
 public enum DCRenderKit {
 
     /// Current SDK version following SemVer 2.0.
