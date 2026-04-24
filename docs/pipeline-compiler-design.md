@@ -380,9 +380,13 @@ kernel void DCR_HS_Final_SinkedSaturation_<hash>(...) {
 - Phase 5 Gate 的 parity test **必须包含所有 Tier 3 contract test 在 fusion=on / fusion=off 两状态下全绿**；任一退化都要修好才过 gate
 - 上游 filter 的契约（halo-free / Zone targeting / ...）本质上是 "F 的输出对原图呈现什么关系"，P.sink 后 F 的输出变了 → 用户感知到的 "HS 效果 + Saturation 效果的串联" 在数学上与 fusion off 时一致（两者都是 `saturate(HS(I))`），所以契约应**仍成立**。Parity test 守护。
 
-### §5.6 Pass 6 — ResolutionFolding
+### §5.6 Pass 6 — ResolutionFolding（重新归属 Phase 4 allocator）
 
-等分辨率/format 的连续 intermediate，lifetime 分析后标记 "可 alias" —— Layer 5 allocator 基于此标记分配物理 texture。
+**Phase-2 落地 status**: 原设计把 ResolutionFolding 列为独立 optimiser pass，实施时发现它的产物 —— 同分辨率 / format / lifetime-不重叠的 intermediate 之间的 alias 候选标记 —— 本质就是 Phase 4 allocator 的 lifetime 分析输入。把它作为独立 pass 会得到一个只"注释"而不改 IR 的空壳 pass，与 Phase 4 的 `LifetimeAwareTextureAllocator` 功能 100 % 重叠。
+
+**决策**: ResolutionFolding 不作为独立 optimiser pass 存在；其职责合并进 Phase 4 的 allocator。allocator 接到 `PipelineGraph` 后计算每个 Node output 的生存期，再按相同 (width, height, pixelFormat, usage) bucket 和 lifetime disjointness 做 alias。
+
+**Phase-2 因此实装 5 个 pass**（DCE / VerticalFusion / CSE / KernelInlining / TailSink），而非设计稿原文的 6 个；第 6 条 placeholder 转入 Phase 4。Phase 5 smoke test 依然覆盖从 "lowered" 到 "allocator-ready" 的端到端路径。
 
 ---
 
