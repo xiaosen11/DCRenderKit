@@ -26,6 +26,14 @@ until `v1.0.0`. Each breaking change is flagged explicitly below.
   - `Pipeline.optimization: PipelineOptimization` property + new
     `optimization:` parameter on both initialisers (defaults `.full`;
     additive — every existing call site keeps compiling).
+  - `PipelineCompilerWarmUp.preheat(combinations:intermediatePixelFormat:)`
+    async API that compiles every uber-kernel PSO required by a list
+    of filter chains into `UberKernelCache.shared`, so the first
+    runtime dispatch of each chain is a guaranteed cache hit. Typical
+    call site: a detached `Task` after the first frame is drawn.
+    Multi-pass or otherwise non-lowerable combinations are silently
+    skipped — they warm via the existing `PipelineStateCache` path
+    on their own first dispatch.
 - **Integration tests for PortraitBlur mask routing**
   (`Tests/DCRenderKitTests/IntegrationTests/PortraitBlurMaskPipelineTests`).
   Three synthetic-source, half-split-mask scenarios covering the
