@@ -61,26 +61,20 @@ struct FilmGrainUniforms {
     float chromaticity;   // 0 ... 1
 };
 
-kernel void DCRFilmGrainFilter(
-    texture2d<half, access::write> output [[texture(0)]],
-    texture2d<half, access::read>  input  [[texture(1)]],
-    constant FilmGrainUniforms& u         [[buffer(0)]],
-    uint2 gid [[thread_position_in_grid]])
-{
-    if (gid.x >= output.get_width() || gid.y >= output.get_height()) {
-        return;
-    }
-
+// @dcr:body-begin DCRFilmGrainBody
+inline half3 DCRFilmGrainBody(
+    half3 rgbIn,
+    constant FilmGrainUniforms& u,
+    uint2 gid,
+    texture2d<half, access::read> src
+) {
     const float density      = clamp(u.density, 0.0f, 1.0f);
     const float grainSize    = max(u.grainSize, 1.0f);
     const float roughness    = clamp(u.roughness, 0.0f, 1.0f);
     const float chromaticity = clamp(u.chromaticity, 0.0f, 1.0f);
 
-    const half4 orig = input.read(gid);
-
     if (density < 0.001f) {
-        output.write(orig, gid);
-        return;
+        return rgbIn;
     }
 
     // Quantize grid coordinates so a grainSize×grainSize block shares
@@ -90,8 +84,8 @@ kernel void DCRFilmGrainFilter(
     // Block-center pixel luma (shared across the block so luma-driven
     // randomness doesn't re-break the quantization).
     uint2 center = uint2(grainPos * grainSize + grainSize * 0.5f);
-    center = min(center, uint2(output.get_width() - 1, output.get_height() - 1));
-    float luma = dot(float3(input.read(center).rgb), float3(0.299f, 0.587f, 0.114f));
+    center = min(center, uint2(src.get_width() - 1, src.get_height() - 1));
+    float luma = dot(float3(src.read(center).rgb), float3(0.299f, 0.587f, 0.114f));
 
     // sin-trick noise in [-1, 1].
     float nR = fract(sin(dot(grainPos, float2(12.9898f, 78.233f)) + luma * 43.0f) * 43758.5453f) * 2.0f - 1.0f;
@@ -122,9 +116,23 @@ kernel void DCRFilmGrainFilter(
     }
 
     half3 result;
-    result.r = dcr_softLight(orig.r, blend.r);
-    result.g = dcr_softLight(orig.g, blend.g);
-    result.b = dcr_softLight(orig.b, blend.b);
+    result.r = dcr_softLight(rgbIn.r, blend.r);
+    result.g = dcr_softLight(rgbIn.g, blend.g);
+    result.b = dcr_softLight(rgbIn.b, blend.b);
 
-    output.write(half4(result, orig.a), gid);
+    return result;
+}
+// @dcr:body-end
+
+kernel void DCRFilmGrainFilter(
+    texture2d<half, access::write> output [[texture(0)]],
+    texture2d<half, access::read>  input  [[texture(1)]],
+    constant FilmGrainUniforms& u         [[buffer(0)]],
+    uint2 gid [[thread_position_in_grid]])
+{
+    if (gid.x >= output.get_width() || gid.y >= output.get_height()) {
+        return;
+    }
+    const half4 orig = input.read(gid);
+    output.write(half4(DCRFilmGrainBody(orig.rgb, u, gid, input), orig.a), gid);
 }

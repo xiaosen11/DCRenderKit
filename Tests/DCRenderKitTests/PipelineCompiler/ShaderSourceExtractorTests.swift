@@ -229,14 +229,15 @@ final class ShaderSourceExtractorTests: XCTestCase {
 
     // MARK: - Integration against production shaders
 
-    /// Sanity check: for every SDK built-in filter that has
-    /// adopted the Phase-3 body-function convention, the
-    /// extractor finds both the body and the uniform struct in
-    /// its production `.metal` file. Filters that are still in
-    /// flight (FilmGrain / CCD / LUT3D / NormalBlend / Sharpen at
-    /// this step) are excluded from the list.
-    func testProductionPixelLocalShadersExposeBodiesAndUniforms() throws {
-        let pixelLocalFiltersInFlight: [(filter: any FilterProtocol, functionName: String, structName: String)] = [
+    /// Sanity check: for every SDK built-in filter that adopts
+    /// the Phase-3 body-function convention, the extractor finds
+    /// both the body and the uniform struct in its production
+    /// `.metal` file. Covers all 11 non-LUT single-pass filters;
+    /// LUT3D requires a `MTLTexture` at init time and is handled
+    /// separately.
+    func testAllProductionFusionShadersExposeBodiesAndUniforms() throws {
+        let filters: [(filter: any FilterProtocol, functionName: String, structName: String)] = [
+            // signatureShape: .pixelLocalOnly
             (ExposureFilter(),     "DCRExposureBody",     "ExposureUniforms"),
             (ContrastFilter(),     "DCRContrastBody",     "ContrastUniforms"),
             (BlacksFilter(),       "DCRBlacksBody",       "BlacksUniforms"),
@@ -244,40 +245,66 @@ final class ShaderSourceExtractorTests: XCTestCase {
             (SaturationFilter(),   "DCRSaturationBody",   "SaturationUniforms"),
             (VibranceFilter(),     "DCRVibranceBody",     "VibranceUniforms"),
             (WhiteBalanceFilter(), "DCRWhiteBalanceBody", "WhiteBalanceUniforms"),
+            // signatureShape: .neighborReadWithSource
+            (SharpenFilter(),      "DCRSharpenBody",      "SharpenUniforms"),
+            (FilmGrainFilter(),    "DCRFilmGrainBody",    "FilmGrainUniforms"),
+            (CCDFilter(),          "DCRCCDBody",          "CCDUniforms"),
+            // signatureShape: .pixelLocalWithOverlay (NormalBlend constructed below)
         ]
 
-        for (filter, functionName, structName) in pixelLocalFiltersInFlight {
+        for (filter, functionName, structName) in filters {
             guard let body = filter.fusionBody.body else {
-                XCTFail("\(type(of: filter)) fusionBody missing in-flight metadata")
+                XCTFail("\(type(of: filter)) fusionBody missing metadata")
                 continue
             }
-            XCTAssertEqual(
-                body.functionName, functionName,
-                "\(type(of: filter)) descriptor's functionName should match the production marker"
-            )
-            XCTAssertEqual(
-                body.uniformStructName, structName,
-                "\(type(of: filter)) descriptor's uniformStructName should match the shader struct"
-            )
-
-            // Body extraction must succeed on the real file.
+            XCTAssertEqual(body.functionName, functionName)
+            XCTAssertEqual(body.uniformStructName, structName)
             XCTAssertNoThrow(
-                try ShaderSourceExtractor.extractBody(
-                    named: functionName,
-                    from: body.sourceMetalFile
-                ),
+                try ShaderSourceExtractor.extractBody(named: functionName, from: body.sourceMetalFile),
                 "Body \(functionName) not extractable from \(body.sourceMetalFile.lastPathComponent)"
             )
-
-            // Uniform struct extraction must also succeed.
             XCTAssertNoThrow(
-                try ShaderSourceExtractor.extractUniformStruct(
-                    named: structName,
-                    from: body.sourceMetalFile
-                ),
+                try ShaderSourceExtractor.extractUniformStruct(named: structName, from: body.sourceMetalFile),
                 "Struct \(structName) not extractable from \(body.sourceMetalFile.lastPathComponent)"
             )
         }
+
+        // NormalBlend — needs a dummy overlay texture to construct.
+        let device = MTLCreateSystemDefaultDevice()!
+        let desc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .rgba8Unorm, width: 1, height: 1, mipmapped: false
+        )
+        desc.usage = [.shaderRead]
+        let overlay = device.makeTexture(descriptor: desc)!
+        let nbFilter = NormalBlendFilter(overlay: overlay)
+        guard let nbBody = nbFilter.fusionBody.body else {
+            XCTFail("NormalBlend fusionBody missing metadata")
+            return
+        }
+        XCTAssertEqual(nbBody.functionName, "DCRNormalBlendBody")
+        XCTAssertEqual(nbBody.uniformStructName, "NormalBlendUniforms")
+        XCTAssertNoThrow(
+            try ShaderSourceExtractor.extractBody(named: "DCRNormalBlendBody", from: nbBody.sourceMetalFile)
+        )
+
+        // LUT3D — needs parsed cube data to construct.
+        let identity2Cube: [Float] = [
+            0, 0, 0, 1,  1, 0, 0, 1,
+            0, 1, 0, 1,  1, 1, 0, 1,
+            0, 0, 1, 1,  1, 0, 1, 1,
+            0, 1, 1, 1,  1, 1, 1, 1,
+        ]
+        let cubeData = identity2Cube.withUnsafeBufferPointer { Data(buffer: $0) }
+        let lut = try LUT3DFilter(cubeData: cubeData, dimension: 2)
+        guard let lutBody = lut.fusionBody.body else {
+            XCTFail("LUT3D fusionBody missing metadata")
+            return
+        }
+        XCTAssertEqual(lutBody.functionName, "DCRLUT3DBody")
+        XCTAssertEqual(lutBody.uniformStructName, "LUT3DUniforms")
+        XCTAssertNoThrow(
+            try ShaderSourceExtractor.extractBody(named: "DCRLUT3DBody", from: lutBody.sourceMetalFile)
+        )
     }
 
     /// Round-trip via the on-disk overload — write a temporary

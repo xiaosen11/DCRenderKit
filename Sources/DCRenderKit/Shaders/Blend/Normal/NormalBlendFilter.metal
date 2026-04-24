@@ -27,18 +27,22 @@ struct NormalBlendUniforms {
     float intensity;   // 0 ... 1
 };
 
-kernel void DCRBlendNormalFilter(
-    texture2d<half, access::write> output  [[texture(0)]],
-    texture2d<half, access::read>  input   [[texture(1)]],
-    texture2d<half, access::read>  overlay [[texture(2)]],
-    constant NormalBlendUniforms& u        [[buffer(0)]],
-    uint2 gid [[thread_position_in_grid]])
-{
-    const uint outW = output.get_width();
-    const uint outH = output.get_height();
-    if (gid.x >= outW || gid.y >= outH) return;
-
-    const half4 inColor = input.read(gid);
+// @dcr:body-begin DCRNormalBlendBody
+//
+// Note: the uber-kernel convention for `.pixelLocalWithOverlay`
+// passes rgba4 (not half3) because Porter-Duff compositing needs
+// the alpha channel. The body therefore takes `half4 rgbaIn` and
+// returns `half4`. Codegen's signature stencil for this shape
+// will reflect that.
+inline half4 DCRNormalBlendBody(
+    half4 rgbaIn,
+    constant NormalBlendUniforms& u,
+    uint2 gid,
+    texture2d<half, access::read> overlay,
+    uint2 outputSize
+) {
+    const uint outW = outputSize.x;
+    const uint outH = outputSize.y;
 
     // Map the output pixel-center into the overlay texture's coord
     // space. Bilinear handles dimension mismatch; when dimensions
@@ -51,10 +55,28 @@ kernel void DCRBlendNormalFilter(
 
     // Porter-Duff "source over" compositing of overlay on input.
     half4 composited;
-    composited.rgb = over.rgb + inColor.rgb * inColor.a * (1.0h - over.a);
-    composited.a   = over.a   + inColor.a               * (1.0h - over.a);
+    composited.rgb = over.rgb + rgbaIn.rgb * rgbaIn.a * (1.0h - over.a);
+    composited.a   = over.a   + rgbaIn.a              * (1.0h - over.a);
 
     const half t = half(clamp(u.intensity, 0.0f, 1.0f));
-    const half4 result = mix(inColor, composited, t);
-    output.write(result, gid);
+    return mix(rgbaIn, composited, t);
+}
+// @dcr:body-end
+
+kernel void DCRBlendNormalFilter(
+    texture2d<half, access::write> output  [[texture(0)]],
+    texture2d<half, access::read>  input   [[texture(1)]],
+    texture2d<half, access::read>  overlay [[texture(2)]],
+    constant NormalBlendUniforms& u        [[buffer(0)]],
+    uint2 gid [[thread_position_in_grid]])
+{
+    const uint outW = output.get_width();
+    const uint outH = output.get_height();
+    if (gid.x >= outW || gid.y >= outH) return;
+
+    const half4 inColor = input.read(gid);
+    output.write(
+        DCRNormalBlendBody(inColor, u, gid, overlay, uint2(outW, outH)),
+        gid
+    );
 }

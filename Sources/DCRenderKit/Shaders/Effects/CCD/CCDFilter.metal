@@ -76,16 +76,13 @@ struct CCDUniforms {
 //   app technical disclosures when available; none publicly documented
 //   at time of verification)
 
-kernel void DCRCCDFilter(
-    texture2d<half, access::write> output [[texture(0)]],
-    texture2d<half, access::read>  input  [[texture(1)]],
-    constant CCDUniforms& u               [[buffer(0)]],
-    uint2 gid [[thread_position_in_grid]])
-{
-    if (gid.x >= output.get_width() || gid.y >= output.get_height()) {
-        return;
-    }
-
+// @dcr:body-begin DCRCCDBody
+inline half3 DCRCCDBody(
+    half3 rgbIn,
+    constant CCDUniforms& u,
+    uint2 gid,
+    texture2d<half, access::read> src
+) {
     const float strength    = clamp(u.strength, 0.0f, 1.0f);
     const float density     = clamp(u.density, 0.0f, 1.0f);
     const float caAmount    = clamp(u.caAmount, 0.0f, 1.0f);
@@ -98,13 +95,13 @@ kernel void DCRCCDFilter(
     const int2 pos = int2(gid);
 
     // 1. Chromatic aberration: horizontal R/B offset.
-    half4 color = input.read(gid);
+    half4 color = half4(rgbIn, 1.0h);
     if (caAmount > 0.001f) {
         float caPx = caAmount * caMaxOffset;
         int2 posR = pos + int2(int(-round(caPx)), 0);
         int2 posB = pos + int2(int( round(caPx)), 0);
-        color.r = dcr_ccdSafeRead(input, posR).r;
-        color.b = dcr_ccdSafeRead(input, posB).b;
+        color.r = dcr_ccdSafeRead(src, posR).r;
+        color.b = dcr_ccdSafeRead(src, posB).b;
     }
 
     // 2. Saturation boost: Rec.709 luma anchor.
@@ -118,8 +115,8 @@ kernel void DCRCCDFilter(
     if (density > 0.001f) {
         float2 grainPos = floor(float2(gid) / grainSize);
         uint2 blockCenter = uint2(grainPos * grainSize + grainSize * 0.5f);
-        blockCenter = min(blockCenter, uint2(output.get_width() - 1, output.get_height() - 1));
-        float luma = dot(float3(input.read(blockCenter).rgb), float3(0.299f, 0.587f, 0.114f));
+        blockCenter = min(blockCenter, uint2(src.get_width() - 1, src.get_height() - 1));
+        float luma = dot(float3(src.read(blockCenter).rgb), float3(0.299f, 0.587f, 0.114f));
 
         float nR = fract(sin(dot(grainPos, float2(12.9898f, 78.233f)) + luma * 43.0f) * 43758.5453f) * 2.0f - 1.0f;
         float exponent = mix(2.0f, 0.5f, density);
@@ -140,16 +137,16 @@ kernel void DCRCCDFilter(
     }
 
     // 4. Luma-channel sharpening from ORIGINAL source.
-    //    Sampling from input (not the mutated `color`) means grain and CA
+    //    Sampling from src (not the mutated `color`) means grain and CA
     //    fringes don't get re-sharpened, and only luminance detail is
     //    lifted (keeps color fringing soft).
     if (sharpAmount > 0.001f) {
         const half3 kLumaH = half3(kDCRCCDLumaRec709);
-        half4 origCenter = input.read(gid);
-        half4 left  = dcr_ccdSafeRead(input, pos + int2(-sharpStep,  0));
-        half4 right = dcr_ccdSafeRead(input, pos + int2( sharpStep,  0));
-        half4 top   = dcr_ccdSafeRead(input, pos + int2( 0, -sharpStep));
-        half4 bot   = dcr_ccdSafeRead(input, pos + int2( 0,  sharpStep));
+        half4 origCenter = src.read(gid);
+        half4 left  = dcr_ccdSafeRead(src, pos + int2(-sharpStep,  0));
+        half4 right = dcr_ccdSafeRead(src, pos + int2( sharpStep,  0));
+        half4 top   = dcr_ccdSafeRead(src, pos + int2( 0, -sharpStep));
+        half4 bot   = dcr_ccdSafeRead(src, pos + int2( 0,  sharpStep));
         // FIXME(§8.6 Tier 2): × 0.96 = 60% of SharpenFilter's × 1.6 product
         // compression (see SharpenFilter.swift's ×1.6 block). Derivation chain:
         // sharpAmount slider → SharpenFilter would apply × 1.6 → CCD uses
@@ -168,8 +165,20 @@ kernel void DCRCCDFilter(
         color.rgb = clamp(color.rgb + lumaDetail, half3(0.0h), half3(1.0h));
     }
 
-    // 5. Final strength mix between pristine original and processed.
-    half4 original = input.read(gid);
-    half4 result = mix(original, color, half(strength));
-    output.write(result, gid);
+    // 5. Final strength mix between pristine original (rgbIn) and processed.
+    return mix(rgbIn, color.rgb, half(strength));
+}
+// @dcr:body-end
+
+kernel void DCRCCDFilter(
+    texture2d<half, access::write> output [[texture(0)]],
+    texture2d<half, access::read>  input  [[texture(1)]],
+    constant CCDUniforms& u               [[buffer(0)]],
+    uint2 gid [[thread_position_in_grid]])
+{
+    if (gid.x >= output.get_width() || gid.y >= output.get_height()) {
+        return;
+    }
+    const half4 orig = input.read(gid);
+    output.write(half4(DCRCCDBody(orig.rgb, u, gid, input), orig.a), gid);
 }

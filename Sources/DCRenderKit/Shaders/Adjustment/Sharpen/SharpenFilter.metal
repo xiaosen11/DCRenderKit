@@ -25,6 +25,35 @@ struct SharpenUniforms {
     float step;     // sampling step in pixels
 };
 
+// @dcr:body-begin DCRSharpenBody
+inline half3 DCRSharpenBody(
+    half3 rgbIn,
+    constant SharpenUniforms& u,
+    uint2 gid,
+    texture2d<half, access::read> src
+) {
+    const float amount = clamp(u.amount, 0.0f, 2.0f);
+    const int step     = max(int(round(u.step)), 1);
+
+    if (amount < 0.001f) {
+        return rgbIn;
+    }
+
+    const int2 pos = int2(gid);
+    half4 left  = dcr_sharpenSafeRead(src, pos + int2(-step,  0));
+    half4 right = dcr_sharpenSafeRead(src, pos + int2( step,  0));
+    half4 top   = dcr_sharpenSafeRead(src, pos + int2( 0, -step));
+    half4 bot   = dcr_sharpenSafeRead(src, pos + int2( 0,  step));
+
+    const half s = half(amount);
+    const half centerMul = 1.0h + 4.0h * s;
+    half3 sharpened = rgbIn * centerMul
+        - (left.rgb + right.rgb + top.rgb + bot.rgb) * s;
+
+    return clamp(sharpened, half3(0.0h), half3(1.0h));
+}
+// @dcr:body-end
+
 kernel void DCRSharpenFilter(
     texture2d<half, access::write> output [[texture(0)]],
     texture2d<half, access::read>  input  [[texture(1)]],
@@ -34,27 +63,6 @@ kernel void DCRSharpenFilter(
     if (gid.x >= output.get_width() || gid.y >= output.get_height()) {
         return;
     }
-
-    const float amount = clamp(u.amount, 0.0f, 2.0f);
-    const int step     = max(int(round(u.step)), 1);
     const half4 center = input.read(gid);
-
-    if (amount < 0.001f) {
-        output.write(center, gid);
-        return;
-    }
-
-    const int2 pos = int2(gid);
-    half4 left  = dcr_sharpenSafeRead(input, pos + int2(-step,  0));
-    half4 right = dcr_sharpenSafeRead(input, pos + int2( step,  0));
-    half4 top   = dcr_sharpenSafeRead(input, pos + int2( 0, -step));
-    half4 bot   = dcr_sharpenSafeRead(input, pos + int2( 0,  step));
-
-    const half s = half(amount);
-    const half centerMul = 1.0h + 4.0h * s;
-    half3 sharpened = center.rgb * centerMul
-        - (left.rgb + right.rgb + top.rgb + bot.rgb) * s;
-
-    sharpened = clamp(sharpened, half3(0.0h), half3(1.0h));
-    output.write(half4(sharpened, center.a), gid);
+    output.write(half4(DCRSharpenBody(center.rgb, u, gid, input), center.a), gid);
 }

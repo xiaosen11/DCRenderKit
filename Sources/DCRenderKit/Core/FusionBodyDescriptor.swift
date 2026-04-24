@@ -203,12 +203,12 @@ public enum FusionBodySignatureShape: Sendable, Hashable {
     /// that need gid but no source-neighborhood reads.
     case pixelLocalWithGid
 
-    /// `inline half3 body(half3 rgbIn, constant X& u,
+    /// `inline half3 body(half3 rgbIn, constant X& u, uint2 gid,
     ///                    texture3d<float, access::read> lut)`
     ///
     /// Body samples a 3D lookup texture indexed by the input
-    /// colour (LUT3D). Does not use `gid` — every pixel indexes
-    /// the LUT by its own `rgbIn`.
+    /// colour (LUT3D) and uses `gid` for per-pixel triangular
+    /// dither on the blended output.
     case pixelLocalWithLUT3D
 
     /// `inline half3 body(half3 rgbIn, constant X& u, uint2 gid,

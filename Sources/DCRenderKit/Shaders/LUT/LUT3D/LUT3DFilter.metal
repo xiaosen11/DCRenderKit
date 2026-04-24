@@ -98,23 +98,18 @@ inline float DCRSRGBGammaToLinear(float c) {
 // re-linearize `lutColor` before mixing so both ends of the mix live in
 // the same space.
 
-kernel void DCRLUT3DFilter(
-    texture2d<half, access::write> output [[texture(0)]],
-    texture2d<half, access::read>  input  [[texture(1)]],
-    texture3d<float, access::read> lut    [[texture(2)]],
-    constant LUT3DUniforms& u             [[buffer(0)]],
-    uint2 gid [[thread_position_in_grid]])
-{
-    if (gid.x >= output.get_width() || gid.y >= output.get_height()) {
-        return;
-    }
-
-    const half4 inColor = input.read(gid);
+// @dcr:body-begin DCRLUT3DBody
+inline half3 DCRLUT3DBody(
+    half3 rgbIn,
+    constant LUT3DUniforms& u,
+    uint2 gid,
+    texture3d<float, access::read> lut
+) {
     const bool isLinear = (u.isLinearSpace != 0u);
 
     // Coords used to index the cube must be in gamma space (the cube's
     // native domain). In linear mode we un-linearize first.
-    float3 rgbForLUT = clamp(float3(inColor.rgb), 0.0f, 1.0f);
+    float3 rgbForLUT = clamp(float3(rgbIn), 0.0f, 1.0f);
     if (isLinear) {
         rgbForLUT.r = DCRSRGBLinearToGamma(rgbForLUT.r);
         rgbForLUT.g = DCRSRGBLinearToGamma(rgbForLUT.g);
@@ -132,9 +127,22 @@ kernel void DCRLUT3DFilter(
     }
 
     const float mixFactor = clamp(u.intensity, 0.0f, 1.0f);
-    const half3 result = mix(inColor.rgb, half3(lutColor.rgb), half(mixFactor));
+    const half3 result = mix(rgbIn, half3(lutColor.rgb), half(mixFactor));
 
-    const half3 dithered = dcr_triangularDither(gid, result);
+    return dcr_triangularDither(gid, result);
+}
+// @dcr:body-end
 
-    output.write(half4(dithered, inColor.a), gid);
+kernel void DCRLUT3DFilter(
+    texture2d<half, access::write> output [[texture(0)]],
+    texture2d<half, access::read>  input  [[texture(1)]],
+    texture3d<float, access::read> lut    [[texture(2)]],
+    constant LUT3DUniforms& u             [[buffer(0)]],
+    uint2 gid [[thread_position_in_grid]])
+{
+    if (gid.x >= output.get_width() || gid.y >= output.get_height()) {
+        return;
+    }
+    const half4 inColor = input.read(gid);
+    output.write(half4(DCRLUT3DBody(inColor.rgb, u, gid, lut), inColor.a), gid);
 }
