@@ -3,18 +3,22 @@
 //  DCRenderKit
 //
 //  Translates a consumer-facing `[AnyFilter]` chain into the internal
-//  `PipelineGraph` IR. The lowering pass is deliberately mechanical —
-//  it maps filters to nodes 1:1 for single-pass filters and maps
-//  each `Pass` of a multi-pass filter to an individual node, without
-//  attempting any fusion or simplification. Fusion happens in
-//  Phase 2; codegen in Phase 3. See
-//  `docs/pipeline-compiler-design.md` §3.2 for the invariants this
-//  pass produces.
+//  `PipelineGraph` IR. The lowering pass is deliberately mechanical:
+//  it maps each filter to one or more graph nodes without attempting
+//  fusion or simplification. The `Optimizer` runs afterward (DCE,
+//  vertical fusion, CSE, kernel inlining, tail sink); backend codegen
+//  consumes the optimised graph. See `docs/pipeline-compiler-design.md`
+//  §3.2 for the invariants this pass produces.
+//
+//  Recognised kernel names (e.g. `DCRGuidedDownsampleLuma`) lower to
+//  typed `NodeKind`s (`.downsample(kind: .guidedLuma)`) so structural
+//  optimiser passes can reason about them; everything else falls
+//  through to opaque `.nativeCompute`.
 //
 
 import Foundation
 
-/// Phase-1 lowering pass. Pure function from `[AnyFilter]` to
+/// Pure lowering pass. Function from `[AnyFilter]` to
 /// `PipelineGraph?` — returns `nil` when the input describes no
 /// work (empty chain, or a chain consisting entirely of multi-pass
 /// filters that short-circuit to empty `passes`). Callers are
@@ -98,10 +102,16 @@ internal enum Lowering {
                     continue
                 }
 
-                // Lower every Pass into a nativeCompute Node. Phase 2
-                // may refine these into finer NodeKinds once the
-                // optimiser recognises specific kernel-name patterns
-                // (guided-downsample, bloom-bright, …).
+                // Lower every Pass into a graph Node. Kernels whose
+                // semantics the IR knows about lower to a typed kind
+                // (`.downsample`, `.upsample`, …); everything else
+                // becomes an opaque `.nativeCompute`. Typed kinds
+                // give CSE and the allocator structural visibility:
+                // two filters that both call `DCRGuidedDownsampleLuma`
+                // on `.source` collapse into one shared dispatch
+                // because the `NodeSignature` discriminator is
+                // `(factor, kind)` rather than the per-filter
+                // kernel name.
                 var passNameToID: [String: NodeID] = [:]
                 var filterFinalID: NodeID?
 
@@ -122,13 +132,16 @@ internal enum Lowering {
                     )
                     guard let primary = primaryRef else { return nil }
 
+                    let nodeKind = lowerPassKernel(
+                        kernelName: kernelName,
+                        outputSpec: pass.output,
+                        uniforms: pass.uniforms,
+                        additionalRefs: additionalRefs
+                    )
+
                     let node = Node(
                         id: nextID,
-                        kind: .nativeCompute(
-                            kernelName: kernelName,
-                            uniforms: pass.uniforms,
-                            additionalNodeInputs: additionalRefs
-                        ),
+                        kind: nodeKind,
                         inputs: [primary],
                         outputSpec: pass.output,
                         isFinal: false,   // pipeline-final assigned below
@@ -231,11 +244,11 @@ internal enum Lowering {
             )
         }
 
-        // Unsupported fusion body ⇒ fall back to nativeCompute. Only
-        // compute modifiers are lowerable in Phase 1.
+        // Unsupported fusion body ⇒ fall back to nativeCompute.
+        // Only compute modifiers are lowerable; render / blit /
+        // MPS single-pass filters fall through to the Pipeline's
+        // per-step path.
         guard case .compute(let kernelName) = filter.modifier else {
-            // Render / blit / MPS single-pass filters aren't modeled
-            // by Phase 1's IR. Future phases may extend this.
             return nil
         }
         return Node(
@@ -249,6 +262,49 @@ internal enum Lowering {
             outputSpec: .sameAsSource,
             isFinal: isPipelineFinal,
             debugLabel: label
+        )
+    }
+
+    // MARK: - Pass-kernel recognition
+
+    /// Translate a multi-pass `Pass`'s kernel name into the matching
+    /// typed `NodeKind`. Kernels recognised by the IR (currently the
+    /// guided-filter downsample) lower to a structural kind so CSE
+    /// can fold cross-filter duplicates; everything else stays
+    /// `.nativeCompute`.
+    ///
+    /// Adding a new recognised kernel requires:
+    /// 1. Append a case here that maps the kernel name (and any
+    ///    needed shape constraints — output factor, uniform schema)
+    ///    to a structural `NodeKind`.
+    /// 2. Wire the same recognition in
+    ///    ``Pipeline/dispatchCompilerNode(node:source:allocation:globalAdditional:commandBuffer:)``
+    ///    so the dispatch path runs the original kernel.
+    /// 3. Cover the cross-filter dedup with a graph-level test.
+    private static func lowerPassKernel(
+        kernelName: String,
+        outputSpec: TextureSpec,
+        uniforms: FilterUniforms,
+        additionalRefs: [NodeRef]
+    ) -> NodeKind {
+        // Guided-filter shared 4× luma downsample. Both
+        // HighlightShadowFilter and ClarityFilter emit this with
+        // identical shape (`.scaled(0.25)`, no uniforms, no aux
+        // textures); modelling it as a structural `.downsample`
+        // lets `CommonSubexpressionElimination` collapse the pair
+        // into a single dispatch.
+        if kernelName == "DCRGuidedDownsampleLuma",
+           additionalRefs.isEmpty,
+           uniforms.byteCount == 0,
+           case .scaled(let factor) = outputSpec,
+           abs(factor - 0.25) < 1e-6 {
+            return .downsample(factor: 4.0, kind: .guidedLuma)
+        }
+
+        return .nativeCompute(
+            kernelName: kernelName,
+            uniforms: uniforms,
+            additionalNodeInputs: additionalRefs
         )
     }
 

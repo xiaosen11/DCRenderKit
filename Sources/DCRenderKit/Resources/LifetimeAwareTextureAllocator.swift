@@ -86,15 +86,30 @@ internal final class LifetimeAwareTextureAllocator: @unchecked Sendable {
 
     func allocate(
         graph: PipelineGraph,
-        sourceInfo: TextureInfo
+        sourceInfo: TextureInfo,
+        chainInternalAlias: [NodeID: NodeID] = [:]
     ) throws -> Allocation {
         let plan = TextureAliasingPlanner.plan(
             graph: graph,
-            sourceInfo: sourceInfo
+            sourceInfo: sourceInfo,
+            chainInternalAlias: chainInternalAlias
         )
+        return try materialize(plan: plan, finalID: graph.finalID)
+    }
 
-        // Materialise one MTLTexture per bucket. Buckets are
-        // 0-indexed contiguous integers by construction.
+    /// Materialise a pre-computed `TextureAliasingPlan` by dequeuing
+    /// one fresh texture per bucket. Used by Pipeline's compiled-
+    /// chain cache: the plan stays stable across frames as long as
+    /// the chain topology and source dimensions don't change, so
+    /// only this materialisation step (the texture-pool dequeue
+    /// loop) needs to run per frame — `Lowering`, `Optimizer`, and
+    /// `TextureAliasingPlanner` all skip on cache hit.
+    func materialize(
+        plan: TextureAliasingPlan,
+        finalID: NodeID
+    ) throws -> Allocation {
+        // One MTLTexture per bucket. Buckets are 0-indexed
+        // contiguous integers by the planner's construction.
         var bucketTextures: [Int: MTLTexture] = [:]
         for (bucket, info) in plan.bucketSpec {
             // `.renderTarget` is added alongside the compute-path
@@ -134,7 +149,7 @@ internal final class LifetimeAwareTextureAllocator: @unchecked Sendable {
 
         // Collect textures that aren't the final node's. Those
         // go back to the pool after the CB completes.
-        let finalBucket = plan.bucketOf[graph.finalID]
+        let finalBucket = plan.bucketOf[finalID]
         let intermediateTextures = bucketTextures
             .filter { $0.key != finalBucket }
             .map { $0.value }

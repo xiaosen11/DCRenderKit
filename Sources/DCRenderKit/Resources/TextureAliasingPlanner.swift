@@ -81,9 +81,19 @@ internal enum TextureAliasingPlanner {
     /// `TextureSpec.resolve(source:resolvedPeers:)` so relative
     /// output specs (`.scaled(factor:)`, `.matchShortSide(_:)`)
     /// land on concrete dimensions.
+    ///
+    /// `chainInternalAlias` describes nodes whose physical output
+    /// is tile-memory only — i.e. clusters in the middle of a
+    /// `RenderBackend.executeChain` draw chain that pass their
+    /// result to the next cluster via programmable blending and
+    /// never write a texture. The planner skips bucket allocation
+    /// for them and aliases their `bucketOf` entry to the chain
+    /// tail's bucket so `mapping[id]` lookups still resolve.
+    /// Pass `[:]` when no chain collapsing applies.
     static func plan(
         graph: PipelineGraph,
-        sourceInfo: TextureInfo
+        sourceInfo: TextureInfo,
+        chainInternalAlias: [NodeID: NodeID] = [:]
     ) -> TextureAliasingPlan {
         guard !graph.nodes.isEmpty else {
             return TextureAliasingPlan(bucketOf: [:], bucketSpec: [:])
@@ -118,7 +128,13 @@ internal enum TextureAliasingPlanner {
                 }
             }
 
-            // 2b. Resolve this node's output spec.
+            // 2b. Skip allocation for chain-internal clusters —
+            //     their output never reaches a real texture.
+            if chainInternalAlias[node.id] != nil {
+                continue
+            }
+
+            // 2c. Resolve this node's output spec.
             guard let spec = node.outputSpec.resolve(
                 source: sourceInfo,
                 resolvedPeers: resolvedInfos
@@ -132,21 +148,31 @@ internal enum TextureAliasingPlanner {
             }
             resolvedInfos[node.debugLabel] = spec
 
-            // 2c. Try to reuse a bucket from the free list.
+            // 2d. Try to reuse a bucket from the free list.
             let assignedBucket: Int
             if var freeBuckets = freePerSpec[spec], !freeBuckets.isEmpty {
                 assignedBucket = freeBuckets.removeLast()
                 freePerSpec[spec] = freeBuckets.isEmpty ? nil : freeBuckets
             } else {
-                // 2d. Allocate fresh.
+                // 2e. Allocate fresh.
                 assignedBucket = nextBucketIndex
                 nextBucketIndex += 1
                 bucketSpec[assignedBucket] = spec
             }
 
-            // 2e. Record assignment and its end-of-life.
+            // 2f. Record assignment and its end-of-life.
             bucketOf[node.id] = assignedBucket
             bucketEnd[assignedBucket] = endOfLife[node.id] ?? node.id
+        }
+
+        // Step 3: alias chain-internal IDs to their chain tail's
+        // bucket so `mapping[chainInternalID]` resolves to the
+        // tail texture (harmless — the dispatch path never reads
+        // it as input or writes to it as output).
+        for (internalID, tailID) in chainInternalAlias {
+            if let tailBucket = bucketOf[tailID] {
+                bucketOf[internalID] = tailBucket
+            }
         }
 
         return TextureAliasingPlan(

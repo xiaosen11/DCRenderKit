@@ -166,8 +166,9 @@ final class LoweringTests: XCTestCase {
     // MARK: - Multi-pass filter
 
     /// HighlightShadow at a non-zero slider produces its 5-pass DAG.
-    /// Every pass becomes a `nativeCompute` Node; the final pass
-    /// of the filter is the pipeline's final node.
+    /// The shared `DCRGuidedDownsampleLuma` pass lowers to a typed
+    /// `.downsample(.guidedLuma)` node so CSE can fold it across
+    /// filters; every other pass stays opaque `.nativeCompute`.
     func testHighlightShadowLowersToFivePassChain() throws {
         let steps: [AnyFilter] = [
             .multi(HighlightShadowFilter(highlights: 50, shadows: 0))
@@ -175,9 +176,19 @@ final class LoweringTests: XCTestCase {
         let graph = try XCTUnwrap(Lowering.lower(steps, source: fixtureSource))
 
         XCTAssertEqual(graph.nodes.count, 5)
-        for node in graph.nodes {
+
+        // First pass is the typed guided-luma downsample.
+        guard case .downsample(let factor, let kind) = graph.nodes[0].kind else {
+            XCTFail("First pass should be .downsample, got \(graph.nodes[0].kind)")
+            return
+        }
+        XCTAssertEqual(factor, 4.0)
+        XCTAssertEqual(kind, .guidedLuma)
+
+        // Remaining four passes stay opaque.
+        for node in graph.nodes.dropFirst() {
             guard case .nativeCompute = node.kind else {
-                XCTFail("HS passes should lower to nativeCompute, got \(node.kind) on \(node.debugLabel)")
+                XCTFail("HS pass should be nativeCompute, got \(node.kind) on \(node.debugLabel)")
                 return
             }
         }
@@ -269,7 +280,6 @@ final class LoweringTests: XCTestCase {
     func testUnsupportedFusionBodyFallsBackToNativeCompute() throws {
         struct OpaqueFilter: FilterProtocol {
             var modifier: ModifierEnum { .compute(kernel: "DCRLegacyCustomKernel") }
-            static var fuseGroup: FuseGroup? { nil }
         }
         let steps: [AnyFilter] = [.single(OpaqueFilter())]
         let graph = try XCTUnwrap(Lowering.lower(steps, source: fixtureSource))
@@ -290,7 +300,6 @@ final class LoweringTests: XCTestCase {
             var modifier: ModifierEnum {
                 .render(vertex: "v", fragment: "f")
             }
-            static var fuseGroup: FuseGroup? { nil }
         }
         let steps: [AnyFilter] = [.single(RenderOnlyFilter())]
         XCTAssertNil(Lowering.lower(steps, source: fixtureSource))

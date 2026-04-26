@@ -281,4 +281,90 @@ final class TextureAliasingPlannerTests: XCTestCase {
             "Aliasing should reduce bucket count below node count on an HS+Clarity chain"
         )
     }
+
+    // MARK: - Chain-internal aliasing (Phase 8 fragment chain)
+
+    /// A 4-cluster fragment chain on 1080p `rgba16Float` would
+    /// normally allocate four destinations (~33 MB). Telling the
+    /// planner the first three clusters are chain-internal
+    /// collapses to exactly **one** bucket (~8.3 MB) — the chain
+    /// tail's. Every chain-internal NodeID still appears in
+    /// `bucketOf` (mapped to the tail's bucket) so dispatch-time
+    /// `mapping[id]` lookups succeed even though no texture is
+    /// physically distinct.
+    func testChainInternalAliasCollapsesIntermediates() {
+        var nodes: [Node] = []
+        for i in 0..<4 {
+            let prevID: NodeID = i - 1
+            let input: NodeRef = i == 0 ? .source : .node(prevID)
+            nodes.append(Fx.pixelLocalNode(
+                id: i,
+                bodyName: "F\(i)",
+                input: input,
+                isFinal: (i == 3)
+            ))
+        }
+        let graph = Fx.bypassingValidation(nodes, totalAdditionalInputs: 0)
+
+        // Four-cluster chain: 0,1,2 are chain-internal, 3 is the tail.
+        var alias: [NodeID: NodeID] = [:]
+        alias[0] = 3
+        alias[1] = 3
+        alias[2] = 3
+
+        let plan = TextureAliasingPlanner.plan(
+            graph: graph,
+            sourceInfo: sourceInfo,
+            chainInternalAlias: alias
+        )
+
+        XCTAssertEqual(
+            plan.uniqueBucketCount, 1,
+            "All four clusters should share one bucket (the chain tail's)"
+        )
+
+        let tailBucket = plan.bucketOf[3]!
+        XCTAssertEqual(plan.bucketOf[0], tailBucket)
+        XCTAssertEqual(plan.bucketOf[1], tailBucket)
+        XCTAssertEqual(plan.bucketOf[2], tailBucket)
+    }
+
+    /// Without `chainInternalAlias`, the same chain still aliases
+    /// via lifetime ping-pong (each cluster's output is read once
+    /// then released) — but ping-pong needs at least two buckets.
+    /// This test pins the contrast: chain-internal aliasing wins
+    /// one extra bucket compared to lifetime aliasing alone.
+    func testChainInternalAliasBeatsLifetimeAliasing() {
+        var nodes: [Node] = []
+        for i in 0..<4 {
+            let prevID: NodeID = i - 1
+            let input: NodeRef = i == 0 ? .source : .node(prevID)
+            nodes.append(Fx.pixelLocalNode(
+                id: i,
+                bodyName: "F\(i)",
+                input: input,
+                isFinal: (i == 3)
+            ))
+        }
+        let graph = Fx.bypassingValidation(nodes, totalAdditionalInputs: 0)
+
+        var alias: [NodeID: NodeID] = [:]
+        alias[0] = 3
+        alias[1] = 3
+        alias[2] = 3
+
+        let lifetimeOnly = TextureAliasingPlanner.plan(
+            graph: graph,
+            sourceInfo: sourceInfo
+        )
+        let withChain = TextureAliasingPlanner.plan(
+            graph: graph,
+            sourceInfo: sourceInfo,
+            chainInternalAlias: alias
+        )
+        XCTAssertGreaterThan(
+            lifetimeOnly.uniqueBucketCount, withChain.uniqueBucketCount,
+            "Chain-internal aliasing must strictly beat lifetime aliasing alone"
+        )
+    }
 }
