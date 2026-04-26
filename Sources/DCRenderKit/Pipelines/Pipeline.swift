@@ -2,9 +2,11 @@
 //  Pipeline.swift
 //  DCRenderKit
 //
-//  Top-level user-facing API. Composes TextureLoader, FilterGraphOptimizer,
-//  MultiPassExecutor, and the dispatchers into a single `output()` call
-//  that business code interacts with.
+//  Top-level user-facing API. Composes `TextureLoader`, the pipeline
+//  compiler (`Lowering` → `Optimizer` → `LifetimeAwareTextureAllocator`),
+//  and the dispatchers (`ComputeBackend`, `RenderBackend`,
+//  `ComputeDispatcher`) into a single `encode(into:)` call that
+//  business code interacts with.
 //
 
 import Foundation
@@ -12,8 +14,7 @@ import Metal
 
 /// Strategies for the pipeline compiler's optimisation passes.
 ///
-/// Introduced with Phase 5 of the pipeline-compiler refactor. Every
-/// mode keeps the compiler in the dispatch path — lowering each
+/// Every mode keeps the compiler in the dispatch path — lowering each
 /// filter to an internal graph and running it on a runtime-compiled
 /// uber kernel — but the optimisation passes between lowering and
 /// codegen differ.
@@ -30,16 +31,10 @@ import Metal
 /// - ``none``: skip the optimiser; every lowered node dispatches
 ///   through its own uber kernel. Useful as a debugging aid (the
 ///   output of a single filter is easier to inspect in isolation)
-///   and as a fallback while diagnosing a suspected optimiser
-///   regression. `.none` **does not** revert to pre-compiler
-///   standalone kernels — all dispatch still flows through the
-///   codegen path, only cross-filter fusion is disabled.
-///
-/// Cross-filter fusion lands in Phase 5 step 5.3. Until that step
-/// lands, `.full` and `.none` are operationally equivalent for
-/// every chain (single-filter lowering has nothing for the optimiser
-/// to merge). The enum is introduced here so the public API is
-/// stable before 5.3 flips the behaviour.
+///   and while diagnosing a suspected optimiser regression. `.none`
+///   **does not** revert to pre-compiler standalone kernels — all
+///   dispatch still flows through the codegen path, only cross-
+///   filter fusion is disabled.
 @available(iOS 18.0, *)
 public enum PipelineOptimization: Sendable, Hashable {
 
@@ -51,69 +46,77 @@ public enum PipelineOptimization: Sendable, Hashable {
     case none
 }
 
-/// The primary filter chain execution entry point.
+/// Long-lived renderer for filter-chain execution.
+///
+/// `Pipeline` is the SDK's compiler context: it owns the resource
+/// pools, PSO caches, and the per-renderer compiled-chain cache.
+/// Each call to ``encode(into:source:steps:writingTo:)`` (or its
+/// siblings) supplies the **source texture** and **filter chain**
+/// for that specific job. Holding one `Pipeline` across many
+/// encode calls is the supported pattern — repeated encodes with
+/// the same chain topology hit ``CompiledChainCache`` and skip
+/// every optimiser pass.
 ///
 /// ## Minimal usage
 ///
 /// ```swift
-/// let pipeline = Pipeline(input: .uiImage(myImage), steps: [
-///     .single(ExposureFilter(exposure: 20)),
-///     .multi(SoftGlowFilter(strength: 30)),
-///     .single(LUT3DFilter(preset: .jade)),
-/// ])
-/// let resultTexture = try await pipeline.output()
+/// // Long-lived (e.g. owned by a SwiftUI Coordinator).
+/// let pipeline = Pipeline()
+///
+/// // Hot-path encode (preview, video, MTKView.draw):
+/// try pipeline.encode(
+///     into: commandBuffer,
+///     source: cameraTexture,
+///     steps: chain,
+///     writingTo: drawable.texture
+/// )
+///
+/// // One-shot batch (export, snapshot):
+/// let output = try pipeline.processSync(
+///     input: .uiImage(myImage),
+///     steps: chain
+/// )
 /// ```
 ///
 /// ## Execution model
 ///
-/// 1. `source` resolves to an `MTLTexture` via `TextureLoader`.
-/// 2. `steps` passes through `FilterGraphOptimizer` (passthrough in Phase 1;
-///    fusion in Phase 2).
-/// 3. For each step, the pipeline allocates a destination texture from
-///    `TexturePool` and dispatches the appropriate backend:
-///    - `.single(filter)` → `ComputeDispatcher` (or in the future a
-///      render path for filters that surface a render-specific method)
-///    - `.multi(filter)` → `MultiPassExecutor`
-/// 4. The previous step's output becomes the next step's input; intermediate
-///    textures are returned to the pool as soon as they're consumed.
-/// 5. `commandBuffer` is committed once all encoding is complete. The
-///    async variant awaits GPU completion via `addCompletedHandler`; the
-///    sync variant uses `waitUntilCompleted`.
+/// 1. The supplied source resolves to an `MTLTexture` via
+///    `TextureLoader` (zero-cost when already an `MTLTexture`).
+/// 2. The pipeline compiler runs:
+///    - `Lowering` translates the filter chain into a `PipelineGraph`.
+///    - ``CompiledChainCache`` lookup keyed on the lowered-graph
+///      fingerprint + source spec + optimisation skips the next
+///      three passes on hit.
+///    - `Optimizer` rewrites the graph (DCE, vertical fusion, CSE,
+///      kernel inlining, tail sink) — skipped under
+///      ``PipelineOptimization/none``.
+///    - `LifetimeAwareTextureAllocator` assigns a pooled texture to
+///      each node with interval-graph aliasing; chain-internal
+///      cluster outputs alias to the chain tail's bucket.
+/// 3. The pipeline walks the graph in declaration order and
+///    dispatches each node through the appropriate backend
+///    (`ComputeBackend`, `RenderBackend`, or `ComputeDispatcher`).
+///    Adjacent pixel-local clusters batch into a single chained
+///    render pass with programmable blending.
+/// 4. `commandBuffer` is committed by the caller (for `encode(...)`)
+///    or by the pipeline (for `process` / `processSync`).
 ///
 /// ## Thread safety
 ///
-/// A `Pipeline` instance is immutable once constructed. Its `source`,
-/// `steps`, `optimizer`, and `intermediatePixelFormat` are `let`, and all
-/// shared resources (PSO cache, uniform / texture / command-buffer pools)
-/// are internally thread-safe. Multiple threads can therefore safely call
-/// `encode(into:)` / `outputSync()` / `output()` on the same instance
-/// concurrently, and multiple `Pipeline` instances can run concurrently
-/// without coordination.
+/// A `Pipeline` instance carries only immutable configuration plus
+/// internally-synchronised caches (`CompiledChainCache` is
+/// `NSLock`-guarded; `TexturePool` / `PipelineStateCache` /
+/// `UniformBufferPool` are all thread-safe). Multiple threads can
+/// safely call `encode` / `process` / `processSync` on the same
+/// instance concurrently. Multiple `Pipeline` instances run
+/// independently with no coordination.
 @available(iOS 18.0, *)
 public final class Pipeline: @unchecked Sendable {
 
-    // MARK: - Input
-
-    /// The source of pixels to feed into the filter chain.
-    public let source: PipelineInput
-
-    /// The filter chain, in execution order. Fixed at construction; build
-    /// a new `Pipeline` to change it.
-    public let steps: [AnyFilter]
-
     // MARK: - Configuration
-
-    /// Optimization strategy applied to `steps` before execution.
-    /// Defaults to the standard optimizer (passthrough in Phase 1).
-    public let optimizer: FilterGraphOptimizer
 
     /// Compiler optimisation strategy for the pipeline graph. See
     /// ``PipelineOptimization``. Defaults to ``PipelineOptimization/full``.
-    ///
-    /// Introduced with the Phase-5 pipeline-compiler refactor. Until
-    /// cross-filter fusion lands in step 5.3, `.full` and `.none`
-    /// behave identically — every chain compiles to one uber kernel
-    /// per filter.
     public let optimization: PipelineOptimization
 
     /// Pixel format of intermediate textures between filters.
@@ -147,20 +150,23 @@ public final class Pipeline: @unchecked Sendable {
     internal let texturePool: TexturePool
     internal let commandBufferPool: CommandBufferPool
 
+    /// Per-instance memoisation of `Optimizer` + chain-internal
+    /// alias + `TextureAliasingPlanner` output. Hits when the
+    /// chain topology and source dimensions don't change between
+    /// frames — the common preview-loop case. See
+    /// ``CompiledChainCache``.
+    internal let compiledChainCache = CompiledChainCache()
+
     // MARK: - Init
 
     /// Create a pipeline bound to the default (shared) resource instances.
     public init(
-        input: PipelineInput,
-        steps: [AnyFilter] = [],
-        colorSpace: DCRColorSpace = DCRenderKit.defaultColorSpace,
-        optimization: PipelineOptimization = .full
+        optimization: PipelineOptimization = .full,
+        intermediatePixelFormat: MTLPixelFormat = .rgba16Float,
+        colorSpace: DCRColorSpace = DCRenderKit.defaultColorSpace
     ) {
-        self.source = input
-        self.steps = steps
-        self.optimizer = FilterGraphOptimizer()
         self.optimization = optimization
-        self.intermediatePixelFormat = .rgba16Float
+        self.intermediatePixelFormat = intermediatePixelFormat
         self.colorSpace = colorSpace
         self.device = .shared
         self.textureLoader = .shared
@@ -174,9 +180,6 @@ public final class Pipeline: @unchecked Sendable {
     /// Create a pipeline with fully-specified dependencies. Primarily for
     /// tests that need isolated pools.
     public init(
-        input: PipelineInput,
-        steps: [AnyFilter],
-        optimizer: FilterGraphOptimizer = FilterGraphOptimizer(),
         optimization: PipelineOptimization = .full,
         intermediatePixelFormat: MTLPixelFormat = .rgba16Float,
         colorSpace: DCRColorSpace = DCRenderKit.defaultColorSpace,
@@ -188,9 +191,6 @@ public final class Pipeline: @unchecked Sendable {
         texturePool: TexturePool,
         commandBufferPool: CommandBufferPool
     ) {
-        self.source = input
-        self.steps = steps
-        self.optimizer = optimizer
         self.optimization = optimization
         self.intermediatePixelFormat = intermediatePixelFormat
         self.colorSpace = colorSpace
@@ -203,16 +203,90 @@ public final class Pipeline: @unchecked Sendable {
         self.commandBufferPool = commandBufferPool
     }
 
-    // MARK: - Public execution API (sync)
+    // MARK: - Hot-path encode (caller-managed command buffer)
 
-    /// Execute the filter chain and return the resulting texture.
-    /// Blocks until the GPU finishes.
+    /// Encode `steps` into `commandBuffer`, sampling from `source`,
+    /// and write the final result into `destination`.
     ///
-    /// Prefer `output()` (async) for production code. This sync variant
-    /// exists primarily for tests and tools that need deterministic
-    /// completion semantics.
-    public func outputSync() throws -> MTLTexture {
-        let (commandBuffer, finalTexture) = try encodeAll()
+    /// **The hot-path API.** Holding one long-lived `Pipeline` and
+    /// calling this per frame is the supported pattern for camera
+    /// preview / video / MTKView integration. The `CompiledChainCache`
+    /// hits whenever the chain topology and source dimensions match
+    /// the previous call — slider drags (uniform-only changes) and
+    /// fresh per-frame `MTLTexture` references both stay on the cache
+    /// hot path.
+    ///
+    /// Empty `steps` ⇒ MPS Lanczos blit from `source` to `destination`,
+    /// handling format / size mismatch in one pass.
+    ///
+    /// - Parameters:
+    ///   - commandBuffer: Target command buffer; caller commits and
+    ///     presents.
+    ///   - source: Already-resolved source texture for this frame.
+    ///   - steps: Filter chain for this frame. Empty = identity.
+    ///   - destination: Final output target (typically
+    ///     `CAMetalDrawable.texture`). Must have `.shaderWrite`.
+    /// - Throws: Texture resolution / PSO / encoder errors.
+    public func encode(
+        into commandBuffer: MTLCommandBuffer,
+        source: MTLTexture,
+        steps: [AnyFilter],
+        writingTo destination: MTLTexture
+    ) throws {
+        if steps.isEmpty {
+            try MPSDispatcher.lanczosResample(
+                source: source,
+                destination: destination,
+                commandBuffer: commandBuffer
+            )
+            return
+        }
+        let chainOutput = try executeChain(
+            steps: steps,
+            source: source,
+            commandBuffer: commandBuffer
+        )
+        try MPSDispatcher.lanczosResample(
+            source: chainOutput,
+            destination: destination,
+            commandBuffer: commandBuffer
+        )
+    }
+
+    /// Encode `steps` into `commandBuffer`, sampling from `source`,
+    /// and return the final output texture (in the pipeline's
+    /// `intermediatePixelFormat`).
+    ///
+    /// Use this when the caller wants to receive the chain output
+    /// for further processing (e.g. additional dispatch into a
+    /// custom render target, snapshot capture). For drawable
+    /// presentation use the `writingTo:` overload.
+    ///
+    /// Empty `steps` returns `source` unchanged — no encoding work.
+    public func encode(
+        into commandBuffer: MTLCommandBuffer,
+        source: MTLTexture,
+        steps: [AnyFilter]
+    ) throws -> MTLTexture {
+        guard !steps.isEmpty else { return source }
+        return try executeChain(
+            steps: steps,
+            source: source,
+            commandBuffer: commandBuffer
+        )
+    }
+
+    // MARK: - One-shot batch (pipeline-managed command buffer)
+
+    /// Execute `steps` against `input` and block until the GPU finishes.
+    /// Convenience for export / snapshot / test use.
+    ///
+    /// Prefer ``process(input:steps:)`` (async) for production code.
+    public func processSync(
+        input: PipelineInput,
+        steps: [AnyFilter]
+    ) throws -> MTLTexture {
+        let (commandBuffer, finalTexture) = try encodeAll(input: input, steps: steps)
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
         if let err = commandBuffer.error {
@@ -221,113 +295,23 @@ public final class Pipeline: @unchecked Sendable {
         return finalTexture
     }
 
-    /// Encode the filter chain into an externally-managed command buffer.
-    ///
-    /// Unlike `outputSync()` / `output()`, this variant does **not**
-    /// allocate, commit, or wait on the command buffer — the caller
-    /// retains full control. This is the integration point for real-time
-    /// renderers (MTKView.draw, video frame pipelines) that want to
-    /// batch the filter chain's dispatches together with the caller's
-    /// own blit / present / additional encoders into a single command
-    /// buffer — eliminating the extra GPU submission that a separate
-    /// `outputSync` call would incur.
-    ///
-    /// The returned `MTLTexture` is the final output (in the pipeline's
-    /// `intermediatePixelFormat`, by default `rgba16Float`). If you need
-    /// the result in a specific format / size — typically "write into my
-    /// drawable for presentation" — call `encode(into:writingTo:)` instead,
-    /// which does format conversion and scaling inside the SDK.
-    ///
-    /// - Parameter commandBuffer: The command buffer to encode into.
-    ///   The caller is responsible for `commit()` and presentation.
-    /// - Returns: The final output texture produced by the chain.
-    /// - Throws: Texture resolution, PSO, or encoder errors.
-    public func encode(into commandBuffer: MTLCommandBuffer) throws -> MTLTexture {
-        let sourceTexture = try source.resolve(using: textureLoader)
-        let optimizedSteps = optimizer.optimize(steps)
-
-        guard !optimizedSteps.isEmpty else {
-            return sourceTexture
-        }
-
-        return try executeChain(
-            steps: optimizedSteps,
-            source: sourceTexture,
-            commandBuffer: commandBuffer
-        )
-    }
-
-    /// Encode the filter chain into `commandBuffer`, writing the final
-    /// result into `destination`.
-    ///
-    /// This is the presentation-path API. The destination can be **any**
-    /// texture — typically a `CAMetalDrawable.texture` (BGRA8Unorm) for
-    /// on-screen preview, or a caller-allocated video frame buffer. The
-    /// SDK handles both:
-    ///
-    /// - **Format conversion**: chain outputs live in
-    ///   `intermediatePixelFormat` (float precision between stages). The
-    ///   destination can be any pixel format — the conversion happens
-    ///   inside the last encoded pass.
-    /// - **Size reconciliation**: source image resolution and drawable
-    ///   resolution almost never match. The chain output is resampled
-    ///   to the destination's dimensions.
-    ///
-    /// Both are done by a single MPS Lanczos resample. Lanczos is
-    /// hardware-accelerated, costs <1 ms on modern Apple GPUs even at
-    /// 4K, and produces bit-identical output at 1:1 sampling — so the
-    /// matching-format / matching-size case does not need a separate
-    /// blit shortcut. The single-path design is simpler to reason
-    /// about and cheaper to test.
-    ///
-    /// Why this lives in the SDK: every real-time consumer needs this
-    /// exact bridge, and `blit.copy` asserts across incompatible
-    /// formats. Centralizing it here means consumers don't trip over
-    /// the assertion discovering it themselves.
-    ///
-    /// - Parameters:
-    ///   - commandBuffer: The command buffer to encode into. Caller
-    ///     commits and presents.
-    ///   - destination: Target texture. Must have `.shaderWrite` usage.
-    /// - Throws: Texture resolution / PSO / encoder errors.
-    public func encode(
-        into commandBuffer: MTLCommandBuffer,
-        writingTo destination: MTLTexture
-    ) throws {
-        let chainOutput = try encode(into: commandBuffer)
-        try MPSDispatcher.lanczosResample(
-            source: chainOutput,
-            destination: destination,
-            commandBuffer: commandBuffer
-        )
-    }
-
     // MARK: - Internal: encoding helper
 
-    /// Encode the entire filter chain into a fresh command buffer and
-    /// return both the buffer (uncommitted) and the final output texture.
-    ///
-    /// The returned buffer has its completion callback set up for async
-    /// callers if needed; sync callers simply commit and wait.
-    internal func encodeAll() throws -> (commandBuffer: MTLCommandBuffer, finalTexture: MTLTexture) {
-        // 1. Resolve source
-        let sourceTexture = try source.resolve(using: textureLoader)
-
-        // 2. Optimize filter chain (legacy FilterGraphOptimizer — currently
-        //    passthrough; the compiler path in `executeChain` runs the
-        //    Phase-2 optimiser on its own lowered IR).
-        let optimizedSteps = optimizer.optimize(steps)
-
-        // 3. Allocate command buffer from the pool (also enforces in-flight cap)
+    /// Resolve `input`, allocate a CB from the pool, encode the chain.
+    /// Used by both `processSync` and `process` (async).
+    internal func encodeAll(
+        input: PipelineInput,
+        steps: [AnyFilter]
+    ) throws -> (commandBuffer: MTLCommandBuffer, finalTexture: MTLTexture) {
+        let sourceTexture = try input.resolve(using: textureLoader)
         let commandBuffer = try commandBufferPool.makeCommandBuffer(label: "DCR.Pipeline")
 
-        // 4. Empty chain = return source directly (identity pipeline)
-        guard !optimizedSteps.isEmpty else {
+        guard !steps.isEmpty else {
             return (commandBuffer, sourceTexture)
         }
 
         let finalTexture = try executeChain(
-            steps: optimizedSteps,
+            steps: steps,
             source: sourceTexture,
             commandBuffer: commandBuffer
         )
@@ -468,12 +452,56 @@ public final class Pipeline: @unchecked Sendable {
             return nil
         }
 
+        let destInfo = TextureInfo(
+            width: source.width,
+            height: source.height,
+            pixelFormat: intermediatePixelFormat
+        )
+
+        // Cache lookup keyed by (lowered fingerprint, source spec,
+        // optimization, intermediate format). Hits skip Optimizer
+        // + chain-internal walk + planner — the entire CPU portion
+        // of compilation. Misses fall through and cache the result
+        // for subsequent frames.
+        let loweredFingerprint = CompiledChainCache.fingerprint(of: lowered)
+        let cacheHit = compiledChainCache.lookup(
+            loweredFingerprint: loweredFingerprint,
+            sourceInfo: sourceInfo,
+            intermediatePixelFormat: intermediatePixelFormat,
+            optimization: optimization
+        )
+
         let graph: PipelineGraph
-        switch optimization {
-        case .full:
-            graph = Optimizer.optimize(lowered)
-        case .none:
-            graph = lowered
+        let chainInternalAlias: [NodeID: NodeID]
+        let plan: TextureAliasingPlan
+        if let cached = cacheHit {
+            graph = cached.optimizedGraph
+            chainInternalAlias = cached.chainInternalAlias
+            plan = cached.plan
+        } else {
+            switch optimization {
+            case .full:
+                graph = Optimizer.optimize(lowered)
+            case .none:
+                graph = lowered
+            }
+            chainInternalAlias = Self.computeChainInternalAlias(graph: graph)
+            plan = TextureAliasingPlanner.plan(
+                graph: graph,
+                sourceInfo: destInfo,
+                chainInternalAlias: chainInternalAlias
+            )
+            compiledChainCache.store(CompiledChainCache.Entry(
+                loweredFingerprint: loweredFingerprint,
+                sourceWidth: sourceInfo.width,
+                sourceHeight: sourceInfo.height,
+                sourcePixelFormat: sourceInfo.pixelFormat,
+                intermediatePixelFormat: intermediatePixelFormat,
+                optimization: optimization,
+                optimizedGraph: graph,
+                chainInternalAlias: chainInternalAlias,
+                plan: plan
+            ))
         }
 
         if DCRLogging.diagnosticPipelineLogging {
@@ -490,19 +518,15 @@ public final class Pipeline: @unchecked Sendable {
                     "inlinedBodies": "\(stats.inlinedBodies)",
                     "tailSunkBodies": "\(stats.tailSunkBodies)",
                     "nativeCompute": "\(stats.nativeCompute)",
+                    "cacheHit": cacheHit != nil ? "1" : "0",
                 ]
             )
         }
 
-        let destInfo = TextureInfo(
-            width: source.width,
-            height: source.height,
-            pixelFormat: intermediatePixelFormat
-        )
         let allocator = LifetimeAwareTextureAllocator(pool: texturePool)
-        let allocation = try allocator.allocate(
-            graph: graph,
-            sourceInfo: destInfo
+        let allocation = try allocator.materialize(
+            plan: plan,
+            finalID: graph.finalID
         )
 
         if DCRLogging.diagnosticPipelineLogging {
@@ -538,7 +562,7 @@ public final class Pipeline: @unchecked Sendable {
         // every other node kind fall through to per-node dispatch.
         var i = 0
         while i < graph.nodes.count {
-            let chain = collectFragmentChain(
+            let chain = Self.collectFragmentChain(
                 graph: graph,
                 startIndex: i
             )
@@ -700,13 +724,44 @@ public final class Pipeline: @unchecked Sendable {
                 uniformPool: uniformPool
             )
 
-        case .downsample, .upsample, .reduce, .blend:
-            // Reserved optimiser kinds not currently emitted by
-            // `Lowering`. Reaching here means the graph was hand-
-            // constructed (test fixture) or a future optimiser added
-            // a pass whose codegen isn't wired yet — surface the
-            // mismatch explicitly rather than silently dropping the
-            // dispatch.
+        case let .downsample(_, kind):
+            // Structural reduction — `Lowering` emits
+            // `.downsample(factor: 4, kind: .guidedLuma)` for the
+            // shared 4× luma downsample that HighlightShadow and
+            // Clarity both need. CSE dedups the pair into one
+            // node before we get here, so the dispatch runs the
+            // backing kernel exactly once even when both filters
+            // are in the chain.
+            switch kind {
+            case .guidedLuma:
+                try ComputeDispatcher.dispatch(
+                    kernel: "DCRGuidedDownsampleLuma",
+                    uniforms: .empty,
+                    additionalInputs: [],
+                    source: primaryInput,
+                    destination: destination,
+                    commandBuffer: commandBuffer,
+                    psoCache: psoCache,
+                    uniformPool: uniformPool
+                )
+            case .boxAvg, .mpsMean:
+                // The IR carries these for future emitters
+                // (pyramid bases, MPS reductions) but Lowering
+                // does not produce them today. Failing here
+                // catches the unrecognised case explicitly when
+                // a new emitter forgets to wire its kernel.
+                throw PipelineError.filter(.invalidPassGraph(
+                    filterName: node.debugLabel,
+                    reason: "downsample kind \(kind) has no dispatch wired"
+                ))
+            }
+
+        case .upsample, .reduce, .blend:
+            // Reserved optimiser kinds the IR can produce but the
+            // dispatch path has no consumer for yet. Reaching here
+            // means a future optimiser pass started emitting one
+            // without wiring its dispatch — surface the mismatch
+            // rather than silently dropping it.
             throw PipelineError.filter(.invalidPassGraph(
                 filterName: node.debugLabel,
                 reason: "compiler-path dispatch does not handle node kind \(node.kind)"
@@ -731,21 +786,21 @@ public final class Pipeline: @unchecked Sendable {
     ///
     /// Returns at most one node when no chain is available — the
     /// caller treats that as "single-node, dispatch normally".
-    private func collectFragmentChain(
+    private static func collectFragmentChain(
         graph: PipelineGraph,
         startIndex: Int
     ) -> [Node] {
         let head = graph.nodes[startIndex]
-        guard Self.isChainInitEligible(head) else {
+        guard isChainInitEligible(head) else {
             return [head]
         }
-        let consumers = Self.consumerCounts(graph: graph)
+        let consumers = consumerCounts(graph: graph)
         var chain: [Node] = [head]
         var lastID = head.id
         var cursor = startIndex + 1
         while cursor < graph.nodes.count {
             let candidate = graph.nodes[cursor]
-            guard Self.isChainContinuationEligible(candidate) else { break }
+            guard isChainContinuationEligible(candidate) else { break }
             guard let prevNode = chain.last else { break }
             if prevNode.isFinal { break }
             if (consumers[lastID] ?? 0) != 1 { break }
@@ -811,14 +866,41 @@ public final class Pipeline: @unchecked Sendable {
         return counts
     }
 
+    /// Walk the graph the same way `executeChain`'s dispatch loop
+    /// does and return `[chainInternalNodeID: chainTailID]` for
+    /// every multi-node fragment chain found. Used by
+    /// `tryCompilerPath` to tell the allocator which clusters
+    /// don't need physical destinations.
+    private static func computeChainInternalAlias(
+        graph: PipelineGraph
+    ) -> [NodeID: NodeID] {
+        var alias: [NodeID: NodeID] = [:]
+        var i = 0
+        while i < graph.nodes.count {
+            let chain = collectFragmentChain(graph: graph, startIndex: i)
+            if chain.count >= 2 {
+                let tailID = chain.last!.id
+                for cluster in chain.dropLast() {
+                    alias[cluster.id] = tailID
+                }
+                i += chain.count
+            } else {
+                i += 1
+            }
+        }
+        return alias
+    }
+
     /// Phase 8 chained dispatch: encode `nodes` into one render
     /// pass via `RenderBackend.executeChain`. The first node's
     /// primary input feeds draw 0 (sampled), every subsequent
     /// cluster reads the running attachment via programmable
-    /// blending. Only the final cluster's destination texture is
-    /// physically materialised — intermediate cluster outputs that
-    /// the allocator allocated stay live as buckets but receive no
-    /// writes (returned to the pool on CB completion).
+    /// blending. Only the chain tail's destination texture is
+    /// physically materialised; chain-internal cluster IDs alias
+    /// to the same texture in `allocation.mapping` (set up by
+    /// `LifetimeAwareTextureAllocator` from the
+    /// `chainInternalAlias` dict in `tryCompilerPath`), so no
+    /// phantom intermediate buckets are dispensed from the pool.
     private func dispatchFragmentChain(
         nodes: [Node],
         source: MTLTexture,

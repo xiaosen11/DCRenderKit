@@ -26,8 +26,6 @@ import Metal
 ///     var threshold: Float
 ///     var bloomRadius: Float
 ///
-///     static var fuseGroup: FuseGroup? { nil }
-///
 ///     func passes(input: TextureInfo) -> [Pass] {
 ///         guard strength > 0.001 else { return [] }
 ///
@@ -76,15 +74,10 @@ public protocol MultiPassFilter: Sendable {
     /// pipeline-internal multi-pass filters (SoftGlow, HighlightShadow,
     /// Clarity) don't need external textures.
     var additionalInputs: [MTLTexture] { get }
-
-    /// Identifies whether this filter can be fused. Multi-pass filters are
-    /// rarely fusable; default is `nil`.
-    static var fuseGroup: FuseGroup? { get }
 }
 
 extension MultiPassFilter {
     public var additionalInputs: [MTLTexture] { [] }
-    public static var fuseGroup: FuseGroup? { nil }
 }
 
 // MARK: - TextureInfo

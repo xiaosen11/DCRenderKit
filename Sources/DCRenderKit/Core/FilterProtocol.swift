@@ -26,8 +26,6 @@ import Metal
 ///     public var uniforms: FilterUniforms {
 ///         .init(exposure: exposure)
 ///     }
-///
-///     public static var fuseGroup: FuseGroup? { .toneAdjustment }
 /// }
 /// ```
 ///
@@ -54,10 +52,6 @@ public protocol FilterProtocol: Sendable {
     /// The dispatcher binds these starting at texture index 2 (index 0 = dest,
     /// index 1 = source).
     var additionalInputs: [MTLTexture] { get }
-
-    /// Identifies whether this filter can be fused with adjacent filters of
-    /// the same group by `FilterGraphOptimizer`. Return `nil` to disable fusion.
-    static var fuseGroup: FuseGroup? { get }
 
     /// Metadata enabling this filter to participate in compiler-driven
     /// fusion. SDK-built-in filters ship a descriptor pointing at an
@@ -90,8 +84,6 @@ extension FilterProtocol {
     public var uniforms: FilterUniforms { .empty }
 
     public var additionalInputs: [MTLTexture] { [] }
-
-    public static var fuseGroup: FuseGroup? { nil }
 
     public var fusionBody: FusionBodyDescriptor { .unsupported }
 

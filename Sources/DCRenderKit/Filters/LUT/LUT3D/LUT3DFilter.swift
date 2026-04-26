@@ -129,10 +129,6 @@ public struct LUT3DFilter: FilterProtocol, @unchecked Sendable {
         [lutTexture]
     }
 
-    /// Declared fuse group (`nil` — LUT3D is a 3D lookup that cannot
-    /// be fused with 1D per-pixel tone operators).
-    /// See ``FilterProtocol/fuseGroup``.
-    public static var fuseGroup: FuseGroup? { nil }
 
     /// Fusion metadata. See ``FilterProtocol/fusionBody`` and
     /// `docs/pipeline-compiler-design.md` §4. The body function

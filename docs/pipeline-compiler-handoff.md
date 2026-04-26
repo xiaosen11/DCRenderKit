@@ -351,7 +351,8 @@ Step 5.3 — Phase-5 smoke tests covering the default `.full`
 Step 5.4 — Migrate tests that hard-coded
   `ComputeDispatcher.dispatch(kernel: "DCR...")`. Two paths:
     (a) Routine smoke tests → switch to going through
-        `Pipeline.output()` (codegen-driven).
+        `Pipeline.process(input:steps:)` /
+        `Pipeline.processSync(input:steps:)` (codegen-driven).
     (b) Direct kernel-name tests (legacy parity, shader smoke)
         → keep using `DCRLegacy*Filter`.
 
@@ -640,7 +641,7 @@ is starting on. Every version includes the Q1-Q4 lock + the
   5.1 Pipeline.executeStep 并联走 codegen（不删 production kernel）
   5.2 PipelineOptimization enum + Pipeline.optimization public property
   5.3 Phase-5 integration smoke tests
-  5.4 Migrate 50+ 既有测试：或走 Pipeline.output() 路径，或切到
+  5.4 Migrate 50+ 既有测试：或走 Pipeline.process(input:steps:) 路径，或切到
       DCRLegacy<Name>Filter 走 legacy 引用
   5.5 删除 12 个 production standalone kernel（.metal 文件里只保留
       body + markers + uniform struct + helpers）
@@ -787,6 +788,210 @@ kernels — 它们是 parity 最后的保险。
 开工流程同 §10.A。Phase 7 尾声 session 结束时，refactor 项目完
 结；memory file 标 "done"，handoff doc 归档。
 ```
+
+---
+
+## 10.D Phase 10 — honest-engineering cleanup (2026-04-26)
+
+The Phase 9 logging surfaced four CPU/memory leaks that the
+preceding phases had quietly accepted. Phase 10 closed all four
+in a single session — explicitly under the user's "no compromise,
+no unauthorised tradeoff, no shortcut, no dead code" mandate.
+
+### 10.1 — Legacy `FilterGraphOptimizer` removed from hot path
+
+`Pipeline.encode` / `encodeAll` were still calling
+`optimizer.optimize(steps)` every frame. The struct itself was a
+Phase-1 passthrough that did nothing but log
+`FilterGraphOptimizer: passthrough (Phase 1) stepCount=N` —
+visible spam at 30 fps.
+
+Deletions (pre-1.0 SemVer permits):
+- `Sources/DCRenderKit/Pipelines/FilterGraphOptimizer.swift`
+- `Sources/DCRenderKit/Core/FuseGroup.swift`
+- `FilterProtocol.fuseGroup` requirement + every filter's
+  `static var fuseGroup`
+- `MultiPassFilter.fuseGroup` requirement
+- `FilterError.fusionFailed`
+- `Pipeline.optimizer` public property + init parameter
+- All test references and dedicated `fuseGroup` test cases
+- DocC doc references (`DCRenderKit.md`, `Architecture.md`)
+
+### 10.2 — Typed `.downsample` node for guided-luma kernel
+
+Multi-pass filters' `DCRGuidedDownsampleLuma` pass was lowering
+to `.nativeCompute(kernelName:)`, which keys CSE on the kernel
+name. `Lowering.lowerPassKernel` now recognises that kernel
+shape and emits `.downsample(factor: 4, kind: .guidedLuma)`
+(IR already supported the case but no emitter used it). The
+new `Pipeline.dispatchCompilerNode` `.downsample` arm runs the
+backing kernel through `ComputeDispatcher`.
+
+**Honest payoff caveat**: in today's linear chains, HS's downsample
+reads `.source` while Clarity's reads HS's output (chain-head
+handoff inside `translatePassInputs`). Their `NodeRef.inputs`
+differ → CSE correctly does not fold. The IR refactor is
+structurally correct (typed nodes participate in future branching
+optimisations and any IR shape that produces shared inputs) but
+**does not** reduce dispatch count for today's chains. This was
+called out explicitly in the user-facing summary; the hand-built
+`testHandBuiltDuplicateGuidedDownsamplesFold` test pins the dedup
+machinery on shapes where it does fire.
+
+### 10.3 — Chain-internal "no-output" allocator concept
+
+Phase 8's `RenderBackend.executeChain` only physically writes to
+the chain tail's destination — the other clusters in a length-N
+chain pass their result through programmable blending in tile
+memory. The allocator was still dispensing N destination textures
+and silently leaving N-1 unused.
+
+`TextureAliasingPlanner.plan` now takes
+`chainInternalAlias: [NodeID: NodeID]` and skips bucket allocation
+for chain-internal IDs, then aliases their `bucketOf` entries to
+the chain tail's bucket so dispatch-time `mapping[id]` lookups
+still resolve. `Pipeline.computeChainInternalAlias` walks the
+graph using the same predicate as the dispatch loop and feeds
+the dict to the allocator.
+
+A four-cluster fragment chain on 1080p `rgba16Float` drops from
+four destinations (~33 MB) to one (~8.3 MB);
+`testChainInternalAliasCollapsesIntermediates` and
+`testChainInternalAliasBeatsLifetimeAliasing` pin the contract.
+
+### 10.4 — `CompiledChainCache`: graph + allocator plan memoised
+
+`Lowering.lower` runs every frame (microseconds — keeps topology
+detection live), but the optimiser, chain-internal walk, and
+allocator planner are all uniform-value-independent and were
+rebuilding from scratch on every encode at 30 fps.
+
+`Sources/DCRenderKit/Pipelines/CompiledChainCache.swift` is a
+single-slot, lock-protected cache per `Pipeline`. The key is a
+structural fingerprint of the lowered graph (node kinds, inputs,
+output specs, finality — `FilterUniforms` bytes excluded so
+slider drags don't invalidate). The value is the optimised graph,
+chain-internal alias, and `TextureAliasingPlan`.
+
+`LifetimeAwareTextureAllocator` was split into
+`allocate(graph:sourceInfo:chainInternalAlias:)` and
+`materialize(plan:finalID:)`. Cache hits jump to `materialize`
+directly — only the texture-pool dequeue loop runs per frame.
+
+Five new tests in `CompiledChainCacheTests` pin: fingerprint
+stability across uniform changes, fingerprint invalidation on
+chain length / filter type changes, store-and-lookup round trip,
+and end-to-end "second encode hits the cache."
+
+### 10.5 — Final cleanup pass
+
+Phase-N markers / orphan references in `Lowering.swift`,
+`Pipeline.swift`, `docs/architecture.md`,
+`docs/api-freeze-review.md`, `docs/pipeline-compiler-design.md`
+were rewritten to describe the post-Phase-10 state. The
+pre-existing `FIXME(§8.6 Tier 2)` notes in shaders are out of
+scope (separate audit thread) and were not touched.
+
+### 10.x — Tests
+
+516 tests pass (was 522 pre-Phase-10; 13 deleted with
+`FilterGraphOptimizer` / `FuseGroup`, 7 added across cache and
+chain-internal aliasing).
+
+---
+
+## 10.E Phase 11 — Pipeline API split: renderer vs job (2026-04-26)
+
+### Root cause
+
+Phase 10.4's `CompiledChainCache` won the optimiser/planner CPU
+back from per-frame waste — but only when the same `Pipeline`
+instance was re-used across encode calls. The shipping demo (and
+any consumer that followed the documented `Pipeline(input:steps:)`
+pattern) **constructed a fresh `Pipeline` per frame** because
+`source` and `steps` were `let`-stored on the instance. Every new
+preview frame and every slider tick thus wiped the cache,
+re-running Lowering + Optimizer (5 passes) + chain-internal walk
++ planner. On a 120 Hz ProMotion device under camera shake this
+burnt **3–12% of a single core** doing the work the cache existed
+to avoid.
+
+The fault wasn't the demo — the SDK API forced consumers into the
+per-frame-construction pattern. There was no mutating-source or
+mutating-steps escape hatch.
+
+### Resolution: split the type's two responsibilities
+
+| Old `Pipeline` | New `Pipeline` |
+|---|---|
+| `let source: PipelineInput` | (removed) |
+| `let steps: [AnyFilter]` | (removed) |
+| `outputSync()` / `output()` | `processSync(input:steps:)` / `process(input:steps:)` |
+| `encode(into:)` | `encode(into:source:steps:)` |
+| `encode(into:writingTo:)` | `encode(into:source:steps:writingTo:)` |
+
+`Pipeline` is now a long-lived **renderer** holding only
+configuration (optimisation strategy, intermediate format,
+colour space) and the per-instance caches (`CompiledChainCache`,
+`UberKernelCache`, etc., via the shared resource pools). Source
+texture and filter chain are supplied **per encode call**, so
+slider drags / new camera frames stay on the cache hot path.
+
+### API audit (pre-1.0, no back-compat shim)
+
+Renamed / removed in one commit:
+
+- `Pipeline.output()` async → `process(input:steps:)`
+- `Pipeline.outputSync()` → `processSync(input:steps:)`
+- `Pipeline.encode(into:)` (returning) → `encode(into:source:steps:)`
+- `Pipeline.encode(into:writingTo:)` → `encode(into:source:steps:writingTo:)`
+- `Pipeline.source: let PipelineInput` — removed
+- `Pipeline.steps: let [AnyFilter]` — removed
+- `Pipeline(input:steps:...)` initialisers — removed; replaced
+  with `Pipeline(...)` taking only renderer config
+
+### Migration impact
+
+- `Sources/DCRenderKit/Statistics/PipelineBenchmark.swift`,
+  `Sources/DCRenderKit/Pipelines/PipelineCompilerWarmUp.swift`,
+  `Sources/DCRenderKit/Pipelines/Pipeline+Async.swift` —
+  internal call-site updates.
+- `Sources/DCRenderKit/Pipelines/Pipeline.swift` — public API
+  rewritten; internal mechanics (compiler path, fallback, dispatch
+  loop, fragment chain detection, allocator integration)
+  unchanged.
+- 20+ test files migrated via two Python passes and hand-fixes
+  for non-standard shapes (factory helpers in `DeferredEnqueueTests`,
+  `Phase5PipelineIntegrationTests`, etc.). `swift test` 516 / 516.
+- Demo three call sites (`MetalCameraPreview.swift:174`,
+  `MetalImagePreview.swift:168`, `PhotoEditModel.swift:193`)
+  migrated. Camera and edit coordinators now hold a long-lived
+  `private let pipeline = Pipeline()` and pass `source` / `steps`
+  per `draw(in:)`. Export remains one-shot (a fresh `Pipeline()`
+  is fine because export is a single `process(...)` call).
+- All public docs (DocC `GettingStarted` / `DCRenderKit.md` /
+  `Architecture.md`, `docs/architecture.md`,
+  `docs/api-freeze-review.md`) rewritten to describe the new API
+  shape and explicitly call out the long-lived-renderer pattern.
+
+### Verification
+
+- `swift build` zero warnings.
+- `swift test` 516 / 516 (same count as Phase 10).
+- `xcodebuild Demo` BUILD SUCCEEDED.
+- Real-device CPU validation pending (user-gated; the
+  framework-side fix is verifiable by inspection — chain cache
+  is now reachable across encodes by design, not by demo
+  discipline).
+
+### Why we didn't keep both APIs
+
+`engineering-judgment.md §6` — pre-1.0, the cleanest landing is
+the one we want to live with at 1.0. A "carry both for one minor"
+strategy would have: (a) doubled the test surface, (b) left the
+broken pattern in the SDK for future users to copy, (c) required
+deprecation noise in CHANGELOG. The user's stated policy is "no
+back-compat baggage in the open window" — so we cut once.
 
 ---
 

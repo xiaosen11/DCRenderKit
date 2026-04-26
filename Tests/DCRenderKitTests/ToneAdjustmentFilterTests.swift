@@ -649,15 +649,6 @@ final class ToneAdjustmentFilterTests: XCTestCase {
         )
     }
 
-    // MARK: - Fuse group registration
-
-    func testAllFourDeclareToneAdjustmentFuseGroup() {
-        XCTAssertEqual(ExposureFilter.fuseGroup, .toneAdjustment)
-        XCTAssertEqual(ContrastFilter.fuseGroup, .toneAdjustment)
-        XCTAssertEqual(WhitesFilter.fuseGroup, .toneAdjustment)
-        XCTAssertEqual(BlacksFilter.fuseGroup, .toneAdjustment)
-    }
-
     // MARK: - Helpers
 
     private func runSingle<F: FilterProtocol>(
@@ -665,9 +656,6 @@ final class ToneAdjustmentFilterTests: XCTestCase {
         filter: F
     ) throws -> MTLTexture {
         let pipeline = Pipeline(
-            input: .texture(source),
-            steps: [.single(filter)],
-            optimizer: FilterGraphOptimizer(),
             intermediatePixelFormat: .rgba16Float,
             device: device,
             textureLoader: textureLoader,
@@ -676,8 +664,12 @@ final class ToneAdjustmentFilterTests: XCTestCase {
             samplerCache: samplerCache,
             texturePool: texturePool,
             commandBufferPool: commandBufferPool
+
         )
-        return try pipeline.outputSync()
+        return try pipeline.processSync(
+            input: .texture(source),
+            steps: [.single(filter)]
+        )
     }
 
     private func assertFinite(_ p: TonePixel, file: StaticString = #filePath, line: UInt = #line) {

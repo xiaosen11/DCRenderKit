@@ -142,9 +142,6 @@ public enum FilterError: Error, Sendable {
 
     /// A filter encountered an unrecoverable runtime error.
     case runtimeFailure(filterName: String, underlying: Error)
-
-    /// Fused filter construction failed (used by `FilterGraphOptimizer`).
-    case fusionFailed(group: String, reason: String)
 }
 
 // MARK: - Resource domain
@@ -247,8 +244,6 @@ extension FilterError: CustomStringConvertible {
             return "Filter '\(name)' has invalid pass graph: \(reason)"
         case .runtimeFailure(let name, let underlying):
             return "Filter '\(name)' runtime failure: \(underlying.localizedDescription)"
-        case .fusionFailed(let group, let reason):
-            return "Filter fusion failed for group '\(group)': \(reason)"
         }
     }
 }

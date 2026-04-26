@@ -40,23 +40,22 @@ forward-looking commitment that gates those changes.
 
 | Symbol                    | Kind        | Tier     | Notes                                                    |
 | ------------------------- | ----------- | -------- | -------------------------------------------------------- |
-| `Pipeline`                | final class | Stable   | Entry-point type; init surface deliberately wide         |
-| `Pipeline.output()`       | async       | Stable   | Preferred production API                                 |
-| `Pipeline.outputSync()`   | throws      | Stable   | For tests / deterministic completion                     |
-| `Pipeline.encode(into:)`  | throws      | Stable   | External CB control — for realtime renderers             |
-| `Pipeline.encode(into:writingTo:)` | throws | Stable  | Presentation-path helper; MPS Lanczos bridge             |
+| `Pipeline`                | final class | Stable   | Long-lived renderer; one instance per view / coordinator |
+| `Pipeline.process(input:steps:)`     | async   | Stable | One-shot batch (export / snapshot)                       |
+| `Pipeline.processSync(input:steps:)` | throws  | Stable | Sync variant; tests / deterministic completion           |
+| `Pipeline.encode(into:source:steps:)`            | throws | Stable | Hot-path encode; returns chain output texture |
+| `Pipeline.encode(into:source:steps:writingTo:)`  | throws | Stable | Hot-path presentation; MPS Lanczos resamples to destination |
 | `PipelineInput`           | enum        | Stable   | Four cases (`texture` / `cgImage` / `pixelBuffer` / `uiImage`) |
 | `AnyFilter`               | enum        | Stable   | `.single(…)` / `.multi(…)`                               |
-| `FilterGraphOptimizer`    | struct      | Evolving | Phase 1 is passthrough; Phase 2 will add real fusion     |
+| `PipelineOptimization`    | enum        | Stable   | Two cases (`.full` / `.none`); compiler optimisation toggle |
 
 ### 2.3 Filter protocols
 
 | Symbol              | Kind     | Tier   | Notes                                                          |
 | ------------------- | -------- | ------ | -------------------------------------------------------------- |
 | `FilterProtocol`    | protocol | Stable | Required by every single-pass filter; four protocol members    |
-| `MultiPassFilter`   | protocol | Stable | Required by every multi-pass filter; two protocol members      |
+| `MultiPassFilter`   | protocol | Stable | Required by every multi-pass filter; one protocol member       |
 | `ModifierEnum`      | enum     | Stable | Four dispatch targets (`.compute` / `.render` / `.blit` / `.mps`) |
-| `FuseGroup`         | enum     | Evolving | Currently 2 cases (`toneAdjustment` / `colorGrading`); more will land alongside Phase 2 fusion |
 | `FilterUniforms`    | struct   | Stable | POD wrapper; `.empty` + `init<T>(_:)`                          |
 | `TextureInfo`       | struct   | Stable | `width`/`height`/`pixelFormat` tuple                           |
 | `Pass`              | struct   | Stable | Factory methods (`Pass.compute` / `Pass.final`)                |
@@ -209,8 +208,9 @@ The one exception is security-driven removals, which follow the
 
 ## 5. What a consumer can count on
 
-- Calling `Pipeline(input: .uiImage(img), steps: [.single(filter1),
-  .multi(filter2), …])` will keep working across the 0.x series.
+- Calling `Pipeline().process(input: .uiImage(img), steps: [.single(filter1),
+  .multi(filter2), …])` (or the corresponding `encode(...)` hot-path
+  overload) will keep working across the 0.x series.
 - Every `public` symbol in §2 will carry a migration note in
   `CHANGELOG.md` before it changes.
 - The SDK will not introduce a new external dependency

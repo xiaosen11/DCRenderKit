@@ -70,11 +70,12 @@ final class DeferredEnqueueTests: XCTestCase {
         // behaviour this deferral contract was written against.
         // Different `amount` per filter keeps CSE inert too.
         let source = try makeSource(width: 32, height: 32)
-        let pipeline = makePipeline(pool: pool, source: source, steps: [
+        let pipeline = makePipeline(pool: pool)
+        let steps: [AnyFilter] = [
             .single(SharpenFilter(amount: 30, step: 1)),
             .single(SharpenFilter(amount: 10, step: 1)),
             .single(SharpenFilter(amount: 20, step: 1)),
-        ])
+        ]
 
         XCTAssertEqual(pool.cachedTextureCount, 0, "Pool starts empty")
 
@@ -83,7 +84,7 @@ final class DeferredEnqueueTests: XCTestCase {
         // step 1 feeds step 2). Under the old eager-enqueue behaviour the
         // input of step 1 and step 2 would have been enqueued here.
         let cb = try XCTUnwrap(device.metalDevice.makeCommandQueue()?.makeCommandBuffer())
-        _ = try pipeline.encode(into: cb)
+        _ = try pipeline.encode(into: cb, source: source, steps: steps)
 
         XCTAssertEqual(
             pool.cachedTextureCount, 0,
@@ -115,12 +116,13 @@ final class DeferredEnqueueTests: XCTestCase {
         let pool = TexturePool(device: device, maxBytes: 128 * 1024 * 1024)
 
         let source = try makeSource(width: 64, height: 64)
-        let pipeline = makePipeline(pool: pool, source: source, steps: [
+        let pipeline = makePipeline(pool: pool)
+        let steps: [AnyFilter] = [
             .multi(SoftGlowFilter(strength: 60, threshold: 30, bloomRadius: 50)),
-        ])
+        ]
 
         let cb = try XCTUnwrap(device.metalDevice.makeCommandQueue()?.makeCommandBuffer())
-        _ = try pipeline.encode(into: cb)
+        _ = try pipeline.encode(into: cb, source: source, steps: steps)
 
         XCTAssertEqual(
             pool.cachedTextureCount, 0,
@@ -163,23 +165,25 @@ final class DeferredEnqueueTests: XCTestCase {
         // the ≥2 intermediates the assertion below requires.
         let sourceA = try makeSource(width: 32, height: 32)
         let sourceB = try makeSource(width: 32, height: 32)
-        let pipelineA = makePipeline(pool: pool, source: sourceA, steps: [
+        let pipelineA = makePipeline(pool: pool)
+        let stepsA: [AnyFilter] = [
             .single(SharpenFilter(amount: 20, step: 1)),
             .single(SharpenFilter(amount: 15, step: 1)),
-        ])
-        let pipelineB = makePipeline(pool: pool, source: sourceB, steps: [
+        ]
+        let pipelineB = makePipeline(pool: pool)
+        let stepsB: [AnyFilter] = [
             .single(SharpenFilter(amount: 30, step: 1)),
             .single(SharpenFilter(amount: 10, step: 1)),
-        ])
+        ]
 
         // Encode pipeline A into cbA, don't commit yet.
         let cbA = try XCTUnwrap(queue.makeCommandBuffer())
-        let outputA = try pipelineA.encode(into: cbA)
+        let outputA = try pipelineA.encode(into: cbA, source: sourceA, steps: stepsA)
 
         // While A is pending, encode pipeline B into cbB.
         // The pool is empty (A hasn't completed) so B must allocate fresh.
         let cbB = try XCTUnwrap(queue.makeCommandBuffer())
-        let outputB = try pipelineB.encode(into: cbB)
+        let outputB = try pipelineB.encode(into: cbB, source: sourceB, steps: stepsB)
 
         XCTAssertFalse(
             outputA === outputB,
@@ -222,12 +226,13 @@ final class DeferredEnqueueTests: XCTestCase {
 
         for sliderMul in 0..<3 {
             let src = try makeSource(width: 32, height: 32)
-            let pipeline = makePipeline(pool: pool, source: src, steps: [
+            let pipeline = makePipeline(pool: pool)
+            let steps: [AnyFilter] = [
                 .single(ExposureFilter(exposure: Float(10 * sliderMul))),
                 .single(ContrastFilter(contrast: 10, lumaMean: 0.5)),
-            ])
+            ]
             let cb = try XCTUnwrap(queue.makeCommandBuffer())
-            let output = try pipeline.encode(into: cb)
+            let output = try pipeline.encode(into: cb, source: src, steps: steps)
             outputs.append(output)
             inflightBuffers.append(cb)
             cb.commit()
@@ -245,15 +250,8 @@ final class DeferredEnqueueTests: XCTestCase {
 
     // MARK: - Helpers
 
-    private func makePipeline(
-        pool: TexturePool,
-        source: MTLTexture,
-        steps: [AnyFilter]
-    ) -> Pipeline {
+    private func makePipeline(pool: TexturePool) -> Pipeline {
         Pipeline(
-            input: .texture(source),
-            steps: steps,
-            optimizer: FilterGraphOptimizer(),
             intermediatePixelFormat: .rgba16Float,
             device: device,
             textureLoader: textureLoader,

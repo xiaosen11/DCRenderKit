@@ -48,18 +48,20 @@ final class OptimizerIntegrationTests: XCTestCase {
     // MARK: - CSE does NOT fold HS + Clarity downsamples (linear chain)
 
     /// In a linear `[HS, Clarity]` chain, HS's downsample reads
-    /// `.source` but Clarity's downsample reads HS's final pass
-    /// output (chain-head handoff inside Lowering). Their
-    /// `NodeSignature.inputs` therefore differ, and CSE correctly
-    /// leaves them alone.
+    /// the pipeline source but Clarity's downsample reads HS's
+    /// final-pass output (chain-head handoff inside
+    /// ``Lowering/translatePassInputs(_:currentHead:passNameToID:additionalOffset:)``).
+    /// Their `NodeSignature.inputs` therefore differ, and CSE
+    /// correctly leaves them alone — the two computations are
+    /// genuinely distinct (HS's tone change is part of Clarity's
+    /// guide), so folding would be wrong.
     ///
-    /// This test pins that semantic. CSE's sharing payoff lands
-    /// when the IR itself exposes two computations with
-    /// genuinely identical inputs — e.g. future branch / merge
-    /// filter graphs or hand-constructed IR in tests. Linear
-    /// chains trigger it only when a filter's `PassInput.source`
-    /// happens to match another filter's upstream input by
-    /// coincidence, which isn't the HS + Clarity case.
+    /// Even though the ``DownsampleKind/guidedLuma`` discriminator
+    /// is shared, `inputs` participates in the signature key, so
+    /// they remain distinct nodes. CSE only collapses guided-luma
+    /// downsamples when two consumers genuinely sample the same
+    /// upstream texture (e.g. branching IR or hand-built fixtures
+    /// — see `testHandBuiltDuplicateGuidedDownsamplesFold`).
     func testHSAndClarityDownsamplesDoNotFoldInLinearChain() throws {
         let steps: [AnyFilter] = [
             .multi(HighlightShadowFilter(highlights: 40)),
@@ -69,33 +71,39 @@ final class OptimizerIntegrationTests: XCTestCase {
         let optimised = Optimizer.optimize(lowered)
 
         let downsampleCount = optimised.nodes.reduce(0) { acc, node in
-            if case .nativeCompute(let kernel, _, _) = node.kind,
-               kernel == "DCRGuidedDownsampleLuma" {
+            if case .downsample(_, let kind) = node.kind, kind == .guidedLuma {
                 return acc + 1
             }
             return acc
         }
         XCTAssertEqual(
             downsampleCount, 2,
-            "HS and Clarity downsamples read different inputs (source vs HS output), so CSE must not fold them"
+            "HS and Clarity downsamples read different inputs (source vs HS output) so CSE must keep both"
         )
     }
 
-    /// CSE _does_ fold when two nativeCompute nodes genuinely
-    /// read the same input with the same kernel / uniforms /
-    /// output spec. Exercised via a hand-built IR that puts two
-    /// hypothetical `.source`-reading nativeComputes in the same
-    /// graph — exactly the shape Phase-3 benchmarks will produce
-    /// when branching IR is introduced.
-    func testHandBuiltDuplicateNativeComputesFold() throws {
+    /// When two `.downsample(.guidedLuma)` nodes do read an
+    /// identical `inputs` set — the case that matters for any
+    /// future branching IR — CSE folds them into one. Validates
+    /// the typed-kind dedup machinery independently of how
+    /// today's filters route their inputs.
+    func testHandBuiltDuplicateGuidedDownsamplesFold() throws {
         let nodes: [Node] = [
-            PipelineCompilerTestFixtures.nativeComputeNode(
-                id: 0, kernelName: "DCRGuidedDownsampleLuma",
-                outputSpec: .scaled(factor: 0.25)
+            Node(
+                id: 0,
+                kind: .downsample(factor: 4.0, kind: .guidedLuma),
+                inputs: [.source],
+                outputSpec: .scaled(factor: 0.25),
+                isFinal: false,
+                debugLabel: "downsample0"
             ),
-            PipelineCompilerTestFixtures.nativeComputeNode(
-                id: 1, kernelName: "DCRGuidedDownsampleLuma",
-                outputSpec: .scaled(factor: 0.25)
+            Node(
+                id: 1,
+                kind: .downsample(factor: 4.0, kind: .guidedLuma),
+                inputs: [.source],
+                outputSpec: .scaled(factor: 0.25),
+                isFinal: false,
+                debugLabel: "downsample1"
             ),
             PipelineCompilerTestFixtures.pixelLocalNode(
                 id: 2, bodyName: "F",
@@ -108,13 +116,12 @@ final class OptimizerIntegrationTests: XCTestCase {
         let optimised = Optimizer.optimize(g)
 
         let downsampleCount = optimised.nodes.reduce(0) { acc, node in
-            if case .nativeCompute(let kernel, _, _) = node.kind,
-               kernel == "DCRGuidedDownsampleLuma" {
+            if case .downsample(_, let kind) = node.kind, kind == .guidedLuma {
                 return acc + 1
             }
             return acc
         }
-        XCTAssertEqual(downsampleCount, 1, "CSE must fold the two identical downsamples")
+        XCTAssertEqual(downsampleCount, 1, "CSE must fold identical guided-luma downsamples")
     }
 
     // MARK: - TailSink across HS → Saturation

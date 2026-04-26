@@ -87,10 +87,6 @@ public struct FilmGrainFilter: FilterProtocol {
         ))
     }
 
-    /// Declared fuse group (`nil` — grain is not fusable).
-    /// See ``FilterProtocol/fuseGroup``.
-    public static var fuseGroup: FuseGroup? { nil }
-
     /// Fusion metadata. See ``FilterProtocol/fusionBody`` and
     /// `docs/pipeline-compiler-design.md` §4. The body function
     /// `DCRFilmGrainBody` lives in `FilmGrainFilter.metal`.

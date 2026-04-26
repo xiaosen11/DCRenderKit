@@ -203,9 +203,6 @@ final class PortraitBlurMaskPipelineTests: XCTestCase {
         ]
 
         let pipeline = Pipeline(
-            input: .texture(source),
-            steps: steps,
-            optimizer: FilterGraphOptimizer(),
             intermediatePixelFormat: .rgba16Float,
             device: device,
             textureLoader: textureLoader,
@@ -215,7 +212,7 @@ final class PortraitBlurMaskPipelineTests: XCTestCase {
             texturePool: texturePool,
             commandBufferPool: commandBufferPool
         )
-        let output = try pipeline.outputSync()
+        let output = try pipeline.processSync(input: .texture(source), steps: steps)
 
         XCTAssertEqual(output.width, width)
         XCTAssertEqual(output.height, height)
@@ -315,11 +312,6 @@ final class PortraitBlurMaskPipelineTests: XCTestCase {
         maskTexture: MTLTexture?
     ) throws -> MTLTexture {
         let pipeline = Pipeline(
-            input: .texture(source),
-            steps: [.multi(PortraitBlurFilter(
-                strength: strength, maskTexture: maskTexture
-            ))],
-            optimizer: FilterGraphOptimizer(),
             intermediatePixelFormat: .rgba16Float,
             device: device,
             textureLoader: textureLoader,
@@ -329,7 +321,12 @@ final class PortraitBlurMaskPipelineTests: XCTestCase {
             texturePool: texturePool,
             commandBufferPool: commandBufferPool
         )
-        return try pipeline.outputSync()
+        return try pipeline.processSync(
+            input: .texture(source),
+            steps: [.multi(PortraitBlurFilter(
+                strength: strength, maskTexture: maskTexture
+            ))]
+        )
     }
 
     /// Per-column standard deviation of the red channel, averaged

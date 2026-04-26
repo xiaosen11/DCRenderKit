@@ -117,9 +117,6 @@ class ContractTestCase: XCTestCase {
         source: MTLTexture, filter: F
     ) throws -> MTLTexture {
         let pipeline = Pipeline(
-            input: .texture(source),
-            steps: [.single(filter)],
-            optimizer: FilterGraphOptimizer(),
             intermediatePixelFormat: .rgba16Float,
             device: device,
             textureLoader: textureLoader,
@@ -128,8 +125,12 @@ class ContractTestCase: XCTestCase {
             samplerCache: samplerCache,
             texturePool: texturePool,
             commandBufferPool: commandBufferPool
+
         )
-        return try pipeline.outputSync()
+        return try pipeline.processSync(
+            input: .texture(source),
+            steps: [.single(filter)]
+        )
     }
 
     /// Same as `runFilter` but for `MultiPassFilter` — wraps the filter
@@ -138,9 +139,6 @@ class ContractTestCase: XCTestCase {
         source: MTLTexture, filter: F
     ) throws -> MTLTexture {
         let pipeline = Pipeline(
-            input: .texture(source),
-            steps: [.multi(filter)],
-            optimizer: FilterGraphOptimizer(),
             intermediatePixelFormat: .rgba16Float,
             device: device,
             textureLoader: textureLoader,
@@ -149,8 +147,12 @@ class ContractTestCase: XCTestCase {
             samplerCache: samplerCache,
             texturePool: texturePool,
             commandBufferPool: commandBufferPool
+
         )
-        return try pipeline.outputSync()
+        return try pipeline.processSync(
+            input: .texture(source),
+            steps: [.multi(filter)]
+        )
     }
 
     // MARK: - Pixel read
@@ -643,5 +645,4 @@ func synthesizePatchFromOKLCh(L: Float, C: Float, hRadians: Float) throws -> SIM
 struct OKLabExposeLChContractFilter: FilterProtocol {
     var modifier: ModifierEnum { .compute(kernel: "DCROKLabExposeLChTestKernel") }
     var uniforms: FilterUniforms { .empty }
-    static var fuseGroup: FuseGroup? { nil }
 }

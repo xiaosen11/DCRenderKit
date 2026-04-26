@@ -70,14 +70,14 @@ final class Phase9DiagnosticLoggingTests: XCTestCase {
         DCRLogging.diagnosticPipelineLogging = false
 
         let source = try makeSolidTexture(width: 16, height: 16)
-        let pipeline = makePipeline(
+        let pipeline = makePipeline()
+        _ = try pipeline.processSync(
             input: .texture(source),
             steps: [
                 .single(ExposureFilter(exposure: 10)),
                 .single(ContrastFilter(contrast: 10, lumaMean: 0.5)),
             ]
         )
-        _ = try pipeline.outputSync()
 
         let pipelineMsgs = capture.events.filter {
             $0.category == "PipelineCompiler"
@@ -101,7 +101,8 @@ final class Phase9DiagnosticLoggingTests: XCTestCase {
         DCRLogging.diagnosticPipelineLogging = true
 
         let source = try makeSolidTexture(width: 16, height: 16)
-        let pipeline = makePipeline(
+        let pipeline = makePipeline()
+        _ = try pipeline.processSync(
             input: .texture(source),
             steps: [
                 .single(ExposureFilter(exposure: 10)),
@@ -109,7 +110,6 @@ final class Phase9DiagnosticLoggingTests: XCTestCase {
                 .single(SaturationFilter(saturation: 1.1)),
             ]
         )
-        _ = try pipeline.outputSync()
 
         let compiler = capture.events.filter { $0.category == "PipelineCompiler" }
         XCTAssertTrue(
@@ -144,7 +144,8 @@ final class Phase9DiagnosticLoggingTests: XCTestCase {
         DCRLogging.diagnosticPipelineLogging = true
 
         let source = try makeSolidTexture(width: 16, height: 16)
-        let pipeline = makePipeline(
+        let pipeline = makePipeline()
+        _ = try pipeline.processSync(
             input: .texture(source),
             steps: [
                 .single(ExposureFilter(exposure: 10)),
@@ -152,7 +153,6 @@ final class Phase9DiagnosticLoggingTests: XCTestCase {
                 .single(SaturationFilter(saturation: 1.1)),
             ]
         )
-        _ = try pipeline.outputSync()
 
         let plan = capture.events.first {
             $0.category == "PipelineMem" && $0.message.contains("allocator plan")
@@ -170,14 +170,8 @@ final class Phase9DiagnosticLoggingTests: XCTestCase {
 
     // MARK: - Fixtures
 
-    private func makePipeline(
-        input: PipelineInput,
-        steps: [AnyFilter]
-    ) -> Pipeline {
+    private func makePipeline() -> Pipeline {
         Pipeline(
-            input: input,
-            steps: steps,
-            optimizer: FilterGraphOptimizer(),
             optimization: .full,
             intermediatePixelFormat: .rgba16Float,
             device: device,

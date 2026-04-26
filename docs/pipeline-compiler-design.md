@@ -70,7 +70,9 @@ zero regressions. Every phase commit lands on `origin/main`.
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │ Consumer                                                     │
-│   Pipeline(input, steps: [AnyFilter]).output() → MTLTexture  │
+│   let pipeline = Pipeline()  // 长寿；reuse across calls     │
+│   pipeline.encode(into: cb, source: tex, steps: [...],       │
+│                   writingTo: drawable.texture)               │
 └─────────────────────────────────────────────────────────────┘
                             │
                             ▼
@@ -688,7 +690,7 @@ Phase 7 结束后，user 在 main 稳定观察 ≥ 1 周 + 真机确认，我方
 - 16 个 `.metal` 文件：**删除 production kernel，规范化 body function**（加 `// @dcr:body-begin/end` marker），保留 uniform struct 和 helpers
 - 16 个 Filter Swift 文件：实现 `fusionBody` property
 - `Pipelines/Pipeline.swift`：接通 compiler 路径，`optimization` 开关
-- `Pipelines/FilterGraphOptimizer.swift`：废弃 (0.2.0 内部走新 compiler，保留空实现作 deprecation shim，0.3.0 删)
+- `Pipelines/FilterGraphOptimizer.swift`：Phase 10 已彻底移除（连同 `FuseGroup`、`FilterProtocol.fuseGroup`、`FilterError.fusionFailed`），新 IR optimizer 是唯一路径
 - `Resources/PipelineStateCache.swift`：`ComputeCacheKey` schema 扩展
 - `Shaders/Foundation/SRGBGamma.metal` / `OKLab.metal`：helper 注入的 canonical source
 

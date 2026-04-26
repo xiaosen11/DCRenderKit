@@ -12,7 +12,7 @@ import Metal
 
 extension Pipeline {
 
-    /// Execute the filter chain and await GPU completion.
+    /// Execute `steps` against `input` and await GPU completion.
     ///
     /// The work is encoded synchronously (Metal encoding itself is cheap
     /// and synchronous), then `addCompletedHandler` bridges GPU completion
@@ -20,11 +20,14 @@ extension Pipeline {
     /// blocked — until the GPU finishes.
     ///
     /// Use this from SwiftUI / async controllers / UIKit async handlers.
-    /// Sync callers should use `outputSync()` instead.
-    public func output() async throws -> MTLTexture {
+    /// Sync callers should use ``processSync(input:steps:)`` instead.
+    public func process(
+        input: PipelineInput,
+        steps: [AnyFilter]
+    ) async throws -> MTLTexture {
         // Encode synchronously on the current thread — Metal encoding is
         // thread-safe and fast; only the wait is asynchronous.
-        let (commandBuffer, finalTexture) = try encodeAll()
+        let (commandBuffer, finalTexture) = try encodeAll(input: input, steps: steps)
 
         // Box the texture so we can capture it Sendable-safely.
         let textureBox = TextureBox(finalTexture)

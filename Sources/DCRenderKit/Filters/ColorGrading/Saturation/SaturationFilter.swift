@@ -73,10 +73,6 @@ public struct SaturationFilter: FilterProtocol {
         FilterUniforms(SaturationUniforms(saturation: saturation))
     }
 
-    /// Declared fuse group (`.colorGrading`). See
-    /// ``FilterProtocol/fuseGroup``.
-    public static var fuseGroup: FuseGroup? { .colorGrading }
-
     /// Fusion metadata. See ``FilterProtocol/fusionBody`` and
     /// `docs/pipeline-compiler-design.md` §4. The body function
     /// `DCRSaturationBody` lands in `SaturationFilter.metal` in Phase 3.

@@ -109,10 +109,6 @@ public struct ContrastFilter: FilterProtocol {
         ))
     }
 
-    /// Declared fuse group (`.toneAdjustment`). See
-    /// ``FilterProtocol/fuseGroup``.
-    public static var fuseGroup: FuseGroup? { .toneAdjustment }
-
     /// Fusion metadata. See ``FilterProtocol/fusionBody`` and
     /// `docs/pipeline-compiler-design.md` §4. The body function
     /// `DCRContrastBody` lands in `ContrastFilter.metal` in Phase 3.

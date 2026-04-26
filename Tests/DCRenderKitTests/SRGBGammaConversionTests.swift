@@ -245,9 +245,6 @@ final class SRGBGammaConversionTests: XCTestCase {
         _ source: MTLTexture, filter: F
     ) throws -> MTLTexture {
         let pipeline = Pipeline(
-            input: .texture(source),
-            steps: [.single(filter)],
-            optimizer: FilterGraphOptimizer(),
             intermediatePixelFormat: .rgba16Float,
             device: device,
             textureLoader: textureLoader,
@@ -256,8 +253,12 @@ final class SRGBGammaConversionTests: XCTestCase {
             samplerCache: samplerCache,
             texturePool: texturePool,
             commandBufferPool: commandBufferPool
+
         )
-        return try pipeline.outputSync()
+        return try pipeline.processSync(
+            input: .texture(source),
+            steps: [.single(filter)]
+        )
     }
 
     private func makeRGB16FSource(
@@ -359,19 +360,16 @@ private enum SRGBGammaSwiftReference {
 private struct SRGBRoundTripFilter: FilterProtocol {
     var modifier: ModifierEnum { .compute(kernel: "DCRSRGBRoundTripTestKernel") }
     var uniforms: FilterUniforms { .empty }
-    static var fuseGroup: FuseGroup? { nil }
 }
 
 /// Wraps the `DCRSRGBLinearToGammaTestKernel`.
 private struct SRGBLinearToGammaFilter: FilterProtocol {
     var modifier: ModifierEnum { .compute(kernel: "DCRSRGBLinearToGammaTestKernel") }
     var uniforms: FilterUniforms { .empty }
-    static var fuseGroup: FuseGroup? { nil }
 }
 
 /// Wraps the `DCRSRGBGammaToLinearTestKernel`.
 private struct SRGBGammaToLinearFilter: FilterProtocol {
     var modifier: ModifierEnum { .compute(kernel: "DCRSRGBGammaToLinearTestKernel") }
     var uniforms: FilterUniforms { .empty }
-    static var fuseGroup: FuseGroup? { nil }
 }

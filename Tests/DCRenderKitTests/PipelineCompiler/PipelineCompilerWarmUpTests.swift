@@ -77,11 +77,11 @@ final class PipelineCompilerWarmUpTests: XCTestCase {
 
         // Now run a Pipeline with the same chain. No new PSOs.
         let source = try makeSolidTexture(width: 16, height: 16, red: 0.5)
-        let pipeline = makePipeline(
+        let pipeline = makePipeline()
+        _ = try pipeline.processSync(
             input: .texture(source),
             steps: combination
         )
-        _ = try pipeline.outputSync()
         XCTAssertEqual(
             UberKernelCache.shared.cachedPipelineCount, afterPreheat,
             "Dispatch after warm-up must be a cache hit — no new PSOs."
@@ -148,14 +148,8 @@ final class PipelineCompilerWarmUpTests: XCTestCase {
 
     // MARK: - Fixtures
 
-    private func makePipeline(
-        input: PipelineInput,
-        steps: [AnyFilter]
-    ) -> Pipeline {
+    private func makePipeline() -> Pipeline {
         Pipeline(
-            input: input,
-            steps: steps,
-            optimizer: FilterGraphOptimizer(),
             optimization: .full,
             intermediatePixelFormat: .rgba16Float,
             device: device,

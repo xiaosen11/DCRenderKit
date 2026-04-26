@@ -111,10 +111,6 @@ public struct ExposureFilter: FilterProtocol {
         ))
     }
 
-    /// Declared fuse group (`.toneAdjustment`). See
-    /// ``FilterProtocol/fuseGroup``.
-    public static var fuseGroup: FuseGroup? { .toneAdjustment }
-
     /// Fusion metadata. See ``FilterProtocol/fusionBody`` and
     /// `docs/pipeline-compiler-design.md` §4. The body function
     /// `DCRExposureBody` lands in `ExposureFilter.metal` in Phase 3.

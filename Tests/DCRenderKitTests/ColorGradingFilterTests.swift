@@ -86,10 +86,6 @@ final class ColorGradingFilterTests: XCTestCase {
         XCTAssertGreaterThan(p.r, 0.6)
     }
 
-    func testSaturationFuseGroupIsColorGrading() {
-        XCTAssertEqual(SaturationFilter.fuseGroup, .colorGrading)
-    }
-
     // MARK: - Vibrance
 
     func testVibranceIdentityAtZero() throws {
@@ -117,10 +113,6 @@ final class ColorGradingFilterTests: XCTestCase {
         assertFinite(p)
         XCTAssertGreaterThanOrEqual(p.r, 0)
         XCTAssertLessThanOrEqual(p.r, 1)
-    }
-
-    func testVibranceFuseGroupIsColorGrading() {
-        XCTAssertEqual(VibranceFilter.fuseGroup, .colorGrading)
     }
 
     /// Adobe-semantic skin protect: ColorChecker Light Skin patch at
@@ -255,10 +247,6 @@ final class ColorGradingFilterTests: XCTestCase {
         XCTAssertEqual(plGammaB, pp.b, accuracy: 0.03, "B parity")
     }
 
-    func testWhiteBalanceFuseGroupIsColorGrading() {
-        XCTAssertEqual(WhiteBalanceFilter.fuseGroup, .colorGrading)
-    }
-
     // MARK: - NormalBlend
 
     func testNormalBlendIntensityZeroReturnsSource() throws {
@@ -304,10 +292,6 @@ final class ColorGradingFilterTests: XCTestCase {
         XCTAssertEqual(p.b, 0.4, accuracy: 0.02)
     }
 
-    func testNormalBlendFuseGroupIsNil() {
-        XCTAssertNil(NormalBlendFilter.fuseGroup)
-    }
-
     // MARK: - Helpers
 
     private func runSingle<F: FilterProtocol>(
@@ -315,9 +299,6 @@ final class ColorGradingFilterTests: XCTestCase {
         filter: F
     ) throws -> MTLTexture {
         let pipeline = Pipeline(
-            input: .texture(source),
-            steps: [.single(filter)],
-            optimizer: FilterGraphOptimizer(),
             intermediatePixelFormat: .rgba16Float,
             device: device,
             textureLoader: textureLoader,
@@ -326,8 +307,12 @@ final class ColorGradingFilterTests: XCTestCase {
             samplerCache: samplerCache,
             texturePool: texturePool,
             commandBufferPool: commandBufferPool
+
         )
-        return try pipeline.outputSync()
+        return try pipeline.processSync(
+            input: .texture(source),
+            steps: [.single(filter)]
+        )
     }
 
     private func assertFinite(_ p: CGPixel, file: StaticString = #filePath, line: UInt = #line) {

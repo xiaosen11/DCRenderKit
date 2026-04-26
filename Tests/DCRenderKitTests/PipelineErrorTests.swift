@@ -138,7 +138,6 @@ final class PipelineErrorTests: XCTestCase {
             .emptyPassGraph(filterName: "GhostFilter"),
             .invalidPassGraph(filterName: "GhostFilter", reason: "cycle detected"),
             .runtimeFailure(filterName: "GhostFilter", underlying: underlying),
-            .fusionFailed(group: "toneAdjustment", reason: "unsupported count"),
         ]
         for err in cases {
             XCTAssertFalse(err.description.isEmpty,
@@ -156,12 +155,6 @@ final class PipelineErrorTests: XCTestCase {
         )
         XCTAssertTrue(invalid.description.contains("GhostFilter"))
         XCTAssertTrue(invalid.description.contains("cycle detected"))
-
-        let fusion = FilterError.fusionFailed(
-            group: "toneAdjustment", reason: "unsupported count"
-        )
-        XCTAssertTrue(fusion.description.contains("toneAdjustment"))
-        XCTAssertTrue(fusion.description.contains("unsupported count"))
     }
 
     // MARK: - Resource domain

@@ -111,11 +111,11 @@ final class MultiPassFilterTests: XCTestCase {
 
     func testHighlightShadowEndToEnd() throws {
         let source = try makeMultipassSource(red: 0.5, green: 0.5, blue: 0.5, width: 64, height: 64)
-        let pipeline = makePipeline(
+        let pipeline = makePipeline()
+        let output = try pipeline.processSync(
             input: .texture(source),
             steps: [.multi(HighlightShadowFilter(highlights: 30, shadows: -20))]
         )
-        let output = try pipeline.outputSync()
         let pixels = try readMultipassTexture(output)
 
         // All pixels must be finite and in [0, 1].
@@ -130,22 +130,22 @@ final class MultiPassFilterTests: XCTestCase {
 
     func testHighlightShadowIdentityPassesSourceThrough() throws {
         let source = try makeMultipassSource(red: 0.42, green: 0.42, blue: 0.42, width: 16, height: 16)
-        let pipeline = makePipeline(
+        let pipeline = makePipeline()
+        let output = try pipeline.processSync(
             input: .texture(source),
             steps: [.multi(HighlightShadowFilter(highlights: 0, shadows: 0))]
         )
-        let output = try pipeline.outputSync()
         // Empty pass graph should short-circuit to the source texture.
         XCTAssertTrue(output === source)
     }
 
     func testClarityEndToEnd() throws {
         let source = try makeRampMultipassSource()
-        let pipeline = makePipeline(
+        let pipeline = makePipeline()
+        let output = try pipeline.processSync(
             input: .texture(source),
             steps: [.multi(ClarityFilter(intensity: 50))]
         )
-        let output = try pipeline.outputSync()
         let pixels = try readMultipassTexture(output)
         for row in pixels {
             for p in row {
@@ -158,11 +158,11 @@ final class MultiPassFilterTests: XCTestCase {
 
     func testClarityNegativeIntensityStaysInGamut() throws {
         let source = try makeRampMultipassSource()
-        let pipeline = makePipeline(
+        let pipeline = makePipeline()
+        let output = try pipeline.processSync(
             input: .texture(source),
             steps: [.multi(ClarityFilter(intensity: -100))]
         )
-        let output = try pipeline.outputSync()
         let pixels = try readMultipassTexture(output)
         for row in pixels {
             for p in row {
@@ -177,11 +177,11 @@ final class MultiPassFilterTests: XCTestCase {
         let source = try makeMultipassSource(
             red: 0.9, green: 0.9, blue: 0.9, width: 64, height: 64
         )
-        let pipeline = makePipeline(
+        let pipeline = makePipeline()
+        let output = try pipeline.processSync(
             input: .texture(source),
             steps: [.multi(SoftGlowFilter(strength: 80, threshold: 20, bloomRadius: 50))]
         )
-        let output = try pipeline.outputSync()
         let pixels = try readMultipassTexture(output)
 
         // A bright source under SoftGlow should stay in-gamut.
@@ -196,11 +196,11 @@ final class MultiPassFilterTests: XCTestCase {
 
     func testSoftGlowStrengthZeroIsIdentity() throws {
         let source = try makeMultipassSource(red: 0.3, green: 0.5, blue: 0.7, width: 32, height: 32)
-        let pipeline = makePipeline(
+        let pipeline = makePipeline()
+        let output = try pipeline.processSync(
             input: .texture(source),
             steps: [.multi(SoftGlowFilter(strength: 0))]
         )
-        let output = try pipeline.outputSync()
         XCTAssertTrue(output === source)
     }
 
@@ -231,11 +231,11 @@ final class MultiPassFilterTests: XCTestCase {
         let source = try makeMultipassSource(
             red: 0.133, green: 0.133, blue: 0.133, width: 32, height: 32
         )
-        let pipeline = makePipeline(
+        let pipeline = makePipeline()
+        let output = try pipeline.processSync(
             input: .texture(source),
             steps: [.multi(HighlightShadowFilter(highlights: 100, shadows: 0, colorSpace: .linear))]
         )
-        let output = try pipeline.outputSync()
         let center = try readMultipassTexture(output)[16][16]
         XCTAssertEqual(
             center.r, 0.150, accuracy: 0.01,
@@ -257,16 +257,16 @@ final class MultiPassFilterTests: XCTestCase {
         let sourceGamma = try makeRampMultipassSource()  // uses 0..1 gamma ramp
         let sourceLinear = try makeLinearizedRampMultipassSource()
 
-        let pp = makePipeline(
+        let pp = makePipeline()
+        let lp = makePipeline()
+        let ppOut = try pp.processSync(
             input: .texture(sourceGamma),
             steps: [.multi(ClarityFilter(intensity: 60, colorSpace: .perceptual))]
         )
-        let lp = makePipeline(
+        let lpOut = try lp.processSync(
             input: .texture(sourceLinear),
             steps: [.multi(ClarityFilter(intensity: 60, colorSpace: .linear))]
         )
-        let ppOut = try pp.outputSync()
-        let lpOut = try lp.outputSync()
 
         let pixelsP = try readMultipassTexture(ppOut)
         let pixelsL = try readMultipassTexture(lpOut)
@@ -299,16 +299,16 @@ final class MultiPassFilterTests: XCTestCase {
             red: linearX, green: linearX, blue: linearX, width: 32, height: 32
         )
 
-        let perceptualPipeline = makePipeline(
+        let perceptualPipeline = makePipeline()
+        let linearPipeline = makePipeline()
+        let perceptualOut = try perceptualPipeline.processSync(
             input: .texture(sourceGamma),
             steps: [.multi(HighlightShadowFilter(highlights: 80, shadows: -40, colorSpace: .perceptual))]
         )
-        let linearPipeline = makePipeline(
+        let linearOut = try linearPipeline.processSync(
             input: .texture(sourceLinear),
             steps: [.multi(HighlightShadowFilter(highlights: 80, shadows: -40, colorSpace: .linear))]
         )
-        let perceptualOut = try perceptualPipeline.outputSync()
-        let linearOut = try linearPipeline.outputSync()
 
         let pp = try readMultipassTexture(perceptualOut)[16][16]
         let pl = try readMultipassTexture(linearOut)[16][16]
@@ -318,14 +318,6 @@ final class MultiPassFilterTests: XCTestCase {
             plAsGamma, pp.r, accuracy: 0.04,
             "HS linear → re-gamma must match perceptual; got \(plAsGamma) vs \(pp.r)"
         )
-    }
-
-    // MARK: - Fuse groups
-
-    func testMultiPassFiltersDeclareNoFuseGroup() {
-        XCTAssertNil(HighlightShadowFilter.fuseGroup)
-        XCTAssertNil(ClarityFilter.fuseGroup)
-        XCTAssertNil(SoftGlowFilter.fuseGroup)
     }
 
     // MARK: - Intermediate-format contract (P0 regression)
@@ -347,11 +339,11 @@ final class MultiPassFilterTests: XCTestCase {
         )
         XCTAssertEqual(source.pixelFormat, .bgra8Unorm)
 
-        let pipeline = makePipeline(
+        let pipeline = makePipeline()
+        let output = try pipeline.processSync(
             input: .texture(source),
             steps: [.multi(HighlightShadowFilter(highlights: 50, shadows: -20))]
         )
-        let output = try pipeline.outputSync()
 
         // Multi-pass filter output must inherit the pipeline's intermediate
         // format (rgba16Float here), NOT the source texture's format.
@@ -373,11 +365,11 @@ final class MultiPassFilterTests: XCTestCase {
             r: 0.7, g: 0.7, b: 0.7, width: 32, height: 32
         )
 
-        let pipeline = makePipeline(
+        let pipeline = makePipeline()
+        let output = try pipeline.processSync(
             input: .texture(source),
             steps: [.multi(HighlightShadowFilter(highlights: 100, shadows: 0))]
         )
-        let output = try pipeline.outputSync()
         let pixels = try readMultipassTexture(output)
 
         let center = pixels[16][16]
@@ -401,19 +393,19 @@ final class MultiPassFilterTests: XCTestCase {
         // must produce bit-identical output.
         let source = try makeRampMultipassSource()
 
-        let pipeline1 = makePipeline(
+        let pipeline1 = makePipeline()
+        let output1 = try pipeline1.processSync(
             input: .texture(source),
             steps: [.multi(ClarityFilter(intensity: 40))]
         )
-        let output1 = try pipeline1.outputSync()
         let pixels1 = try readMultipassTexture(output1)
 
         // Build a second pipeline (separate pool state) and run again.
-        let pipeline2 = makePipeline(
+        let pipeline2 = makePipeline()
+        let output2 = try pipeline2.processSync(
             input: .texture(source),
             steps: [.multi(ClarityFilter(intensity: 40))]
         )
-        let output2 = try pipeline2.outputSync()
         let pixels2 = try readMultipassTexture(output2)
 
         for y in 0..<pixels1.count {
@@ -438,11 +430,11 @@ final class MultiPassFilterTests: XCTestCase {
         // visible dynamic range after SoftGlow.
         let source = try makeBgra8UnormGradientSource(width: 64, height: 8)
 
-        let pipeline = makePipeline(
+        let pipeline = makePipeline()
+        let output = try pipeline.processSync(
             input: .texture(source),
             steps: [.multi(SoftGlowFilter(strength: 60, threshold: 30, bloomRadius: 50))]
         )
-        let output = try pipeline.outputSync()
         let pixels = try readMultipassTexture(output)
 
         var minR: Float = .infinity
@@ -466,14 +458,8 @@ final class MultiPassFilterTests: XCTestCase {
 
     // MARK: - Helpers
 
-    private func makePipeline(
-        input: PipelineInput,
-        steps: [AnyFilter]
-    ) -> Pipeline {
+    private func makePipeline() -> Pipeline {
         Pipeline(
-            input: input,
-            steps: steps,
-            optimizer: FilterGraphOptimizer(),
             intermediatePixelFormat: .rgba16Float,
             device: device,
             textureLoader: textureLoader,

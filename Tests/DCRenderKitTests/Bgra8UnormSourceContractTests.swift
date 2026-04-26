@@ -218,9 +218,6 @@ final class Bgra8UnormSourceContractTests: XCTestCase {
 
     private func runPipeline(source: MTLTexture, steps: [AnyFilter]) throws -> MTLTexture {
         let pipeline = Pipeline(
-            input: .texture(source),
-            steps: steps,
-            optimizer: FilterGraphOptimizer(),
             intermediatePixelFormat: .rgba16Float,
             device: device,
             textureLoader: textureLoader,
@@ -229,8 +226,12 @@ final class Bgra8UnormSourceContractTests: XCTestCase {
             samplerCache: samplerCache,
             texturePool: texturePool,
             commandBufferPool: commandBufferPool
+
         )
-        return try pipeline.outputSync()
+        return try pipeline.processSync(
+            input: .texture(source),
+            steps: steps
+        )
     }
 }
 

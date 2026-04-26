@@ -84,10 +84,6 @@ public struct NormalBlendFilter: FilterProtocol, @unchecked Sendable {
         [overlay]
     }
 
-    /// Declared fuse group (`nil` — blends are not fusable).
-    /// See ``FilterProtocol/fuseGroup``.
-    public static var fuseGroup: FuseGroup? { nil }
-
     /// Fusion metadata. See ``FilterProtocol/fusionBody`` and
     /// `docs/pipeline-compiler-design.md` §4. The body function
     /// `DCRNormalBlendBody` lands in `NormalBlendFilter.metal` in Phase 3.

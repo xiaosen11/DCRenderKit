@@ -49,14 +49,8 @@ final class PipelineTests: XCTestCase {
         super.tearDown()
     }
 
-    private func makePipeline(
-        input: PipelineInput,
-        steps: [AnyFilter]
-    ) -> Pipeline {
+    private func makePipeline() -> Pipeline {
         Pipeline(
-            input: input,
-            steps: steps,
-            optimizer: FilterGraphOptimizer(),
             intermediatePixelFormat: .rgba16Float,
             device: device,
             textureLoader: textureLoader,
@@ -72,11 +66,11 @@ final class PipelineTests: XCTestCase {
 
     func testEmptyChainReturnsSource() throws {
         let source = try makePipelineTexture(width: 8, height: 8, red: 0.7)
-        let pipeline = makePipeline(
+        let pipeline = makePipeline()
+        let output = try pipeline.processSync(
             input: .texture(source),
             steps: []
         )
-        let output = try pipeline.outputSync()
         XCTAssertTrue(output === source)
     }
 
@@ -84,11 +78,11 @@ final class PipelineTests: XCTestCase {
 
     func testSingleFilterChain() throws {
         let source = try makePipelineTexture(width: 8, height: 8, red: 0.3)
-        let pipeline = makePipeline(
+        let pipeline = makePipeline()
+        let output = try pipeline.processSync(
             input: .texture(source),
             steps: [.single(SimpleScaleFilter(factor: 2.0))]
         )
-        let output = try pipeline.outputSync()
 
         let pixels = try readPixels(output)
         XCTAssertEqual(pixels[4][4].r, 0.6, accuracy: 0.02)
@@ -98,14 +92,14 @@ final class PipelineTests: XCTestCase {
 
     func testMultipleSinglePassFilters() throws {
         let source = try makePipelineTexture(width: 8, height: 8, red: 0.25)
-        let pipeline = makePipeline(
+        let pipeline = makePipeline()
+        let output = try pipeline.processSync(
             input: .texture(source),
             steps: [
                 .single(SimpleScaleFilter(factor: 2.0)),    // 0.25 → 0.5
                 .single(SimpleScaleFilter(factor: 1.5)),    // 0.5 → 0.75
             ]
         )
-        let output = try pipeline.outputSync()
 
         let pixels = try readPixels(output)
         XCTAssertEqual(pixels[4][4].r, 0.75, accuracy: 0.02)
@@ -115,14 +109,14 @@ final class PipelineTests: XCTestCase {
 
     func testMultiPassFilterInChain() throws {
         let source = try makePipelineTexture(width: 8, height: 8, red: 0.4)
-        let pipeline = makePipeline(
+        let pipeline = makePipeline()
+        let output = try pipeline.processSync(
             input: .texture(source),
             steps: [
                 .single(SimpleScaleFilter(factor: 2.0)),   // 0.4 → 0.8
                 .multi(SimpleTwoPassFilter()),              // identity via two passes
             ]
         )
-        let output = try pipeline.outputSync()
 
         let pixels = try readPixels(output)
         XCTAssertEqual(pixels[4][4].r, 0.8, accuracy: 0.02)
@@ -132,7 +126,8 @@ final class PipelineTests: XCTestCase {
 
     func testMixedFilterChain() throws {
         let source = try makePipelineTexture(width: 8, height: 8, red: 0.1)
-        let pipeline = makePipeline(
+        let pipeline = makePipeline()
+        let output = try pipeline.processSync(
             input: .texture(source),
             steps: [
                 .single(SimpleScaleFilter(factor: 2.0)),   // 0.1 → 0.2
@@ -140,7 +135,6 @@ final class PipelineTests: XCTestCase {
                 .single(SimpleScaleFilter(factor: 3.0)),   // 0.2 → 0.6
             ]
         )
-        let output = try pipeline.outputSync()
 
         let pixels = try readPixels(output)
         XCTAssertEqual(pixels[4][4].r, 0.6, accuracy: 0.02)
@@ -150,11 +144,11 @@ final class PipelineTests: XCTestCase {
 
     func testAsyncOutputReturnsTexture() async throws {
         let source = try makePipelineTexture(width: 8, height: 8, red: 0.5)
-        let pipeline = makePipeline(
+        let pipeline = makePipeline()
+        let output = try await pipeline.process(
             input: .texture(source),
             steps: [.single(SimpleScaleFilter(factor: 1.0))]   // identity
         )
-        let output = try await pipeline.output()
         XCTAssertEqual(output.width, 8)
         let pixels = try readPixels(output)
         XCTAssertEqual(pixels[4][4].r, 0.5, accuracy: 0.02)
@@ -164,12 +158,12 @@ final class PipelineTests: XCTestCase {
 
     func testMissingKernelPropagates() throws {
         let source = try makePipelineTexture(width: 8, height: 8, red: 0)
-        let pipeline = makePipeline(
-            input: .texture(source),
-            steps: [.single(NonexistentKernelFilter())]
-        )
+        let pipeline = makePipeline()
         do {
-            _ = try pipeline.outputSync()
+            _ = try pipeline.processSync(
+                input: .texture(source),
+                steps: [.single(NonexistentKernelFilter())]
+            )
             XCTFail("Expected throw")
         } catch PipelineError.pipelineState(.functionNotFound) {
             // Expected.
@@ -180,12 +174,12 @@ final class PipelineTests: XCTestCase {
 
     func testRenderModifierInSinglePassThrows() throws {
         let source = try makePipelineTexture(width: 8, height: 8, red: 0)
-        let pipeline = makePipeline(
-            input: .texture(source),
-            steps: [.single(RenderModifierFilter())]
-        )
+        let pipeline = makePipeline()
         do {
-            _ = try pipeline.outputSync()
+            _ = try pipeline.processSync(
+                input: .texture(source),
+                steps: [.single(RenderModifierFilter())]
+            )
             XCTFail("Expected throw")
         } catch PipelineError.filter(.invalidPassGraph) {
             // Expected.
@@ -197,9 +191,8 @@ final class PipelineTests: XCTestCase {
     // MARK: - encode(into:writingTo:) presentation bridge
 
     func testEncodeWritingToSameFormatSameSize() throws {
-        // Chain with one filter produces a bgra8Unorm source-fmt output
-        // via intermediate conversion. Caller provides a destination of
-        // matching format+size — should exercise the blit fast path.
+        // Empty chain through encode(writingTo:) — the SDK's Lanczos
+        // resample bridges the source to a same-format destination.
         let source = try makePipelineTexture(width: 16, height: 16, red: 0.3)
         let desc = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .rgba16Float, width: 16, height: 16, mipmapped: false
@@ -208,12 +201,9 @@ final class PipelineTests: XCTestCase {
         desc.storageMode = .shared
         let destination = try XCTUnwrap(device.metalDevice.makeTexture(descriptor: desc))
 
-        let pipeline = makePipeline(
-            input: .texture(source),
-            steps: [.single(SimpleScaleFilter(factor: 1.0))]
-        )
+        let pipeline = makePipeline()
         let cb = try XCTUnwrap(device.metalDevice.makeCommandQueue()?.makeCommandBuffer())
-        try pipeline.encode(into: cb, writingTo: destination)
+        try pipeline.encode(into: cb, source: source, steps: [], writingTo: destination)
         cb.commit()
         cb.waitUntilCompleted()
         XCTAssertNil(cb.error)
@@ -230,12 +220,14 @@ final class PipelineTests: XCTestCase {
         desc.storageMode = .shared
         let destination = try XCTUnwrap(device.metalDevice.makeTexture(descriptor: desc))
 
-        let pipeline = makePipeline(
-            input: .texture(source),
-            steps: [.single(SimpleScaleFilter(factor: 1.5))]
-        )
+        let pipeline = makePipeline()
         let cb = try XCTUnwrap(device.metalDevice.makeCommandQueue()?.makeCommandBuffer())
-        try pipeline.encode(into: cb, writingTo: destination)
+        try pipeline.encode(
+            into: cb,
+            source: source,
+            steps: [.single(SimpleScaleFilter(factor: 1.5))],
+            writingTo: destination
+        )
         cb.commit()
         cb.waitUntilCompleted()
         XCTAssertNil(cb.error)
@@ -267,12 +259,9 @@ final class PipelineTests: XCTestCase {
         desc.storageMode = .shared
         let destination = try XCTUnwrap(device.metalDevice.makeTexture(descriptor: desc))
 
-        let pipeline = makePipeline(
-            input: .texture(source),
-            steps: [.single(SimpleScaleFilter(factor: 1.0))]
-        )
+        let pipeline = makePipeline()
         let cb = try XCTUnwrap(device.metalDevice.makeCommandQueue()?.makeCommandBuffer())
-        try pipeline.encode(into: cb, writingTo: destination)
+        try pipeline.encode(into: cb, source: source, steps: [], writingTo: destination)
         cb.commit()
         cb.waitUntilCompleted()
         XCTAssertNil(cb.error)
@@ -289,9 +278,9 @@ final class PipelineTests: XCTestCase {
         desc.storageMode = .shared
         let destination = try XCTUnwrap(device.metalDevice.makeTexture(descriptor: desc))
 
-        let pipeline = makePipeline(input: .texture(source), steps: [])
+        let pipeline = makePipeline()
         let cb = try XCTUnwrap(device.metalDevice.makeCommandQueue()?.makeCommandBuffer())
-        try pipeline.encode(into: cb, writingTo: destination)
+        try pipeline.encode(into: cb, source: source, steps: [], writingTo: destination)
         cb.commit()
         cb.waitUntilCompleted()
         XCTAssertNil(cb.error)
@@ -311,27 +300,6 @@ final class PipelineTests: XCTestCase {
         XCTAssertLessThan(r, 165)
     }
 
-    // MARK: - FilterGraphOptimizer passthrough
-
-    func testOptimizerPassthroughBehavior() {
-        let optimizer = FilterGraphOptimizer()
-        let steps: [AnyFilter] = [
-            .single(SimpleScaleFilter(factor: 1.0)),
-            .single(SimpleScaleFilter(factor: 2.0)),
-        ]
-        let result = optimizer.optimize(steps)
-        XCTAssertEqual(result.count, 2)
-    }
-
-    func testOptimizerDisabledReturnsInput() {
-        var optimizer = FilterGraphOptimizer()
-        optimizer.isEnabled = false
-        let steps: [AnyFilter] = [
-            .single(SimpleScaleFilter(factor: 1.0))
-        ]
-        let result = optimizer.optimize(steps)
-        XCTAssertEqual(result.count, 1)
-    }
 }
 
 // MARK: - Test filters
@@ -345,7 +313,6 @@ private struct SimpleScaleFilter: FilterProtocol {
     var uniforms: FilterUniforms {
         FilterUniforms(Uniforms(factor: factor))
     }
-    static var fuseGroup: FuseGroup? { nil }
 }
 
 private struct NonexistentKernelFilter: FilterProtocol {

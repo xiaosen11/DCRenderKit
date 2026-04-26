@@ -552,15 +552,6 @@ final class EffectsFilterTests: XCTestCase {
         }
     }
 
-    // MARK: - Fuse groups
-
-    func testEffectFiltersDeclareNoFuseGroup() {
-        XCTAssertNil(SharpenFilter.fuseGroup)
-        XCTAssertNil(FilmGrainFilter.fuseGroup)
-        XCTAssertNil(CCDFilter.fuseGroup)
-        XCTAssertNil(LUT3DFilter.fuseGroup)
-    }
-
     // MARK: - Helpers
 
     private func runSingle<F: FilterProtocol>(
@@ -568,9 +559,6 @@ final class EffectsFilterTests: XCTestCase {
         filter: F
     ) throws -> MTLTexture {
         let pipeline = Pipeline(
-            input: .texture(source),
-            steps: [.single(filter)],
-            optimizer: FilterGraphOptimizer(),
             intermediatePixelFormat: .rgba16Float,
             device: device,
             textureLoader: textureLoader,
@@ -579,8 +567,12 @@ final class EffectsFilterTests: XCTestCase {
             samplerCache: samplerCache,
             texturePool: texturePool,
             commandBufferPool: commandBufferPool
+
         )
-        return try pipeline.outputSync()
+        return try pipeline.processSync(
+            input: .texture(source),
+            steps: [.single(filter)]
+        )
     }
 
     // MARK: - LUT data helpers

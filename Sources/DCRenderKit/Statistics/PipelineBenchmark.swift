@@ -122,9 +122,6 @@ public struct PipelineBenchmark: Sendable {
         let warmupCount = max(0, min(warmupIterations, 100))
 
         let pipeline = Pipeline(
-            input: .texture(source),
-            steps: steps,
-            optimizer: FilterGraphOptimizer(),
             optimization: optimization,
             intermediatePixelFormat: .rgba16Float,
             device: device,
@@ -138,7 +135,7 @@ public struct PipelineBenchmark: Sendable {
 
         // Warmup.
         for _ in 0..<warmupCount {
-            _ = try pipeline.outputSync()
+            _ = try pipeline.processSync(input: .texture(source), steps: steps)
         }
 
         // Measure.
@@ -148,7 +145,11 @@ public struct PipelineBenchmark: Sendable {
             let commandBuffer = try commandBufferPool.makeCommandBuffer(
                 label: "DCR.Benchmark"
             )
-            _ = try pipeline.encode(into: commandBuffer)
+            _ = try pipeline.encode(
+                into: commandBuffer,
+                source: source,
+                steps: steps
+            )
             commandBuffer.commit()
             commandBuffer.waitUntilCompleted()
             if let error = commandBuffer.error {

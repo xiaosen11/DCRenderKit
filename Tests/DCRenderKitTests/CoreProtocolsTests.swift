@@ -31,14 +31,6 @@ final class CoreProtocolsTests: XCTestCase {
         )
     }
 
-    // MARK: - FuseGroup
-
-    func testFuseGroupCases() {
-        XCTAssertEqual(FuseGroup.allCases.count, 2)
-        XCTAssertTrue(FuseGroup.allCases.contains(.toneAdjustment))
-        XCTAssertTrue(FuseGroup.allCases.contains(.colorGrading))
-    }
-
     // MARK: - FilterProtocol defaults
 
     func testFilterProtocolDefaults() {
@@ -49,7 +41,6 @@ final class CoreProtocolsTests: XCTestCase {
         let filter = MinimalFilter()
         XCTAssertEqual(filter.uniforms.byteCount, 0)
         XCTAssertTrue(filter.additionalInputs.isEmpty)
-        XCTAssertNil(MinimalFilter.fuseGroup)
     }
 
     // MARK: - FilterUniforms

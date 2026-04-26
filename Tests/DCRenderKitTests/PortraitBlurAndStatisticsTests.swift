@@ -120,10 +120,6 @@ final class PortraitBlurAndStatisticsTests: XCTestCase {
         XCTAssertEqual(outMid, srcMid, accuracy: 0.1)
     }
 
-    func testPortraitBlurFuseGroupIsNil() {
-        XCTAssertNil(PortraitBlurFilter.fuseGroup)
-    }
-
     // MARK: - ImageStatistics.lumaMean
 
     func testLumaMeanOfSolidWhite() async throws {
@@ -168,9 +164,6 @@ final class PortraitBlurAndStatisticsTests: XCTestCase {
         filter: F
     ) throws -> MTLTexture {
         let pipeline = Pipeline(
-            input: .texture(source),
-            steps: [.multi(filter)],
-            optimizer: FilterGraphOptimizer(),
             intermediatePixelFormat: .rgba16Float,
             device: device,
             textureLoader: textureLoader,
@@ -179,8 +172,12 @@ final class PortraitBlurAndStatisticsTests: XCTestCase {
             samplerCache: samplerCache,
             texturePool: texturePool,
             commandBufferPool: commandBufferPool
+
         )
-        return try pipeline.outputSync()
+        return try pipeline.processSync(
+            input: .texture(source),
+            steps: [.multi(filter)]
+        )
     }
 
     private func makeMask(

@@ -80,13 +80,13 @@ final class Phase5PipelineIntegrationTests: XCTestCase {
     /// one entry after the pipeline runs.
     func testSingleBuiltInFilterReachesComputeBackendCodegen() throws {
         let source = try makeSolidTexture(width: 16, height: 16, red: 0.5)
-        let pipeline = makePipeline(
+        let pipeline = makePipeline()
+
+        let before = UberKernelCache.shared.cachedPipelineCount
+        let output = try pipeline.processSync(
             input: .texture(source),
             steps: [.single(ExposureFilter(exposure: 20))]
         )
-
-        let before = UberKernelCache.shared.cachedPipelineCount
-        let output = try pipeline.outputSync()
         let after = UberKernelCache.shared.cachedPipelineCount
 
         XCTAssertEqual(
@@ -111,17 +111,18 @@ final class Phase5PipelineIntegrationTests: XCTestCase {
     func testThreeFilterChainFusesIntoOneClusterUnderFull() throws {
         let source = try makeSolidTexture(width: 16, height: 16, red: 0.5)
         let pipeline = makePipeline(
+optimization: .full
+        )
+
+        let before = UberKernelCache.shared.cachedPipelineCount
+        let output = try pipeline.processSync(
             input: .texture(source),
             steps: [
                 .single(ExposureFilter(exposure: 10)),
                 .single(ContrastFilter(contrast: 10, lumaMean: 0.5)),
                 .single(SaturationFilter(saturation: 1.2)),
-            ],
-            optimization: .full
+            ]
         )
-
-        let before = UberKernelCache.shared.cachedPipelineCount
-        let output = try pipeline.outputSync()
         let after = UberKernelCache.shared.cachedPipelineCount
 
         XCTAssertEqual(
@@ -144,18 +145,19 @@ final class Phase5PipelineIntegrationTests: XCTestCase {
     func testThreeFilterChainStaysSeparateUnderNone() throws {
         let source = try makeSolidTexture(width: 16, height: 16, red: 0.5)
         let pipeline = makePipeline(
+optimization: .none
+        )
+
+        let computeBefore = UberKernelCache.shared.cachedPipelineCount
+        let renderBefore = UberRenderPipelineCache.shared.cachedPipelineCount
+        _ = try pipeline.processSync(
             input: .texture(source),
             steps: [
                 .single(ExposureFilter(exposure: 10)),
                 .single(ContrastFilter(contrast: 10, lumaMean: 0.5)),
                 .single(SaturationFilter(saturation: 1.2)),
-            ],
-            optimization: .none
+            ]
         )
-
-        let computeBefore = UberKernelCache.shared.cachedPipelineCount
-        let renderBefore = UberRenderPipelineCache.shared.cachedPipelineCount
-        _ = try pipeline.outputSync()
         let computeDelta = UberKernelCache.shared.cachedPipelineCount - computeBefore
         let renderDelta = UberRenderPipelineCache.shared.cachedPipelineCount - renderBefore
 
@@ -183,13 +185,13 @@ final class Phase5PipelineIntegrationTests: XCTestCase {
         defer { ShaderLibrary.shared.unregisterAll() }
 
         let source = try makeSolidTexture(width: 16, height: 16, red: 0.5)
-        let pipeline = makePipeline(
+        let pipeline = makePipeline()
+
+        let before = UberKernelCache.shared.cachedPipelineCount
+        let output = try pipeline.processSync(
             input: .texture(source),
             steps: [.single(CustomUnsupportedFilter())]
         )
-
-        let before = UberKernelCache.shared.cachedPipelineCount
-        let output = try pipeline.outputSync()
         let after = UberKernelCache.shared.cachedPipelineCount
 
         XCTAssertEqual(
@@ -208,11 +210,7 @@ final class Phase5PipelineIntegrationTests: XCTestCase {
     /// vs `.none` produce identical graphs before cross-filter fusion
     /// lands in step 5.3.
     func testOptimizationDefaultsToFull() throws {
-        let source = try makeSolidTexture(width: 4, height: 4, red: 0.5)
-        let pipeline = makePipeline(
-            input: .texture(source),
-            steps: [.single(ExposureFilter(exposure: 5))]
-        )
+        let pipeline = makePipeline()
         XCTAssertEqual(pipeline.optimization, .full)
     }
 
@@ -232,12 +230,12 @@ final class Phase5PipelineIntegrationTests: XCTestCase {
             .single(SaturationFilter(saturation: 1.1)),
         ]
 
-        let fullOut = try makePipeline(
-            input: .texture(source), steps: steps, optimization: .full
-        ).outputSync()
-        let noneOut = try makePipeline(
-            input: .texture(source), steps: steps, optimization: .none
-        ).outputSync()
+        let fullOut = try makePipeline(optimization: .full).processSync(
+            input: .texture(source), steps: steps
+        )
+        let noneOut = try makePipeline(optimization: .none).processSync(
+            input: .texture(source), steps: steps
+        )
 
         let fullPx = try readFirstPixel(fullOut)
         let nonePx = try readFirstPixel(noneOut)
@@ -266,7 +264,10 @@ final class Phase5PipelineIntegrationTests: XCTestCase {
     /// not inflate this count.
     func testMixedChainStaysOnCompilerPath() throws {
         let source = try makeSolidTexture(width: 32, height: 32, red: 0.5)
-        let pipeline = makePipeline(
+        let pipeline = makePipeline()
+
+        let before = UberKernelCache.shared.cachedPipelineCount
+        let output = try pipeline.processSync(
             input: .texture(source),
             steps: [
                 .single(ExposureFilter(exposure: 10)),
@@ -274,9 +275,6 @@ final class Phase5PipelineIntegrationTests: XCTestCase {
                 .single(SaturationFilter(saturation: 1.1)),
             ]
         )
-
-        let before = UberKernelCache.shared.cachedPipelineCount
-        let output = try pipeline.outputSync()
         let after = UberKernelCache.shared.cachedPipelineCount
 
         XCTAssertEqual(
@@ -309,18 +307,19 @@ final class Phase5PipelineIntegrationTests: XCTestCase {
 
         let source = try makeSolidTexture(width: 16, height: 16, red: 0.5)
         let pipeline = makePipeline(
+optimization: .full
+        )
+
+        let computeBefore = UberKernelCache.shared.cachedPipelineCount
+        let renderBefore = UberRenderPipelineCache.shared.cachedPipelineCount
+        _ = try pipeline.processSync(
             input: .texture(source),
             steps: [
                 .single(ExposureFilter(exposure: 10)),
                 .single(try LUT3DFilter(cubeData: cubeData, dimension: 2, intensity: 1.0)),
                 .single(SaturationFilter(saturation: 1.1)),
-            ],
-            optimization: .full
+            ]
         )
-
-        let computeBefore = UberKernelCache.shared.cachedPipelineCount
-        let renderBefore = UberRenderPipelineCache.shared.cachedPipelineCount
-        _ = try pipeline.outputSync()
         let computeDelta = UberKernelCache.shared.cachedPipelineCount - computeBefore
         let renderDelta = UberRenderPipelineCache.shared.cachedPipelineCount - renderBefore
 
@@ -337,14 +336,9 @@ final class Phase5PipelineIntegrationTests: XCTestCase {
     // MARK: - Fixtures
 
     private func makePipeline(
-        input: PipelineInput,
-        steps: [AnyFilter],
         optimization: PipelineOptimization = .full
     ) -> Pipeline {
         Pipeline(
-            input: input,
-            steps: steps,
-            optimizer: FilterGraphOptimizer(),
             optimization: optimization,
             intermediatePixelFormat: .rgba16Float,
             device: device,

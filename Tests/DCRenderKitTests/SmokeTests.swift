@@ -68,7 +68,9 @@ final class SmokeTests: XCTestCase {
             device: device
         )
 
-        let pipeline = makePipeline(
+        let pipeline = makePipeline()
+
+        let output = try pipeline.processSync(
             input: .texture(source),
             steps: [
                 .single(ExposureFilter(exposure: 20)),
@@ -85,8 +87,6 @@ final class SmokeTests: XCTestCase {
                 .single(lut),
             ]
         )
-
-        let output = try pipeline.outputSync()
         assertInGamut(output)
     }
 
@@ -94,7 +94,8 @@ final class SmokeTests: XCTestCase {
 
     func testStackedMultiPassFiltersChainCleanly() throws {
         let source = try makeSmokeRamp(width: 128, height: 128)
-        let pipeline = makePipeline(
+        let pipeline = makePipeline()
+        let output = try pipeline.processSync(
             input: .texture(source),
             steps: [
                 .multi(HighlightShadowFilter(highlights: 30, shadows: -15)),
@@ -102,7 +103,6 @@ final class SmokeTests: XCTestCase {
                 .multi(SoftGlowFilter(strength: 50, threshold: 40, bloomRadius: 30)),
             ]
         )
-        let output = try pipeline.outputSync()
         assertInGamut(output)
     }
 
@@ -114,14 +114,14 @@ final class SmokeTests: XCTestCase {
         // Half-subject / half-background mask.
         let mask = try makeHalfMask(width: 128, height: 128)
 
-        let pipeline = makePipeline(
+        let pipeline = makePipeline()
+        let output = try pipeline.processSync(
             input: .texture(source),
             steps: [
                 .multi(PortraitBlurFilter(strength: 100, maskTexture: mask)),
                 .single(SharpenFilter(amount: 40, step: 2)),
             ]
         )
-        let output = try pipeline.outputSync()
         assertInGamut(output)
     }
 
@@ -138,14 +138,14 @@ final class SmokeTests: XCTestCase {
             width: 64, height: 64
         )
 
-        let pipeline = makePipeline(
+        let pipeline = makePipeline()
+        let output = try pipeline.processSync(
             input: .texture(source),
             steps: [
                 .single(ExposureFilter(exposure: 10)),
                 .single(NormalBlendFilter(overlay: watermark, intensity: 0.5)),
             ]
         )
-        let output = try pipeline.outputSync()
         assertInGamut(output)
 
         // Expect the 50% blend with full-white watermark to push the
@@ -167,12 +167,18 @@ final class SmokeTests: XCTestCase {
         ]
         let stepsAsync: [AnyFilter] = stepsSync  // identical
 
-        let syncPipeline = makePipeline(input: .texture(source), steps: stepsSync)
-        let syncOutput = try syncPipeline.outputSync()
+        let syncPipeline = makePipeline()
+        let syncOutput = try syncPipeline.processSync(
+            input: .texture(source),
+            steps: stepsSync
+        )
         let syncPixels = try readSmokeTexture(syncOutput)
 
-        let asyncPipeline = makePipeline(input: .texture(source), steps: stepsAsync)
-        let asyncOutput = try await asyncPipeline.output()
+        let asyncPipeline = makePipeline()
+        let asyncOutput = try await asyncPipeline.process(
+            input: .texture(source),
+            steps: stepsAsync
+        )
         let asyncPixels = try readSmokeTexture(asyncOutput)
 
         // Allow a tiny drift for GPU scheduling; half-precision drift
@@ -194,7 +200,8 @@ final class SmokeTests: XCTestCase {
         // through MultiPassExecutor's lifetime analysis and TexturePool
         // recycling. Run many times to catch leaks.
         for iteration in 0..<20 {
-            let pipeline = makePipeline(
+            let pipeline = makePipeline()
+            let output = try pipeline.processSync(
                 input: .texture(source),
                 steps: [
                     .multi(HighlightShadowFilter(highlights: 20, shadows: -10)),
@@ -202,7 +209,6 @@ final class SmokeTests: XCTestCase {
                     .multi(SoftGlowFilter(strength: 30)),
                 ]
             )
-            let output = try pipeline.outputSync()
             XCTAssertEqual(output.width, 64, "iteration \(iteration)")
             XCTAssertEqual(output.height, 64, "iteration \(iteration)")
         }
@@ -215,8 +221,11 @@ final class SmokeTests: XCTestCase {
             red: 0.42, green: 0.42, blue: 0.42,
             width: 16, height: 16
         )
-        let pipeline = makePipeline(input: .texture(source), steps: [])
-        let output = try pipeline.outputSync()
+        let pipeline = makePipeline()
+        let output = try pipeline.processSync(
+            input: .texture(source),
+            steps: []
+        )
         XCTAssertTrue(output === source)
     }
 
@@ -227,7 +236,8 @@ final class SmokeTests: XCTestCase {
             red: 0.3, green: 0.6, blue: 0.9,
             width: 16, height: 16
         )
-        let pipeline = makePipeline(
+        let pipeline = makePipeline()
+        let output = try pipeline.processSync(
             input: .texture(source),
             steps: [
                 .single(ExposureFilter(exposure: 0)),
@@ -243,38 +253,16 @@ final class SmokeTests: XCTestCase {
                 .multi(SoftGlowFilter(strength: 0)),
             ]
         )
-        let output = try pipeline.outputSync()
         let p = try readSmokeTexture(output)[8][8]
         XCTAssertEqual(p.r, 0.3, accuracy: 0.02)
         XCTAssertEqual(p.g, 0.6, accuracy: 0.02)
         XCTAssertEqual(p.b, 0.9, accuracy: 0.02)
     }
 
-    // MARK: - FuseGroup contracts
-
-    func testAllToneAdjustmentFiltersShareFuseGroup() {
-        XCTAssertEqual(ExposureFilter.fuseGroup, .toneAdjustment)
-        XCTAssertEqual(ContrastFilter.fuseGroup, .toneAdjustment)
-        XCTAssertEqual(WhitesFilter.fuseGroup, .toneAdjustment)
-        XCTAssertEqual(BlacksFilter.fuseGroup, .toneAdjustment)
-    }
-
-    func testAllColorGradingFiltersShareFuseGroup() {
-        XCTAssertEqual(WhiteBalanceFilter.fuseGroup, .colorGrading)
-        XCTAssertEqual(VibranceFilter.fuseGroup, .colorGrading)
-        XCTAssertEqual(SaturationFilter.fuseGroup, .colorGrading)
-    }
-
     // MARK: - Helpers
 
-    private func makePipeline(
-        input: PipelineInput,
-        steps: [AnyFilter]
-    ) -> Pipeline {
+    private func makePipeline() -> Pipeline {
         Pipeline(
-            input: input,
-            steps: steps,
-            optimizer: FilterGraphOptimizer(),
             intermediatePixelFormat: .rgba16Float,
             device: device,
             textureLoader: textureLoader,

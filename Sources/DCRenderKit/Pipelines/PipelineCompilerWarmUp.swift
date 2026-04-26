@@ -50,8 +50,8 @@ import Metal
 /// ```
 ///
 /// Each combination pays `O(N_uber_kernels × compile_time)` on first
-/// warm-up and zero cost on every subsequent `Pipeline.outputSync()`
-/// that targets a cache-compatible graph.
+/// warm-up and zero cost on every subsequent `Pipeline.encode(...)` /
+/// `Pipeline.processSync(...)` that targets a cache-compatible graph.
 ///
 /// Cache identity: the compiler names every uber kernel by a
 /// deterministic hash of the fused body sequence plus signature
@@ -69,8 +69,8 @@ public enum PipelineCompilerWarmUp {
     ///
     /// - Parameters:
     ///   - combinations: Filter chains to warm up. Each inner array
-    ///     is a complete chain (the same shape you'd pass to
-    ///     `Pipeline(input:steps:)`).
+    ///     is a complete chain (the same shape you'd pass as `steps:`
+    ///     to `Pipeline.encode(...)` / `Pipeline.processSync(...)`).
     ///   - intermediatePixelFormat: Pixel format used to resolve the
     ///     allocator's `TextureInfo`. Defaults to the SDK default
     ///     `.rgba16Float`. Warm-up compiles are not sensitive to the

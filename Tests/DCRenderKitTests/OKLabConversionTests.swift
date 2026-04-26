@@ -231,9 +231,6 @@ final class OKLabConversionTests: XCTestCase {
         _ source: MTLTexture, filter: F
     ) throws -> MTLTexture {
         let pipeline = Pipeline(
-            input: .texture(source),
-            steps: [.single(filter)],
-            optimizer: FilterGraphOptimizer(),
             intermediatePixelFormat: .rgba16Float,
             device: device,
             textureLoader: textureLoader,
@@ -242,8 +239,12 @@ final class OKLabConversionTests: XCTestCase {
             samplerCache: samplerCache,
             texturePool: texturePool,
             commandBufferPool: commandBufferPool
+
         )
-        return try pipeline.outputSync()
+        return try pipeline.processSync(
+            input: .texture(source),
+            steps: [.single(filter)]
+        )
     }
 
     private func makeRGB16FSource(
@@ -324,19 +325,16 @@ final class OKLabConversionTests: XCTestCase {
 private struct OKLabRoundTripFilter: FilterProtocol {
     var modifier: ModifierEnum { .compute(kernel: "DCROKLabRoundTripTestKernel") }
     var uniforms: FilterUniforms { .empty }
-    static var fuseGroup: FuseGroup? { nil }
 }
 
 private struct OKLabExposeLabFilter: FilterProtocol {
     var modifier: ModifierEnum { .compute(kernel: "DCROKLabExposeLabTestKernel") }
     var uniforms: FilterUniforms { .empty }
-    static var fuseGroup: FuseGroup? { nil }
 }
 
 private struct OKLabExposeLChFilter: FilterProtocol {
     var modifier: ModifierEnum { .compute(kernel: "DCROKLabExposeLChTestKernel") }
     var uniforms: FilterUniforms { .empty }
-    static var fuseGroup: FuseGroup? { nil }
 }
 
 private struct OKLabGamutClampFilter: FilterProtocol {
@@ -345,7 +343,6 @@ private struct OKLabGamutClampFilter: FilterProtocol {
     var uniforms: FilterUniforms {
         FilterUniforms(OKLabGamutClampUniforms(chromaMultiplier: chromaMultiplier))
     }
-    static var fuseGroup: FuseGroup? { nil }
 }
 
 /// Layout must match `DCROKLabGamutClampTestUniforms` in OKLab.metal.

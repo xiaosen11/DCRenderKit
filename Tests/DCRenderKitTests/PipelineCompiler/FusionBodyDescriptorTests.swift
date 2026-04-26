@@ -108,7 +108,6 @@ final class FusionBodyDescriptorTests: XCTestCase {
     func testFilterProtocolDefaultIsUnsupported() {
         struct LegacyStub: FilterProtocol {
             var modifier: ModifierEnum { .compute(kernel: "noop") }
-            static var fuseGroup: FuseGroup? { nil }
         }
         let stub = LegacyStub()
         XCTAssertNil(

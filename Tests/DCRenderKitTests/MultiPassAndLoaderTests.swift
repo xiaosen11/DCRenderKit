@@ -517,9 +517,6 @@ final class TextureLoaderTests: XCTestCase {
     private func runIdentityPipeline(source: MTLTexture) throws -> MTLTexture {
         guard let d = Device.tryShared else { throw XCTSkip("Metal device required") }
         let pipeline = Pipeline(
-            input: .texture(source),
-            steps: [.single(ExposureFilter(exposure: 0))],
-            optimizer: FilterGraphOptimizer(),
             intermediatePixelFormat: .rgba16Float,
             device: d,
             textureLoader: loader,
@@ -528,8 +525,12 @@ final class TextureLoaderTests: XCTestCase {
             samplerCache: SamplerCache(device: d),
             texturePool: TexturePool(device: d, maxBytes: 8 * 1024 * 1024),
             commandBufferPool: CommandBufferPool(device: d, maxInFlight: 2)
+
         )
-        return try pipeline.outputSync()
+        return try pipeline.processSync(
+            input: .texture(source),
+            steps: [.single(ExposureFilter(exposure: 0))]
+        )
     }
 
     private func readRgba16First(_ texture: MTLTexture) throws -> (r: Float, g: Float, b: Float) {
