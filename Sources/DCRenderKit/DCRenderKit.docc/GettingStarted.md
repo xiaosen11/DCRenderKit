@@ -88,8 +88,10 @@ domain:
   target. Lets you carry forward "legacy look" content without
   retuning.
 
-Both modes pass the 315-grid-point parity tests, so either gives
-the same "feel" — pick the one that matches your rendering
+Both modes pass `LinearPerceptualParityTests` — a parity sweep
+covering Contrast / Blacks / Whites / Exposure / WhiteBalance
+across nine grey input levels and the full slider range, so either
+gives the same "feel". Pick the one that matches your rendering
 pipeline expectations.
 
 ## Rendering into a drawable

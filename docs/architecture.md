@@ -448,29 +448,26 @@ that maps a fingerprint of the lowered `PipelineGraph` → the
 tuple of (optimised graph, `TextureAliasingPlan`). Cache hits skip
 the entire Lowering → Optimizer → Planner stack per encode call.
 
-**Fingerprint design**: The fingerprint hashes every `NodeKind`
-variant **including its uniform bytes**. This is non-obvious: the
-four node variants that carry uniforms (`.pixelLocal`,
-`.neighborRead`, `.nativeCompute`, `.fusedPixelLocalCluster`) must
-hash the raw uniform buffer bytes, not just the function name.
+**Fingerprint design**: The fingerprint hashes every node's
+structural payload **and its raw uniform bytes**. Uniforms must
+participate because the cached entry stores the optimised graph
+nodes with their uniforms baked in: a slider drag changes uniform
+values without changing topology, so excluding uniforms from the
+key would return a stale graph with old uniforms (the symptom is
+"slider doesn't change the rendering"). The four `NodeKind`
+variants that carry uniforms (`.pixelLocal`, `.neighborRead`,
+`.nativeCompute`, `.fusedPixelLocalCluster`) all feed
+`uniforms.copyBytes(...)` into the hasher.
 
-**Critical pitfall fixed in Phase 11**: The original Phase 10
-fingerprint used `_` (ignored uniforms) for all four carrying
-variants. When `Pipeline` was per-frame (Phase ≤10), the cache was
-always empty on the first encode, so the bug was latent — each
-frame started with a cold cache and never got a stale hit. Phase
-11's long-lived `Pipeline` made the cache persist across frames,
-turning the latent bug into a live regression: a slider drag
-produced the same fingerprint as before the drag, and the cached
-stale graph was dispatched with the old uniforms. Fix: hash
-`uniforms.copyBytes(...)` in all four cases.
-
-**Tradeoff**: The fingerprint includes uniform bytes, so a slider
-drag always misses the cache. This is correct behaviour — the
-intent of the cache is to amortise structural recompilation (graph
-shape changes when the filter list changes), not to skip per-frame
-dispatch. Dispatch itself is O(N) in the node count and cannot be
-cached.
+**Hit-rate consequence**: Camera preview with stable parameters
+hits the cache every frame after the first — the structural work
+runs once and amortises forever. A slider drag misses on every
+frame during the drag (each frame re-runs the optimiser), then
+returns to 100% hit-rate once the slider settles. Both behaviours
+are intentional: the cache is meant to amortise structural
+recompilation (graph shape changes when the filter list changes),
+not to skip per-frame dispatch. Dispatch itself is O(N) in the
+node count and cannot be cached.
 
 **Boundary**: The cache is per-`Pipeline` instance. Two `Pipeline`
 instances serving the same chain have independent caches and do
@@ -480,8 +477,16 @@ compilation when two pipelines run identical chains (e.g. preview
 + export at the same point in time). For current use cases (one
 pipeline per MTKView) this cost does not materialise.
 
-**Origin**: Phase 10 design; fingerprint bug discovered and fixed
-in Phase 11.
+**Why Phase 11's long-lived `Pipeline` (§4.15) matters here**:
+Before Phase 11, callers built a fresh `Pipeline` per frame, which
+threw the cache away every frame and reduced its hit rate to zero
+even on stable chains. The cache was technically correct in that
+era but never paid back its bookkeeping cost. Long-lived
+`Pipeline` is what turns this cache from a no-op into the actual
+amortisation primitive the compiler depends on.
+
+**Origin**: Phase 10 design; activated by Phase 11's long-lived
+`Pipeline` lifecycle.
 
 ---
 
@@ -521,100 +526,180 @@ or calls `encode(into:)` without arguments will fail to compile.
 
 ### 4.16 Frame Graph stream B — structural optimizations and their boundaries
 
-The pipeline compiler applies five structural rewrites after
-`Lowering` produces the initial `PipelineGraph`. These are
-"stream B" optimizations in the frame-graph sense: they operate
-on graph structure, not on filter semantics.
+The pipeline compiler runs five graph rewrites — Dead Code
+Elimination, Vertical Fusion, Common Sub-Expression Elimination,
+Kernel Inlining, Tail Sink — plus the `TextureAliasingPlanner`
+after `Lowering` produces the initial `PipelineGraph`. The
+rewrites change graph structure; the planner assigns physical
+textures to the rewritten nodes. Together these form "stream B"
+in the frame-graph sense: they reduce GPU work and memory
+pressure without touching filter semantics.
 
 #### Dead Code Elimination (DCE)
 
-Removes graph nodes whose output is never read by any downstream
-node or the terminal output. Triggered when a multi-pass filter
-emits an auxiliary pass that is conditionally inactive (e.g. a
-debug visualisation pass gated off at call time).
+Walks the graph backward from `finalID` via each node's
+`dependencyRefs`, marks every reachable node, and drops the rest.
+Standard reachability BFS; O(V + E). Typical sources of dead
+nodes:
 
-**Boundary**: DCE only removes nodes with zero live consumers. It
-does not reorder nodes or eliminate nodes with side effects
-declared as `alwaysExecute = true`.
+- identity-parameter filters that lowering keeps as placeholders;
+- CSE-collapsed duplicates whose originating node becomes an
+  orphan;
+- `VerticalFusion` / `TailSink` outputs whose former members stop
+  being referenced after fusion.
+
+**Boundary**: DCE is purely reachability-based — it removes nodes
+with no path to the final node. It does not reorder nodes, does
+not reason about side effects (the SDK's nodes are pure GPU
+dispatches with no side-effect concept), and does not look inside
+nodes. `NodeRef.source` and `NodeRef.additional(_)` don't point at
+nodes, so they don't contribute to reachability; only
+`NodeRef.node(_)` does.
 
 #### Common Sub-Expression Elimination (CSE)
 
-Merges structurally identical nodes (same function name, same
-uniforms, same input fingerprint) into a single node with shared
-output. Relevant when two filters in the same chain independently
-apply an identical sub-operation.
+Folds nodes with identical `NodeSignature` (function name, uniform
+bytes, input refs, output spec) — the second occurrence is rewritten
+to reference the first. Real-world trigger: `HighlightShadowFilter`
+and `ClarityFilter` both emit `DCRGuidedDownsampleLuma` as their
+first pass; in a chain that contains both, CSE collapses those
+duplicates into one node that both filters' later passes read from.
 
-**Boundary**: CSE identity is based on the same fingerprint hash
-as `CompiledChainCache` (§4.14). It does not reason about
-mathematical equivalences — `f(g(x))` and `g(f(x))` are never
-merged even if they are numerically equivalent for a specific
-input.
+**Boundary**: Two structural exclusions are never folded. (1) `isFinal`
+nodes — a graph must have exactly one final node, so folding away the
+final would corrupt the graph. (2) `.fusedPixelLocalCluster` nodes —
+clusters are themselves fusion products; their `NodeSignature` is
+nil so they don't participate. CSE also doesn't reason about
+mathematical equivalence: `f(g(x))` and `g(f(x))` are never merged
+even when numerically equivalent for a specific input.
 
 #### Vertical Fusion (VerticalFusion)
 
-Merges adjacent `pixelLocal` (single-pass fragment-shader) nodes
-into a single `fusedPixelLocalCluster` node. The fused cluster
-dispatches once with a chained fragment pipeline (MTL
-programmable blending) instead of N separate render passes.
+Merges runs of adjacent `.pixelLocal` nodes into a single
+`.fusedPixelLocalCluster` node. The cluster's members run in order
+inside a single uber kernel that the Phase-3 codegen generates;
+member-to-member pixel data flows through **shader-local registers**,
+not intermediate textures.
 
-**Merge conditions** (all must hold):
-1. Both nodes are `pixelLocal` — `neighborRead`, `nativeCompute`,
-   and `multiPass` nodes always interrupt a cluster.
-2. No node has more than one downstream consumer (fan-out
-   interrupts — the intermediate must be observable).
-3. Neither node changes output resolution (a resolution-changing
-   filter must write to a fresh texture, not blit in-chain).
-4. The preceding node is not marked `final` — the `final` flag
-   means the filter explicitly wants to be the terminal of a
-   chain and should not be fused.
+**Merge conditions** for an adjacent pair `A → B` (all must hold):
+1. Both `A` and `B` are `.pixelLocal`.
+2. `B.inputs == [.node(A.id)]` — `B`'s only texture input is `A`'s
+   output, entering at the primary slot.
+3. `A.outputSpec == .sameAsSource` **and** `B.outputSpec ==
+   .sameAsSource` — no resolution change between the two.
+4. `A.wantsLinearInput == B.wantsLinearInput` — both bodies expect
+   the same colour-space representation; mixing would require a
+   gamma wrapper the uber kernel can't elide.
+5. `A` has exactly one consumer in the whole graph (namely `B`),
+   and `A` is not the final node — fan-out or final-status would
+   force `A`'s output to remain externally observable, defeating
+   fusion.
 
-**Tradeoff**: Fragment-shader fusion reduces GPU encoder overhead
-and eliminates intermediate texture round-trips. The cost is that
-fused clusters are harder to debug (intermediate values are not
-readable as Metal textures). When debugging a filter chain,
-set `PipelineOptimization.none` to defeat fusion and inspect each
-pass independently.
+**Tradeoff**: Cluster fusion reduces GPU encoder overhead and
+eliminates intermediate texture round-trips between members. The
+cost is that fused clusters are harder to debug (member outputs
+are not readable as Metal textures). When debugging a filter
+chain, set `PipelineOptimization.none` to defeat fusion and
+inspect each pass independently.
 
-**Boundary**: Fusion is purely structural. It does not rewrite
-fragment shader source code. The cluster codegen concatenates the
-function bodies with a pass-through connection (`out[n] = in[n]`)
-between them; Metal's programmable blending passes the output of
-pass N as the "source" input to pass N+1.
+**Boundary — what fusion IS not**: A single fused cluster runs
+inside one Metal kernel/fragment with member bodies inlined back
+to back, passing `half3 rgb` through registers. **Programmable
+blending (`[[color(0)]]`) is unrelated to intra-cluster body
+chaining** — programmable blending appears only in Phase 8's
+multi-cluster render-chain dispatch (`RenderBackend.executeChain`),
+where each draw is a *separate* cluster reading the previous
+draw's tile-memory result. Inside one cluster, there's no blending
+involved.
 
 #### Texture Aliasing (`TextureAliasingPlanner`)
 
-Assigns pooled textures to intermediate graph nodes using
-interval-graph colouring: two nodes share a texture if their
-live-ranges do not overlap. Reduces peak Metal heap footprint by
-reusing intermediate storage.
+Assigns pooled "buckets" (one MTLTexture per bucket) to
+intermediate graph nodes using greedy interval-graph colouring by
+release time. Two nodes share a bucket if (a) their live-ranges
+on the declaration-order timeline do not overlap, **and** (b) they
+have the same `TextureInfo` spec (width × height × pixelFormat).
+For the DCR pipeline graph every node's lifetime is a contiguous
+interval on the 1-D declaration timeline, so interval-graph
+colouring is optimal — the planner hits the theoretical minimum
+bucket count.
 
-**Tradeoff**: Aliasing is computed at pipeline-compile time (once
-per unique chain shape, cached by `CompiledChainCache`). This
-means the alias plan is correct for the abstract graph topology
-but does not account for runtime texture format mismatches. If a
-node outputs `.rgba16Float` and the aliased slot holds
-`.bgra8Unorm`, the planner will not alias them — format
-compatibility is checked at slot-assignment time and aliasing
-silently falls back to unique allocation for that node.
+**Format compatibility**: Free-list lookup keys on the full
+`TextureInfo` spec, so a bucket allocated for `.rgba16Float` will
+never be reused for a `.bgra8Unorm` node — no fallback path is
+needed because the lookup simply won't return an incompatible
+bucket. Different specs produce independent free lists in
+`freePerSpec[spec]`.
 
-**Boundary**: The planner does not alias nodes that are inputs to
-a `fusedPixelLocalCluster` because the cluster holds multiple
-intermediates live simultaneously. Cluster intermediates always
-get unique allocations.
+**Boundary — chain-internal cluster nodes get NO bucket**: When
+Phase-8 chained-render dispatch is in play, intermediate clusters
+in the middle of a `RenderBackend.executeChain` draw chain pass
+their result to the next cluster via Metal's programmable blending
+(tile memory) and never write a real texture. The planner
+recognises these via the `chainInternalAlias` map and **skips
+bucket allocation entirely** for them — `bucketOf[id]` is aliased
+to the chain tail's bucket so `mapping[id]` lookups still resolve,
+but no MTLTexture is dispensed. This is the Phase-8 memory win:
+chaining N clusters needs only one physical render-target texture
+instead of N intermediates.
 
-#### Kernel Inlining / Tail Sink
+**Tradeoff**: The plan is computed once per unique chain shape and
+cached by `CompiledChainCache`. The materialisation step (texture-
+pool dequeue) still runs every frame because the previous frame's
+textures may still be in flight on the GPU; only the planner /
+optimiser CPU work is amortised by the cache.
 
-Promotes a constant-producing node (a pass that writes a uniform
-value regardless of input) to a compile-time constant injected
-into the downstream node's uniforms, eliminating the pass
-entirely. Similarly, the tail node's output can be sunk directly
-into the caller-supplied drawable texture when the format matches,
-eliminating the final blit.
+#### Kernel Inlining (head fusion)
 
-**Boundary**: Tail sink requires that the caller-supplied
-drawable's pixel format is compatible with the final node's output
-format. If formats diverge (e.g. the chain produces `rgba16Float`
-but the drawable is `bgra8Unorm`), the tail blit is retained.
+Absorbs a `.pixelLocal` producer `P` into an immediately-downstream
+`.neighborRead` consumer `N`, so `N`'s neighbour-read kernel reads
+raw source pixels and applies `P`'s body to each sample before the
+neighbourhood combine. This replaces two dispatches and one
+intermediate texture with one slightly heavier dispatch. It is the
+spatial analogue of `VerticalFusion`: where vertical fusion merges
+bodies that all touch the same pixel coordinate, kernel inlining
+widens the neighbour-read's sample loop so each sample pays the
+inlined body's per-pixel cost. Phase-3 codegen consumes
+`Node.inlinedBodyBeforeSample` to emit one kernel that loops over
+neighbours, applies the inlined body to each read, and finally
+runs the neighbour-read body.
+
+**Merge conditions** (all required):
+1. `N.kind == .neighborRead`.
+2. `N.inputs[0] == .node(P.id)` — `P`'s output is `N`'s primary
+   texture source.
+3. `P.kind == .pixelLocal`.
+4. `P.outputSpec == .sameAsSource`.
+5. `P.isFinal == false`.
+6. `P` has exactly one consumer in the graph (namely `N`).
+7. `N` doesn't already carry an inlined body — double-inlining
+   needs codegen support that doesn't ship.
+
+#### Tail Sink (tail fusion, aggressive)
+
+The opposite of `KernelInlining`: absorbs a downstream `.pixelLocal`
+into its upstream producer, so the producer's own kernel applies
+the pixelLocal body right before `output.write` runs.
+
+The "aggressive" variant sinks across more than just
+pixelLocal-to-pixelLocal boundaries:
+
+- A `.fusedPixelLocalCluster` can absorb a pixelLocal successor
+  by extending its `members` array;
+- A `.neighborRead` node can tag its trailing sink on
+  `Node.tailSinkedBody` for codegen to splice into the write path;
+- `.nativeCompute` successors are skipped because the compiler
+  can't modify an opaque kernel's write logic.
+
+Worth running after `VerticalFusion` + `KernelInlining` + `CSE`
+because those earlier passes expose new tail-sink opportunities by
+producing clusters and folding duplicates.
+
+**Boundary**: Tail Sink is a graph-rewrite that fuses bodies into
+producer kernels. It is **not** about routing the tail node's
+output into the caller-supplied drawable — that "final blit"
+question is handled separately by the dispatch layer at
+`encode(into:source:steps:writingTo:)`, not by the optimiser.
 
 ---
 

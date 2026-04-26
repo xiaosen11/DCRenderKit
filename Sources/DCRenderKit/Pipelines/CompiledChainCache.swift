@@ -16,12 +16,23 @@
 //    - `TextureAliasingPlanner.plan(...)` — interval-graph
 //      colouring, O(N × buckets).
 //
-//  Uniform values flow into nodes' `FilterUniforms` payloads but
-//  never feed any optimiser decision; the optimiser keys on node
-//  kind, signature shape, `wantsLinearInput`, consumer counts.
-//  That means a slider-drag frame produces an identical optimised
-//  graph + plan as the frame before — and the cache hits across
-//  the entire drag.
+//  Uniform values flow into nodes' `FilterUniforms` payloads.
+//  Most optimiser passes are uniform-independent: DCE,
+//  VerticalFusion, KernelInlining, and TailSink key only on node
+//  kind, signature shape, `wantsLinearInput`, and consumer counts.
+//  CSE is the exception — its `NodeSignature` equality includes
+//  uniform bytes, so a rare uniform collision can fold two nodes
+//  that would otherwise stand alone.
+//
+//  Either way, the cache fingerprint **must** include the raw
+//  uniform bytes: cached entries store the optimised nodes with
+//  their uniforms baked in, so a key that ignored uniforms would
+//  return the previous frame's graph during a slider drag and
+//  silently dispatch with stale slider values. Net effect: the
+//  cache hits frame-after-frame on stable parameters (camera
+//  preview, idle states) and correctly misses while a slider is
+//  being dragged — re-running the optimiser each drag frame to
+//  pick up the new uniforms.
 //
 //  The materialisation step (texture-pool dequeue) is *not* cached:
 //  every frame still pulls fresh textures out of `TexturePool`

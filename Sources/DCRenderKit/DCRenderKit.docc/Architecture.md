@@ -67,7 +67,7 @@ For `pipeline.process(input:steps:)` / `pipeline.encode(into:source:steps:writin
 
 ## Key cross-cutting decisions
 
-Thirteen architectural decisions anchor the design; each is
+Sixteen architectural decisions anchor the design; each is
 explained in `docs/architecture.md` §4. The highlights:
 
 - **rgba16Float intermediates** (§4.1) — no 8-bit banding in long
@@ -89,11 +89,11 @@ explained in `docs/architecture.md` §4. The highlights:
 - **Long-lived Pipeline** (§4.15) — `Pipeline` is a renderer,
   not a recipe. Create once per view; pass `source` + `steps` at
   each `encode` call. Per-frame construction wipes the cache.
-- **Frame Graph stream B optimizations** (§4.16) — DCE, CSE,
-  vertical fusion (fragment-cluster), texture aliasing, and tail
-  sink. Vertical fusion has four hard interruption conditions
-  (neighborRead, fan-out, resolution change, `final` flag);
-  everything else fuses automatically under
+- **Frame Graph stream B optimizations** (§4.16) — DCE, vertical
+  fusion, CSE, kernel inlining, tail sink, plus
+  `TextureAliasingPlanner`. Vertical fusion has four hard
+  interruption conditions (neighborRead, fan-out, resolution
+  change, `final` flag); everything else fuses automatically under
   `PipelineOptimization.full`.
 
 For the full treatment, see

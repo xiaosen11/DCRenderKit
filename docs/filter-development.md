@@ -63,10 +63,10 @@ formulas and this one fit best" — go back to Step 2.
 
 ## Part 2 — Framework integration
 
-DCRenderKit's pipeline compiler runs five structural optimisations on every filter chain: Dead Code
-Elimination (DCE), Common Sub-expression Elimination (CSE), Vertical Fusion, Texture Aliasing, and
-Tail Sink (see `docs/architecture.md §4.16`). A new filter must be designed so it participates in
-these optimisations rather than defeating them.
+DCRenderKit's pipeline compiler runs five graph rewrites on every filter chain — Dead Code
+Elimination (DCE), Vertical Fusion, Common Sub-Expression Elimination (CSE), Kernel Inlining,
+and Tail Sink — plus the `TextureAliasingPlanner` (see `docs/architecture.md §4.16`).
+A new filter must be designed so it participates in these optimisations rather than defeating them.
 
 ### 2.1 The four node kinds and their fusion behaviour
 
@@ -75,10 +75,10 @@ by what your Metal shader needs to read.
 
 | NodeKind | What it can read | GPU encoder | Fusion | Typical CPU cost |
 |----------|-----------------|-------------|--------|-----------------|
-| `pixelLocal` | only the same (x, y) pixel | Fragment | **Fuses** into adjacent `pixelLocal` nodes | ~0 marginal if fused |
+| `pixelLocal` | only the same (x, y) pixel | Compute (uber kernel) when isolated; fragment when in a Phase-8 multi-cluster chain | **Fuses** into adjacent `pixelLocal` nodes | ~0 marginal if fused |
 | `neighborRead` | any pixel within a neighbourhood | Compute | **Never fuses** | ~300 µs encoder setup |
 | `nativeCompute` | any texel, arbitrary dispatch | Compute | **Never fuses** | ~300 µs encoder setup |
-| `multiPass` | full DAG with texture dependencies | Mixed | N/A — handled by `MultiPassFilter` | Per-pass cost × N passes |
+| `multiPass` | full DAG with texture dependencies | Per-pass (compute / blit / MPS / render) | N/A — handled by `MultiPassFilter` | Per-pass cost × N passes |
 
 **Decision rule**: choose the weakest node kind that satisfies the algorithm.
 
