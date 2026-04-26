@@ -228,7 +228,7 @@ final class ComputeBackendTests: XCTestCase {
         )
         desc.usage = [.shaderRead, .shaderWrite]
         let tex = device.makeTexture(descriptor: desc)!
-        var pixel: [UInt8] = [byte, byte, byte, 255]
+        let pixel: [UInt8] = [byte, byte, byte, 255]
         pixel.withUnsafeBytes { raw in
             tex.replace(
                 region: MTLRegionMake2D(0, 0, 1, 1),

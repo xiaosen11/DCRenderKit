@@ -35,9 +35,13 @@ jobs:
 
       - name: Select Xcode
         # DCRenderKit targets Swift 6.0 / iOS 18.0+ ⇒ Xcode 16+ is
-        # the minimum. macos-15 runners default to Xcode 16.x; the
-        # explicit select guards against GitHub-infra version drift.
-        run: sudo xcode-select -s /Applications/Xcode_16.app
+        # the minimum. macos-15 runners ship Xcode 16.x; pick the
+        # highest 16.x found so the step is robust across runner-
+        # image refreshes (Xcode_16.app → Xcode_16.2.app etc.).
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_16*.app 2>/dev/null | sort -V | tail -1)
+          if [ -n "$XCODE" ]; then sudo xcode-select -s "$XCODE"; fi
+          xcodebuild -version
 
       - name: Show environment
         run: |
@@ -67,13 +71,15 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_16.app
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_16*.app 2>/dev/null | sort -V | tail -1)
+          if [ -n "$XCODE" ]; then sudo xcode-select -s "$XCODE"; fi
 
       - name: Build SDK (iOS Simulator)
         run: |
           xcodebuild build \
             -scheme DCRenderKit \
-            -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' \
+            -destination 'generic/platform=iOS Simulator' \
             -skipPackagePluginValidation
 
       - name: Build Demo (iOS Simulator)
@@ -81,7 +87,7 @@ jobs:
           xcodebuild build \
             -project Examples/DCRDemo/DCRDemo.xcodeproj \
             -scheme DCRDemo \
-            -destination 'platform=iOS Simulator,name=iPhone 16,OS=latest' \
+            -destination 'generic/platform=iOS Simulator' \
             -configuration Debug
 
   # ═══════════════════════════════════════════════════════════════
@@ -111,7 +117,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_16.app
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_16*.app 2>/dev/null | sort -V | tail -1)
+          if [ -n "$XCODE" ]; then sudo xcode-select -s "$XCODE"; fi
 
       - name: Build DocC archive
         run: |
