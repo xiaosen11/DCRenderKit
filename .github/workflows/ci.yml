@@ -58,32 +58,31 @@ jobs:
         # that audit from regressing.
         run: swift build -v -Xswiftc -warnings-as-errors
 
-      - name: swift test (without parity suspects — diagnostic)
-        # CI swift test deterministically SIGSEGVs ~250 ms after
-        # `LoweringTests/testSinglePixelLocalFilterLowers` starts on
-        # macos-15.7.4 / Xcode 16.4 / Swift 6.1.2, even though that
-        # test is pure-Swift and finishes in 0 ms. The crash arrives
-        # on a background thread — almost certainly an
-        # `addCompletedHandler` callback from an earlier test that
-        # accesses freed state.
-        #
-        # Diagnostic step 1: skip the two heavy-Metal suspects
-        # (LinearPerceptualParityTests, LegacyParityTests) and see
-        # if the rest of the suite passes. If it does, one of them
-        # is leaking an in-flight CB across teardown — narrow down
-        # in step 2.
+      # ─── swift test split into 3 process invocations ──────────
+      # Running the entire suite in a single `swift test` invocation
+      # deterministically SIGSEGVs on macos-15.7.4 / Xcode 16.4 /
+      # Swift 6.1.2 — the crash arrives on a background thread
+      # ~250 ms into LoweringTests, almost certainly from a Metal
+      # `addCompletedHandler` callback in an earlier test that
+      # accesses freed state across the test boundary.
+      #
+      # Each of the three subsets in isolation passes cleanly
+      # (verified in CI run 24958941214). Splitting into three
+      # separate `swift test` processes is therefore the fix:
+      # each invocation gets its own process state, no cross-test
+      # leakage.
+      #
+      # The split tracks the two Metal-heavy parity suites that
+      # showed up as the most likely culprits during diagnosis;
+      # subset 1 is "everything else."
+      - name: swift test — main suite
         run: swift test -v -Xswiftc -warnings-as-errors --disable-swift-testing --skip "(LinearPerceptualParity|LegacyParity)Tests"
-        continue-on-error: true
 
-      - name: swift test (only LinearPerceptualParity — diagnostic)
-        # Diagnostic step 2a: run the first suspect in isolation.
+      - name: swift test — LinearPerceptualParity
         run: swift test -v -Xswiftc -warnings-as-errors --disable-swift-testing --filter "LinearPerceptualParityTests"
-        continue-on-error: true
 
-      - name: swift test (only LegacyParity — diagnostic)
-        # Diagnostic step 2b: run the second suspect in isolation.
+      - name: swift test — LegacyParity
         run: swift test -v -Xswiftc -warnings-as-errors --disable-swift-testing --filter "LegacyParityTests"
-        continue-on-error: true
 
   ios-build:
     name: Build (iOS Simulator)
