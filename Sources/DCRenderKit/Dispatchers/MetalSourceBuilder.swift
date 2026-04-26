@@ -572,6 +572,156 @@ internal enum MetalSourceBuilder {
         return "DCR_UberCluster_\(String(hasher.finalize(), radix: 16))"
     }
 
+    // MARK: - Fragment shader build (Phase 7)
+
+    /// Result of a fragment-pipeline build. Source contains both a
+    /// trivial full-screen vertex shader and the cluster fragment
+    /// that chains every member body call. Render-pipeline caches
+    /// key off `vertexFunction` + `fragmentFunction`; the source
+    /// drives a one-time `MTLDevice.makeLibrary` call.
+    struct FragmentBuildResult: Sendable {
+        let source: String
+        let vertexFunction: String
+        let fragmentFunction: String
+        let bindings: Bindings
+    }
+
+    /// Build a vertex+fragment pair for a `.fusedPixelLocalCluster`
+    /// node whose members are all `.pixelLocalOnly`. Used by the
+    /// Phase-8 `RenderBackend` and the Phase-7 fragment-vs-compute
+    /// parity test. The fragment samples the source texture once at
+    /// the thread-position pixel coordinate, runs every member
+    /// body in order, and emits the final colour to attachment 0.
+    ///
+    /// The vertex shader is a stateless triangle-strip full-screen
+    /// quad keyed off `vertex_id` (0..3) — no vertex buffer needed,
+    /// so the dispatcher just calls `drawPrimitives(.triangleStrip,
+    /// vertexStart: 0, vertexCount: 4)`.
+    internal static func buildFragmentClusterPipeline(
+        members: [FusedClusterMember],
+        wantsLinearInput: Bool
+    ) throws -> FragmentBuildResult {
+        precondition(!members.isEmpty, "VerticalFusion should never emit an empty cluster")
+
+        // Member uniforms / bodies / helpers reuse the same
+        // dedup logic as the compute path.
+        var helperTexts: [String] = []
+        var seenHelpers: Set<String> = []
+        for member in members {
+            let blocks = FusionHelperSource.helpersForBody(named: member.body.functionName)
+            guard !blocks.isEmpty else {
+                throw BuildError.unsupportedBodyHelpers(
+                    functionName: member.body.functionName
+                )
+            }
+            for block in blocks where seenHelpers.insert(block).inserted {
+                helperTexts.append(block)
+            }
+        }
+
+        var uniformStructTexts: [String] = []
+        var seenStructs: Set<String> = []
+        for member in members where seenStructs.insert(member.body.uniformStructName).inserted {
+            do {
+                let text = try ShaderSourceExtractor.extractUniformStruct(
+                    named: member.body.uniformStructName,
+                    from: member.body.sourceText,
+                    sourceLabel: member.body.sourceLabel
+                )
+                uniformStructTexts.append(text)
+            } catch {
+                throw BuildError.extractionFailed(error)
+            }
+        }
+
+        var bodyTexts: [String] = []
+        var seenBodies: Set<String> = []
+        for member in members where seenBodies.insert(member.body.functionName).inserted {
+            do {
+                let text = try ShaderSourceExtractor.extractBody(
+                    named: member.body.functionName,
+                    from: member.body.sourceText,
+                    sourceLabel: member.body.sourceLabel
+                )
+                bodyTexts.append(text)
+            } catch {
+                throw BuildError.extractionFailed(error)
+            }
+        }
+
+        let baseName = uberFunctionName(
+            forCluster: members,
+            wantsLinearInput: wantsLinearInput
+        )
+        let vertexName = "\(baseName)_VS"
+        let fragmentName = "\(baseName)_FS"
+
+        let uniformParamList = members.enumerated().map { index, member in
+            "    constant \(member.body.uniformStructName)& u\(index) [[buffer(\(index))]]"
+        }.joined(separator: ",\n")
+
+        let bodyCallChain = members.enumerated().map { index, member in
+            "    rgb = \(member.body.functionName)(rgb, u\(index));"
+        }.joined(separator: "\n")
+
+        let memberSummary = members.map { $0.body.functionName }.joined(separator: " → ")
+
+        let source = """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        // ── Injected helpers ────────────────────────────────────────
+        \(helperTexts.joined(separator: "\n\n"))
+
+        // ── Uniform structs (deduped by name) ──────────────────────
+        \(uniformStructTexts.joined(separator: "\n\n"))
+
+        // ── Body functions (deduped by name) ───────────────────────
+        \(bodyTexts.joined(separator: "\n\n"))
+
+        // ── Vertex shader: full-screen triangle strip ─────────────
+        struct DCRFullScreenVertexOut {
+            float4 position [[position]];
+        };
+
+        vertex DCRFullScreenVertexOut \(vertexName)(uint vid [[vertex_id]]) {
+            // Triangle strip 0..3 covering NDC [-1,1] in clip space.
+            const float2 verts[4] = {
+                float2(-1.0,  1.0),
+                float2(-1.0, -1.0),
+                float2( 1.0,  1.0),
+                float2( 1.0, -1.0),
+            };
+            DCRFullScreenVertexOut out;
+            out.position = float4(verts[vid], 0.0, 1.0);
+            return out;
+        }
+
+        // ── Fragment shader: \(memberSummary) ──
+        fragment half4 \(fragmentName)(
+            DCRFullScreenVertexOut in [[stage_in]],
+            texture2d<half, access::read> source [[texture(0)]],
+        \(uniformParamList))
+        {
+            const uint2 gid = uint2(in.position.xy);
+            const half4 c = source.read(gid);
+            half3 rgb = c.rgb;
+        \(bodyCallChain)
+            return half4(rgb, c.a);
+        }
+        """
+
+        return FragmentBuildResult(
+            source: source,
+            vertexFunction: vertexName,
+            fragmentFunction: fragmentName,
+            bindings: Bindings(
+                uniformBufferCount: members.count,
+                auxiliaryTextureSlotCount: 0
+            )
+        )
+    }
+
     // MARK: - Uber-kernel naming
 
     /// Deterministic name for the uber kernel of the given body,
