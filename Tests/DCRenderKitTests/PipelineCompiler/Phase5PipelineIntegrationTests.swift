@@ -290,13 +290,15 @@ final class Phase5PipelineIntegrationTests: XCTestCase {
 
     /// LUT3D is a pixel-local filter but its signature shape is
     /// `.pixelLocalWithLUT3D`, not `.pixelLocalOnly`. VerticalFusion
-    /// only merges members of matching signature shape (Phase 3
-    /// step 3c lock), so a chain `[Exposure, LUT3D, Saturation]`
-    /// stays as three independent nodes — not one cluster — under
-    /// `.full`. All three land in the compiler path (eligible
-    /// kinds), just as separate dispatches.
-    func testLUT3DBreaksVerticalFusion() throws {
-        // Minimal identity 2³ LUT cube payload.
+    /// still cannot merge it with surrounding pixel-local filters
+    /// (the Phase-3 step-3c shape-match lock), so a chain
+    /// `[Exposure, LUT3D, Saturation]` lowers to three independent
+    /// `.pixelLocal` nodes. Phase 8's chain detection routes all
+    /// three through one render pass — the LUT3D fragment now has
+    /// chain-mode codegen so it can sit between Exposure (init)
+    /// and Saturation (chain). Three render PSOs land in the
+    /// fragment cache; the compute uber kernel cache stays empty.
+    func testLUT3DChainsThroughFragmentPath() throws {
         let identity2Cube: [Float] = [
             0, 0, 0, 1,  1, 0, 0, 1,
             0, 1, 0, 1,  1, 1, 0, 1,
@@ -316,13 +318,19 @@ final class Phase5PipelineIntegrationTests: XCTestCase {
             optimization: .full
         )
 
-        let before = UberKernelCache.shared.cachedPipelineCount
+        let computeBefore = UberKernelCache.shared.cachedPipelineCount
+        let renderBefore = UberRenderPipelineCache.shared.cachedPipelineCount
         _ = try pipeline.outputSync()
-        let after = UberKernelCache.shared.cachedPipelineCount
+        let computeDelta = UberKernelCache.shared.cachedPipelineCount - computeBefore
+        let renderDelta = UberRenderPipelineCache.shared.cachedPipelineCount - renderBefore
 
         XCTAssertEqual(
-            after - before, 3,
-            "LUT3D's distinct signature shape should stop VerticalFusion — expected three uber kernels in the chain, got Δ=\(after - before)."
+            computeDelta, 0,
+            "Phase 8's mixed-shape chain should never touch the compute uber-kernel cache; got compute=\(computeDelta)."
+        )
+        XCTAssertEqual(
+            renderDelta, 3,
+            "Three distinct fragment shaders (Exposure init + LUT3D chain + Saturation chain) should populate the render PSO cache; got render=\(renderDelta)."
         )
     }
 

@@ -583,16 +583,26 @@ internal enum MetalSourceBuilder {
         case chain
     }
 
-    /// Result of a fragment-pipeline build. Source carries both
-    /// fragment variants — `_init` (samples source) and `_chain`
-    /// (programmable-blending input from the running attachment) —
-    /// plus the shared full-screen vertex shader. The dispatcher
-    /// picks which fragment to bind via the variant-keyed PSO cache.
+    /// Result of a fragment-pipeline build. Source carries the
+    /// init fragment (samples source) and — for chain-eligible
+    /// shapes — the chain fragment (programmable-blending input
+    /// from the running attachment), plus the shared full-screen
+    /// vertex shader.
+    ///
+    /// `chainFragmentFunction` is `nil` for shapes that cannot
+    /// participate in chained dispatch — currently only
+    /// `.neighborReadWithSource`, whose body samples the source
+    /// at offsets and therefore cannot operate on a programmable-
+    /// blending input that exposes only the current pixel value.
+    /// Such clusters can still serve as the FIRST draw of a
+    /// render-pass batch (init mode); subsequent draws must come
+    /// from chain-eligible shapes.
     struct FragmentBuildResult: Sendable {
         let source: String
         let vertexFunction: String
         let initFragmentFunction: String
-        let chainFragmentFunction: String
+        let chainFragmentFunction: String?
+        let signatureShape: FusionBodySignatureShape
         let bindings: Bindings
     }
 
@@ -659,6 +669,17 @@ internal enum MetalSourceBuilder {
             }
         }
 
+        let shape = members.first!.body.signatureShape
+        // Every cluster member shares one `signatureShape` by
+        // VerticalFusion's same-shape guard; defensive sanity check
+        // so a hand-built cluster that violates the invariant is
+        // surfaced instead of silently emitting wrong shader source.
+        for member in members where member.body.signatureShape != shape {
+            throw BuildError.unsupportedNodeKind(
+                "fragment cluster requires uniform signatureShape; mixed \(shape) and \(member.body.signatureShape)"
+            )
+        }
+
         let baseName = uberFunctionName(
             forCluster: members,
             wantsLinearInput: wantsLinearInput
@@ -671,11 +692,166 @@ internal enum MetalSourceBuilder {
             "    constant \(member.body.uniformStructName)& u\(index) [[buffer(\(index))]]"
         }.joined(separator: ",\n")
 
-        let bodyCallChain = members.enumerated().map { index, member in
-            "    rgb = \(member.body.functionName)(rgb, u\(index));"
-        }.joined(separator: "\n")
-
         let memberSummary = members.map { $0.body.functionName }.joined(separator: " → ")
+
+        // Per-shape fragment emission. Each branch defines:
+        //   • initFragment  — samples source texture, applies body chain
+        //   • chainFragment — programmable-blending input (.color(0)),
+        //     applies body chain. `nil` for non-chainable shapes.
+        let initFragment: String
+        let chainFragment: String?
+        let auxTextureCount: Int
+
+        switch shape {
+        case .pixelLocalOnly:
+            let calls = members.enumerated().map { i, m in
+                "    rgb = \(m.body.functionName)(rgb, u\(i));"
+            }.joined(separator: "\n")
+            initFragment = """
+            // ── Fragment (init, pixelLocalOnly): samples source ──────
+            // Cluster: \(memberSummary)
+            fragment half4 \(initFragmentName)(
+                DCRFullScreenVertexOut in [[stage_in]],
+                texture2d<half, access::read> source [[texture(0)]],
+            \(uniformParamList))
+            {
+                const uint2 gid = uint2(in.position.xy);
+                const half4 c = source.read(gid);
+                half3 rgb = c.rgb;
+            \(calls)
+                return half4(rgb, c.a);
+            }
+            """
+            chainFragment = """
+            // ── Fragment (chain, pixelLocalOnly): programmable blend ─
+            // Cluster: \(memberSummary)
+            fragment half4 \(chainFragmentName)(
+                DCRFullScreenVertexOut in [[stage_in]],
+                half4 prev [[color(0)]],
+            \(uniformParamList))
+            {
+                half3 rgb = prev.rgb;
+            \(calls)
+                return half4(rgb, prev.a);
+            }
+            """
+            auxTextureCount = 0
+
+        case .pixelLocalWithLUT3D:
+            // body signature: rgb = body(rgb, u, gid, lut)
+            let calls = members.enumerated().map { i, m in
+                "    rgb = \(m.body.functionName)(rgb, u\(i), gid, lut);"
+            }.joined(separator: "\n")
+            initFragment = """
+            // ── Fragment (init, pixelLocalWithLUT3D) ──────────────────
+            // Cluster: \(memberSummary)
+            fragment half4 \(initFragmentName)(
+                DCRFullScreenVertexOut in [[stage_in]],
+                texture2d<half, access::read> source [[texture(0)]],
+                texture3d<float, access::read> lut [[texture(1)]],
+            \(uniformParamList))
+            {
+                const uint2 gid = uint2(in.position.xy);
+                const half4 c = source.read(gid);
+                half3 rgb = c.rgb;
+            \(calls)
+                return half4(rgb, c.a);
+            }
+            """
+            chainFragment = """
+            // ── Fragment (chain, pixelLocalWithLUT3D) ─────────────────
+            // Cluster: \(memberSummary)
+            fragment half4 \(chainFragmentName)(
+                DCRFullScreenVertexOut in [[stage_in]],
+                half4 prev [[color(0)]],
+                texture3d<float, access::read> lut [[texture(0)]],
+            \(uniformParamList))
+            {
+                const uint2 gid = uint2(in.position.xy);
+                half3 rgb = prev.rgb;
+            \(calls)
+                return half4(rgb, prev.a);
+            }
+            """
+            auxTextureCount = 1
+
+        case .pixelLocalWithOverlay:
+            // body signature: rgba = body(rgba, u, gid, overlay, outputSize)
+            // Returns half4 (Porter-Duff alpha math). NormalBlend
+            // body forwards source alpha through the composite.
+            let calls = members.enumerated().map { i, m in
+                "    rgba = \(m.body.functionName)(rgba, u\(i), gid, overlay, outputSize);"
+            }.joined(separator: "\n")
+            // outputSize is bound as a small uniform buffer at slot
+            // `members.count` (right after the per-member uniforms).
+            let outputSizeBuffer = members.count
+            initFragment = """
+            // ── Fragment (init, pixelLocalWithOverlay) ────────────────
+            // Cluster: \(memberSummary)
+            fragment half4 \(initFragmentName)(
+                DCRFullScreenVertexOut in [[stage_in]],
+                texture2d<half, access::read> source [[texture(0)]],
+                texture2d<half, access::read> overlay [[texture(1)]],
+            \(uniformParamList),
+                constant uint2& outputSize [[buffer(\(outputSizeBuffer))]])
+            {
+                const uint2 gid = uint2(in.position.xy);
+                half4 rgba = source.read(gid);
+            \(calls)
+                return rgba;
+            }
+            """
+            chainFragment = """
+            // ── Fragment (chain, pixelLocalWithOverlay) ───────────────
+            // Cluster: \(memberSummary)
+            fragment half4 \(chainFragmentName)(
+                DCRFullScreenVertexOut in [[stage_in]],
+                half4 prev [[color(0)]],
+                texture2d<half, access::read> overlay [[texture(0)]],
+            \(uniformParamList),
+                constant uint2& outputSize [[buffer(\(outputSizeBuffer))]])
+            {
+                const uint2 gid = uint2(in.position.xy);
+                half4 rgba = prev;
+            \(calls)
+                return rgba;
+            }
+            """
+            auxTextureCount = 1
+
+        case .neighborReadWithSource:
+            // body signature: rgb = body(rgb, u, gid, source).
+            // The body samples `source` at offsets, so chain mode is
+            // not viable — programmable blending exposes only the
+            // current pixel of the running attachment. Init only.
+            let calls = members.enumerated().map { i, m in
+                "    rgb = \(m.body.functionName)(rgb, u\(i), gid, source);"
+            }.joined(separator: "\n")
+            initFragment = """
+            // ── Fragment (init, neighborReadWithSource) ───────────────
+            // Cluster: \(memberSummary)
+            fragment half4 \(initFragmentName)(
+                DCRFullScreenVertexOut in [[stage_in]],
+                texture2d<half, access::read> source [[texture(0)]],
+            \(uniformParamList))
+            {
+                const uint2 gid = uint2(in.position.xy);
+                const half4 c = source.read(gid);
+                half3 rgb = c.rgb;
+            \(calls)
+                return half4(rgb, c.a);
+            }
+            """
+            chainFragment = nil
+            auxTextureCount = 0
+
+        case .pixelLocalWithGid:
+            // No SDK filter uses this shape today; surface the miss
+            // rather than emit untested source.
+            throw BuildError.unsupportedSignatureShape(shape)
+        }
+
+        let chainFragmentText = chainFragment ?? "// chain variant not emitted for shape \(shape)"
 
         let source = """
         #include <metal_stdlib>
@@ -696,7 +872,6 @@ internal enum MetalSourceBuilder {
         };
 
         vertex DCRFullScreenVertexOut \(vertexName)(uint vid [[vertex_id]]) {
-            // Triangle strip 0..3 covering NDC [-1,1] in clip space.
             const float2 verts[4] = {
                 float2(-1.0,  1.0),
                 float2(-1.0, -1.0),
@@ -708,48 +883,20 @@ internal enum MetalSourceBuilder {
             return out;
         }
 
-        // ── Fragment shader (init): samples source texture ─────────
-        // Used as draw 0 of a render pass — initialises the colour
-        // attachment with the input image, then applies every body.
-        // Cluster: \(memberSummary)
-        fragment half4 \(initFragmentName)(
-            DCRFullScreenVertexOut in [[stage_in]],
-            texture2d<half, access::read> source [[texture(0)]],
-        \(uniformParamList))
-        {
-            const uint2 gid = uint2(in.position.xy);
-            const half4 c = source.read(gid);
-            half3 rgb = c.rgb;
-        \(bodyCallChain)
-            return half4(rgb, c.a);
-        }
+        \(initFragment)
 
-        // ── Fragment shader (chain): programmable-blending input ──
-        // Used by every draw after draw 0 inside a Phase-8 chained
-        // render pass. Reads the running colour attachment via the
-        // `[[color(0)]]` blending input — TBDR keeps that value in
-        // tile memory across draws, so no intermediate texture is
-        // allocated between cluster boundaries.
-        // Cluster: \(memberSummary)
-        fragment half4 \(chainFragmentName)(
-            DCRFullScreenVertexOut in [[stage_in]],
-            half4 prev [[color(0)]],
-        \(uniformParamList))
-        {
-            half3 rgb = prev.rgb;
-        \(bodyCallChain)
-            return half4(rgb, prev.a);
-        }
+        \(chainFragmentText)
         """
 
         return FragmentBuildResult(
             source: source,
             vertexFunction: vertexName,
             initFragmentFunction: initFragmentName,
-            chainFragmentFunction: chainFragmentName,
+            chainFragmentFunction: chainFragment != nil ? chainFragmentName : nil,
+            signatureShape: shape,
             bindings: Bindings(
                 uniformBufferCount: members.count,
-                auxiliaryTextureSlotCount: 0
+                auxiliaryTextureSlotCount: auxTextureCount
             )
         )
     }

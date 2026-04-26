@@ -109,6 +109,7 @@ internal enum RenderBackend {
         clusters: [Node],
         source: MTLTexture,
         destination: MTLTexture,
+        clusterAuxiliaryTextures: [[MTLTexture]] = [],
         commandBuffer: MTLCommandBuffer,
         renderCache: UberRenderPipelineCache = .shared
     ) throws {
@@ -132,9 +133,6 @@ internal enum RenderBackend {
             case let .fusedPixelLocalCluster(members, wantsLinear, _):
                 extracted = (members, wantsLinear)
             case let .pixelLocal(body, uniforms, wantsLinear, _):
-                // A single pixel-local node is a degenerate one-
-                // member cluster — synthesise the member so the
-                // fragment-cluster builder can reuse the same path.
                 let synth = FusedClusterMember(
                     body: body,
                     uniforms: uniforms,
@@ -142,22 +140,51 @@ internal enum RenderBackend {
                     additionalRange: 0..<0
                 )
                 extracted = ([synth], wantsLinear)
+            case let .neighborRead(body, uniforms, _, _):
+                guard drawIndex == 0 else {
+                    encoder.endEncoding()
+                    throw DispatchError.unsupportedNodeKind(
+                        ".neighborRead can only be the init draw — its body samples source at offsets, which programmable-blending input cannot provide"
+                    )
+                }
+                let synth = FusedClusterMember(
+                    body: body,
+                    uniforms: uniforms,
+                    debugLabel: cluster.debugLabel,
+                    additionalRange: 0..<0
+                )
+                extracted = ([synth], false)
             default:
                 encoder.endEncoding()
                 throw DispatchError.unsupportedNodeKind(String(describing: cluster.kind))
             }
             let members = extracted.members
             let wantsLinear = extracted.wantsLinear
+            let auxTextures: [MTLTexture] =
+                drawIndex < clusterAuxiliaryTextures.count
+                    ? clusterAuxiliaryTextures[drawIndex]
+                    : []
 
             let built = try MetalSourceBuilder.buildFragmentClusterPipeline(
                 members: members,
                 wantsLinearInput: wantsLinear
             )
+            let isInit = (drawIndex == 0)
+            let fragmentFn: String
+            if isInit {
+                fragmentFn = built.initFragmentFunction
+            } else {
+                guard let chainFn = built.chainFragmentFunction else {
+                    encoder.endEncoding()
+                    throw DispatchError.unsupportedNodeKind(
+                        "shape \(built.signatureShape) has no chain variant; cannot occupy non-init position"
+                    )
+                }
+                fragmentFn = chainFn
+            }
             let variant: MetalSourceBuilder.FragmentClusterVariant =
-                (drawIndex == 0) ? .`init` : .chain
-            let fragmentFn: String =
-                (drawIndex == 0) ? built.initFragmentFunction
-                                  : built.chainFragmentFunction
+                isInit ? .`init` : .chain
+
             let key = UberRenderPipelineCache.Key(
                 vertexFunction: built.vertexFunction,
                 fragmentFunction: fragmentFn,
@@ -167,19 +194,15 @@ internal enum RenderBackend {
             let pso = try renderCache.pipelineState(source: built.source, key: key)
             encoder.setRenderPipelineState(pso)
 
-            // Init draw needs the source texture; chain draws read
-            // the running attachment via programmable blending and
-            // never bind a fragment texture.
-            if drawIndex == 0 {
-                encoder.setFragmentTexture(source, index: 0)
-            }
-            for (uniformIndex, member) in members.enumerated() {
-                try bindFragmentUniform(
-                    member.uniforms,
-                    at: uniformIndex,
-                    encoder: encoder
-                )
-            }
+            try bindFragmentResources(
+                shape: built.signatureShape,
+                isInit: isInit,
+                source: source,
+                members: members,
+                auxTextures: auxTextures,
+                destination: destination,
+                encoder: encoder
+            )
 
             encoder.drawPrimitives(
                 type: .triangleStrip,
@@ -196,7 +219,9 @@ internal enum RenderBackend {
                         "nodeLabel": cluster.debugLabel,
                         "drawIndex": "\(drawIndex)",
                         "variant": (variant == .`init`) ? "init" : "chain",
+                        "shape": Self.shapeTag(built.signatureShape),
                         "memberCount": "\(members.count)",
+                        "auxCount": "\(auxTextures.count)",
                         "cache": cacheHit ? "hit" : "miss",
                     ]
                 )
@@ -214,6 +239,99 @@ internal enum RenderBackend {
                     "savedIntermediates": "\(max(clusters.count - 1, 0))",
                 ]
             )
+        }
+    }
+
+    /// Bind fragment textures + per-member uniforms + (NormalBlend
+    /// only) the destination dimensions, per the codegen's slot
+    /// conventions. Texture slots are pinned by
+    /// `MetalSourceBuilder.buildFragmentClusterPipeline`.
+    private static func bindFragmentResources(
+        shape: FusionBodySignatureShape,
+        isInit: Bool,
+        source: MTLTexture,
+        members: [FusedClusterMember],
+        auxTextures: [MTLTexture],
+        destination: MTLTexture,
+        encoder: MTLRenderCommandEncoder
+    ) throws {
+        switch shape {
+        case .pixelLocalOnly:
+            if isInit {
+                encoder.setFragmentTexture(source, index: 0)
+            }
+
+        case .pixelLocalWithLUT3D:
+            guard let lut = auxTextures.first else {
+                throw DispatchError.unsupportedNodeKind(
+                    ".pixelLocalWithLUT3D requires an aux LUT texture; got 0"
+                )
+            }
+            if isInit {
+                encoder.setFragmentTexture(source, index: 0)
+                encoder.setFragmentTexture(lut, index: 1)
+            } else {
+                encoder.setFragmentTexture(lut, index: 0)
+            }
+
+        case .pixelLocalWithOverlay:
+            guard let overlay = auxTextures.first else {
+                throw DispatchError.unsupportedNodeKind(
+                    ".pixelLocalWithOverlay requires an aux overlay texture; got 0"
+                )
+            }
+            if isInit {
+                encoder.setFragmentTexture(source, index: 0)
+                encoder.setFragmentTexture(overlay, index: 1)
+            } else {
+                encoder.setFragmentTexture(overlay, index: 0)
+            }
+
+        case .neighborReadWithSource:
+            // Init only — caller already enforces.
+            encoder.setFragmentTexture(source, index: 0)
+
+        case .pixelLocalWithGid:
+            throw DispatchError.unsupportedNodeKind(
+                ".pixelLocalWithGid has no fragment codegen yet"
+            )
+        }
+
+        for (index, member) in members.enumerated() {
+            try bindFragmentUniform(
+                member.uniforms,
+                at: index,
+                encoder: encoder
+            )
+        }
+
+        if shape == .pixelLocalWithOverlay {
+            // NormalBlend's body needs `outputSize` (uint2) to map
+            // overlay coordinates to destination pixel space. The
+            // codegen wires it as a buffer at slot members.count;
+            // values come from the destination's dimensions.
+            var size = SIMD2<UInt32>(
+                UInt32(destination.width),
+                UInt32(destination.height)
+            )
+            withUnsafeBytes(of: &size) { raw in
+                encoder.setFragmentBytes(
+                    raw.baseAddress!,
+                    length: MemoryLayout<SIMD2<UInt32>>.size,
+                    index: members.count
+                )
+            }
+        }
+    }
+
+    /// Compact tag for a signature shape, used in diagnostic logs.
+    private static func shapeTag(_ shape: FusionBodySignatureShape) -> String {
+        switch shape {
+        case .pixelLocalOnly:         return "pxlOnly"
+        case .pixelLocalWithGid:      return "pxlGid"
+        case .pixelLocalWithLUT3D:    return "lut3D"
+        case .pixelLocalWithOverlay:  return "overlay"
+        case .neighborReadWithSource: return "neighborRead"
         }
     }
 

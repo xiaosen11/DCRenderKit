@@ -547,6 +547,7 @@ public final class Pipeline: @unchecked Sendable {
                     nodes: chain,
                     source: source,
                     allocation: allocation,
+                    globalAdditional: globalAdditional,
                     commandBuffer: commandBuffer
                 )
                 i += chain.count
@@ -735,7 +736,7 @@ public final class Pipeline: @unchecked Sendable {
         startIndex: Int
     ) -> [Node] {
         let head = graph.nodes[startIndex]
-        guard Self.isFragmentChainEligible(head) else {
+        guard Self.isChainInitEligible(head) else {
             return [head]
         }
         let consumers = Self.consumerCounts(graph: graph)
@@ -744,15 +745,10 @@ public final class Pipeline: @unchecked Sendable {
         var cursor = startIndex + 1
         while cursor < graph.nodes.count {
             let candidate = graph.nodes[cursor]
-            guard Self.isFragmentChainEligible(candidate) else { break }
+            guard Self.isChainContinuationEligible(candidate) else { break }
             guard let prevNode = chain.last else { break }
-            // The previous node must have exactly one consumer (the
-            // candidate) and must not be the pipeline final — its
-            // output otherwise needs to be physically materialised.
             if prevNode.isFinal { break }
             if (consumers[lastID] ?? 0) != 1 { break }
-            // The candidate must read the previous node as its
-            // primary and only input.
             guard candidate.inputs == [.node(lastID)] else { break }
             chain.append(candidate)
             lastID = candidate.id
@@ -761,25 +757,40 @@ public final class Pipeline: @unchecked Sendable {
         return chain
     }
 
-    /// `true` if `node` can take part in a Phase-8 fragment render-
-    /// chain. Today the chain shader emits the
-    /// `body(rgb, uN)` call signature, which restricts membership
-    /// to `.pixelLocalOnly`-shape bodies — either as a `.pixelLocal`
-    /// node or as a `.fusedPixelLocalCluster` of such bodies.
-    /// Other shapes (LUT3D's aux texture, NormalBlend's overlay,
-    /// neighbour-read filters) need different fragment signatures
-    /// and stay on the per-node compute path.
-    private static func isFragmentChainEligible(_ node: Node) -> Bool {
+    /// `true` if `node` can serve as the FIRST (init) draw of a
+    /// fragment render chain. Every `.pixelLocal` shape and every
+    /// `.fusedPixelLocalCluster` qualifies; `.neighborRead` also
+    /// qualifies as init-only because its body samples the source
+    /// texture directly. Multi-pass `.nativeCompute` and
+    /// downsample / upsample / blend nodes never join a fragment
+    /// pass — they need a separate compute encoder.
+    private static func isChainInitEligible(_ node: Node) -> Bool {
         switch node.kind {
         case .fusedPixelLocalCluster:
-            // VerticalFusion's same-shape guard means every member
-            // of an existing cluster shares one signatureShape;
-            // the codegen for `buildFragmentClusterPipeline` is
-            // exclusively `.pixelLocalOnly`-shaped, so any cluster
-            // that reaches us is eligible.
             return true
-        case let .pixelLocal(body, _, _, aux):
-            return body.signatureShape == .pixelLocalOnly && aux.isEmpty
+        case let .pixelLocal(body, _, _, _):
+            return body.signatureShape != .pixelLocalWithGid
+        case let .neighborRead(body, _, _, _):
+            return body.signatureShape == .neighborReadWithSource
+        default:
+            return false
+        }
+    }
+
+    /// `true` if `node` can occupy a non-first position in a
+    /// fragment render chain. Programmable-blending input gives
+    /// only the current pixel, which excludes any body that needs
+    /// to sample a source neighbourhood — i.e. `.neighborRead`
+    /// drops out here and a chain ends at the first such node.
+    private static func isChainContinuationEligible(_ node: Node) -> Bool {
+        switch node.kind {
+        case .fusedPixelLocalCluster:
+            return true
+        case let .pixelLocal(body, _, _, _):
+            return body.signatureShape != .pixelLocalWithGid
+                && body.signatureShape != .neighborReadWithSource
+        case .neighborRead:
+            return false
         default:
             return false
         }
@@ -812,6 +823,7 @@ public final class Pipeline: @unchecked Sendable {
         nodes: [Node],
         source: MTLTexture,
         allocation: LifetimeAwareTextureAllocator.Allocation,
+        globalAdditional: [MTLTexture],
         commandBuffer: MTLCommandBuffer
     ) throws {
         guard let head = nodes.first, let tail = nodes.last else { return }
@@ -820,7 +832,7 @@ public final class Pipeline: @unchecked Sendable {
             ref: primaryRef,
             source: source,
             allocation: allocation,
-            globalAdditional: [],
+            globalAdditional: globalAdditional,
             context: head.debugLabel
         )
         guard let chainDestination = allocation.mapping[tail.id] else {
@@ -828,6 +840,27 @@ public final class Pipeline: @unchecked Sendable {
                 filterName: tail.debugLabel,
                 reason: "allocator has no destination texture for chain tail node \(tail.id)"
             ))
+        }
+
+        // Resolve aux textures per-cluster (LUT3D needs its lut,
+        // NormalBlend needs its overlay, etc.). Each entry is the
+        // ordered list of aux MTLTextures referenced by that
+        // cluster's `.additional(i)` refs.
+        var clusterAux: [[MTLTexture]] = []
+        clusterAux.reserveCapacity(nodes.count)
+        for node in nodes {
+            let auxRefs = Self.auxRefs(of: node)
+            var resolved: [MTLTexture] = []
+            for ref in auxRefs {
+                resolved.append(try resolveCompilerInput(
+                    ref: ref,
+                    source: source,
+                    allocation: allocation,
+                    globalAdditional: globalAdditional,
+                    context: node.debugLabel
+                ))
+            }
+            clusterAux.append(resolved)
         }
 
         if DCRLogging.diagnosticPipelineLogging {
@@ -845,8 +878,21 @@ public final class Pipeline: @unchecked Sendable {
             clusters: nodes,
             source: chainSource,
             destination: chainDestination,
+            clusterAuxiliaryTextures: clusterAux,
             commandBuffer: commandBuffer
         )
+    }
+
+    /// Pull a node's auxiliary `NodeRef` list (LUT, overlay, mask,
+    /// per-cluster aux). Centralised so chain-aux resolution and
+    /// per-node compute dispatch stay in sync.
+    private static func auxRefs(of node: Node) -> [NodeRef] {
+        switch node.kind {
+        case let .pixelLocal(_, _, _, aux):              return aux
+        case let .neighborRead(_, _, _, aux):            return aux
+        case let .fusedPixelLocalCluster(_, _, aux):     return aux
+        default:                                          return []
+        }
     }
 
     /// Translate a `NodeRef` carried inside a compiler-path node into
