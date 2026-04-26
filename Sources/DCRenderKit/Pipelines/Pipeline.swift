@@ -531,14 +531,35 @@ public final class Pipeline: @unchecked Sendable {
 
         let globalAdditional = collectGlobalAdditionalInputs(from: steps)
 
-        for node in graph.nodes {
-            try dispatchCompilerNode(
-                node: node,
-                source: source,
-                allocation: allocation,
-                globalAdditional: globalAdditional,
-                commandBuffer: commandBuffer
+        // Phase 8: walk the graph in declaration order, batching
+        // contiguous runs of `.fusedPixelLocalCluster` nodes (where
+        // each cluster is the sole consumer of the previous) into a
+        // single chained render pass. Single-element batches and
+        // every other node kind fall through to per-node dispatch.
+        var i = 0
+        while i < graph.nodes.count {
+            let chain = collectFragmentChain(
+                graph: graph,
+                startIndex: i
             )
+            if chain.count >= 2 {
+                try dispatchFragmentChain(
+                    nodes: chain,
+                    source: source,
+                    allocation: allocation,
+                    commandBuffer: commandBuffer
+                )
+                i += chain.count
+            } else {
+                try dispatchCompilerNode(
+                    node: graph.nodes[i],
+                    source: source,
+                    allocation: allocation,
+                    globalAdditional: globalAdditional,
+                    commandBuffer: commandBuffer
+                )
+                i += 1
+            }
         }
 
         allocator.scheduleRelease(allocation, commandBuffer: commandBuffer)
@@ -690,6 +711,142 @@ public final class Pipeline: @unchecked Sendable {
                 reason: "compiler-path dispatch does not handle node kind \(node.kind)"
             ))
         }
+    }
+
+    /// Phase 8: scan forward from `startIndex` collecting a
+    /// contiguous run of `.fusedPixelLocalCluster` nodes where each
+    /// cluster's only consumer is the next cluster (no fan-out, no
+    /// foreign reads of the intermediate output). The first
+    /// out-of-shape node ends the run.
+    ///
+    /// Constraints for chaining inside one render pass:
+    ///
+    /// 1. Every node is `.fusedPixelLocalCluster`.
+    /// 2. Each non-final cluster has exactly one consumer in the
+    ///    whole graph, and that consumer is the next cluster — this
+    ///    means the cluster's output is never read elsewhere, so
+    ///    there's no need to materialise it as a real texture.
+    /// 3. The next cluster's primary input is `.node(prev.id)`.
+    ///
+    /// Returns at most one node when no chain is available — the
+    /// caller treats that as "single-node, dispatch normally".
+    private func collectFragmentChain(
+        graph: PipelineGraph,
+        startIndex: Int
+    ) -> [Node] {
+        let head = graph.nodes[startIndex]
+        guard Self.isFragmentChainEligible(head) else {
+            return [head]
+        }
+        let consumers = Self.consumerCounts(graph: graph)
+        var chain: [Node] = [head]
+        var lastID = head.id
+        var cursor = startIndex + 1
+        while cursor < graph.nodes.count {
+            let candidate = graph.nodes[cursor]
+            guard Self.isFragmentChainEligible(candidate) else { break }
+            guard let prevNode = chain.last else { break }
+            // The previous node must have exactly one consumer (the
+            // candidate) and must not be the pipeline final — its
+            // output otherwise needs to be physically materialised.
+            if prevNode.isFinal { break }
+            if (consumers[lastID] ?? 0) != 1 { break }
+            // The candidate must read the previous node as its
+            // primary and only input.
+            guard candidate.inputs == [.node(lastID)] else { break }
+            chain.append(candidate)
+            lastID = candidate.id
+            cursor += 1
+        }
+        return chain
+    }
+
+    /// `true` if `node` can take part in a Phase-8 fragment render-
+    /// chain. Today the chain shader emits the
+    /// `body(rgb, uN)` call signature, which restricts membership
+    /// to `.pixelLocalOnly`-shape bodies — either as a `.pixelLocal`
+    /// node or as a `.fusedPixelLocalCluster` of such bodies.
+    /// Other shapes (LUT3D's aux texture, NormalBlend's overlay,
+    /// neighbour-read filters) need different fragment signatures
+    /// and stay on the per-node compute path.
+    private static func isFragmentChainEligible(_ node: Node) -> Bool {
+        switch node.kind {
+        case .fusedPixelLocalCluster:
+            // VerticalFusion's same-shape guard means every member
+            // of an existing cluster shares one signatureShape;
+            // the codegen for `buildFragmentClusterPipeline` is
+            // exclusively `.pixelLocalOnly`-shaped, so any cluster
+            // that reaches us is eligible.
+            return true
+        case let .pixelLocal(body, _, _, aux):
+            return body.signatureShape == .pixelLocalOnly && aux.isEmpty
+        default:
+            return false
+        }
+    }
+
+    /// Tally how many other nodes reference each node's output.
+    /// Mirrors the helper `VerticalFusion` / `KernelInlining` use,
+    /// duplicated here to keep `Pipeline` self-contained.
+    private static func consumerCounts(graph: PipelineGraph) -> [NodeID: Int] {
+        var counts: [NodeID: Int] = [:]
+        for node in graph.nodes {
+            for ref in node.dependencyRefs {
+                if case .node(let id) = ref {
+                    counts[id, default: 0] += 1
+                }
+            }
+        }
+        return counts
+    }
+
+    /// Phase 8 chained dispatch: encode `nodes` into one render
+    /// pass via `RenderBackend.executeChain`. The first node's
+    /// primary input feeds draw 0 (sampled), every subsequent
+    /// cluster reads the running attachment via programmable
+    /// blending. Only the final cluster's destination texture is
+    /// physically materialised — intermediate cluster outputs that
+    /// the allocator allocated stay live as buckets but receive no
+    /// writes (returned to the pool on CB completion).
+    private func dispatchFragmentChain(
+        nodes: [Node],
+        source: MTLTexture,
+        allocation: LifetimeAwareTextureAllocator.Allocation,
+        commandBuffer: MTLCommandBuffer
+    ) throws {
+        guard let head = nodes.first, let tail = nodes.last else { return }
+        let primaryRef = head.inputs.first ?? .source
+        let chainSource = try resolveCompilerInput(
+            ref: primaryRef,
+            source: source,
+            allocation: allocation,
+            globalAdditional: [],
+            context: head.debugLabel
+        )
+        guard let chainDestination = allocation.mapping[tail.id] else {
+            throw PipelineError.filter(.invalidPassGraph(
+                filterName: tail.debugLabel,
+                reason: "allocator has no destination texture for chain tail node \(tail.id)"
+            ))
+        }
+
+        if DCRLogging.diagnosticPipelineLogging {
+            DCRLogging.logger.debug(
+                "chain detected",
+                category: "PipelineCompiler",
+                attributes: [
+                    "length": "\(nodes.count)",
+                    "head": head.debugLabel,
+                    "tail": tail.debugLabel,
+                ]
+            )
+        }
+        try RenderBackend.executeChain(
+            clusters: nodes,
+            source: chainSource,
+            destination: chainDestination,
+            commandBuffer: commandBuffer
+        )
     }
 
     /// Translate a `NodeRef` carried inside a compiler-path node into

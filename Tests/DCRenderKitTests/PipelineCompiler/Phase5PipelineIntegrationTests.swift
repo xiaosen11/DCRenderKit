@@ -54,9 +54,12 @@ final class Phase5PipelineIntegrationTests: XCTestCase {
         textureLoader = TextureLoader(device: d)
 
         // Cached entries from prior tests would mask the codegen-
-        // triggered growth we want to observe; clearing ensures the
-        // delta is an unambiguous signal.
+        // triggered growth we want to observe; clearing both PSO
+        // caches ensures the delta is an unambiguous signal even
+        // when earlier tests in the suite ran the .none / chain
+        // paths that populate `UberRenderPipelineCache`.
         UberKernelCache.shared.clear()
+        UberRenderPipelineCache.shared.clear()
     }
 
     override func tearDown() {
@@ -130,10 +133,14 @@ final class Phase5PipelineIntegrationTests: XCTestCase {
         XCTAssertTrue(px.r.isFinite && px.g.isFinite && px.b.isFinite)
     }
 
-    /// With `.none` the optimiser is bypassed and each filter
-    /// dispatches through its own uber kernel. Same chain, same
-    /// output (modulo Float16 rounding), but three PSOs land in the
-    /// cache instead of one.
+    /// With `.none` the optimiser is bypassed: the three filters
+    /// stay as three independent `.pixelLocal` nodes (no
+    /// `VerticalFusion` clustering). Phase 8's chain detection
+    /// recognises adjacent fragment-eligible nodes and routes the
+    /// run through a single render pass — the per-filter PSOs land
+    /// in `UberRenderPipelineCache`, not `UberKernelCache`.
+    /// Combined cache delta is still three (one PSO per filter
+    /// body / variant pair).
     func testThreeFilterChainStaysSeparateUnderNone() throws {
         let source = try makeSolidTexture(width: 16, height: 16, red: 0.5)
         let pipeline = makePipeline(
@@ -146,13 +153,19 @@ final class Phase5PipelineIntegrationTests: XCTestCase {
             optimization: .none
         )
 
-        let before = UberKernelCache.shared.cachedPipelineCount
+        let computeBefore = UberKernelCache.shared.cachedPipelineCount
+        let renderBefore = UberRenderPipelineCache.shared.cachedPipelineCount
         _ = try pipeline.outputSync()
-        let after = UberKernelCache.shared.cachedPipelineCount
+        let computeDelta = UberKernelCache.shared.cachedPipelineCount - computeBefore
+        let renderDelta = UberRenderPipelineCache.shared.cachedPipelineCount - renderBefore
 
         XCTAssertEqual(
-            after - before, 3,
-            "With optimisation disabled, the three filters must each compile their own uber kernel; got Δ=\(after - before)."
+            computeDelta, 0,
+            "Phase 8 routes a chain of pixel-local nodes through the fragment path, not compute."
+        )
+        XCTAssertEqual(
+            renderDelta, 3,
+            "Three filter bodies should produce three distinct render PSOs (one init + two chain variants)."
         )
     }
 

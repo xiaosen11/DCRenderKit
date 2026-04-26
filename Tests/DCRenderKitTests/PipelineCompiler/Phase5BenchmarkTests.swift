@@ -78,27 +78,47 @@ final class Phase5BenchmarkTests: XCTestCase {
 
         // Warm + measure .full.
         UberKernelCache.shared.clear()
+        UberRenderPipelineCache.shared.clear()
         let fullResult = try runBenchmark(source: source, steps: steps, optimization: .full)
         let fullKernels = UberKernelCache.shared.cachedPipelineCount
+        let fullRenderPSOs = UberRenderPipelineCache.shared.cachedPipelineCount
 
         // Warm + measure .none.
         UberKernelCache.shared.clear()
+        UberRenderPipelineCache.shared.clear()
         let noneResult = try runBenchmark(source: source, steps: steps, optimization: .none)
         let noneKernels = UberKernelCache.shared.cachedPipelineCount
+        let noneRenderPSOs = UberRenderPipelineCache.shared.cachedPipelineCount
 
+        // .full collapses all four filters into one cluster — the
+        // single-node chain stays on the compute path (Phase 8's
+        // chain detection requires length ≥ 2).
         XCTAssertEqual(
             fullKernels, 1,
-            ".full mode should collapse the four pixel-local filters into a single uber kernel; got \(fullKernels)."
+            ".full mode should collapse the four pixel-local filters into a single compute uber kernel; got compute=\(fullKernels), render=\(fullRenderPSOs)."
         )
         XCTAssertEqual(
-            noneKernels, 4,
-            ".none mode should compile one uber kernel per filter; got \(noneKernels)."
+            fullRenderPSOs, 0,
+            ".full mode's single cluster should not engage the fragment chain path."
+        )
+
+        // .none keeps the four filters as four pixel-local nodes,
+        // which Phase 8's chain detection routes through one render
+        // pass — four bodies produce four render PSOs (one init +
+        // three chain variants), zero compute uber kernels.
+        XCTAssertEqual(
+            noneKernels, 0,
+            ".none mode should route the chain through the fragment path; compute uber kernels expected zero, got \(noneKernels)."
+        )
+        XCTAssertEqual(
+            noneRenderPSOs, 4,
+            ".none mode should compile one render PSO per filter body in the chain; got render=\(noneRenderPSOs)."
         )
 
         logFullVsNoneTimings(
             chainDescription: "Exposure → Contrast → Blacks → Whites @ 1080x1080",
-            full: fullResult, fullKernels: fullKernels,
-            none: noneResult, noneKernels: noneKernels
+            full: fullResult, fullKernels: fullKernels, fullRenderPSOs: fullRenderPSOs,
+            none: noneResult, noneKernels: noneKernels, noneRenderPSOs: noneRenderPSOs
         )
     }
 
@@ -179,24 +199,28 @@ final class Phase5BenchmarkTests: XCTestCase {
         chainDescription: String,
         full: PipelineBenchmark.Result,
         fullKernels: Int,
+        fullRenderPSOs: Int,
         none: PipelineBenchmark.Result,
-        noneKernels: Int
+        noneKernels: Int,
+        noneRenderPSOs: Int
     ) {
         let speedup = none.medianMs / max(full.medianMs, 0.0001)
         print("""
 
         ================================================================
-        Phase-5 benchmark — \(chainDescription)
+        Phase-5/6/7/8 benchmark — \(chainDescription)
         ----------------------------------------------------------------
-        .full (compiler + fusion)
-          uber kernels compiled: \(fullKernels)
+        .full (compiler + fusion + Phase 8 chain)
+          compute uber kernels: \(fullKernels)
+          render PSOs:          \(fullRenderPSOs)
           \(full.summary)
 
-        .none (compiler, no fusion)
-          uber kernels compiled: \(noneKernels)
+        .none (compiler, no fusion, Phase 8 chain still applies)
+          compute uber kernels: \(noneKernels)
+          render PSOs:          \(noneRenderPSOs)
           \(none.summary)
 
-        Fusion speedup (none/full median): \(String(format: "%.2fx", speedup))
+        Speedup (none/full median): \(String(format: "%.2fx", speedup))
         ================================================================
 
         """)

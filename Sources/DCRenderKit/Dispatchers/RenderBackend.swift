@@ -65,22 +65,55 @@ internal enum RenderBackend {
         commandBuffer: MTLCommandBuffer,
         renderCache: UberRenderPipelineCache = .shared
     ) throws {
-        guard case let .fusedPixelLocalCluster(members, wantsLinear, _) = node.kind else {
+        guard case .fusedPixelLocalCluster = node.kind else {
             throw DispatchError.unsupportedNodeKind(String(describing: node.kind))
         }
         try validateDestination(destination)
+        try executeChain(
+            clusters: [node],
+            source: source,
+            destination: destination,
+            commandBuffer: commandBuffer,
+            renderCache: renderCache
+        )
+    }
 
-        let built = try MetalSourceBuilder.buildFragmentClusterPipeline(
-            members: members,
-            wantsLinearInput: wantsLinear
-        )
-        let key = UberRenderPipelineCache.Key(
-            vertexFunction: built.vertexFunction,
-            fragmentFunction: built.fragmentFunction,
-            pixelFormat: destination.pixelFormat
-        )
-        let cacheHit = renderCache.containsPipelineState(forKey: key)
-        let pso = try renderCache.pipelineState(source: built.source, key: key)
+    /// Phase 8 chained-cluster dispatch. Encodes a single render
+    /// pass with one draw per cluster:
+    ///
+    ///   - Draw 0 binds the cluster's `_init` fragment, samples the
+    ///     primary `source` texture, applies that cluster's bodies,
+    ///     and writes the colour attachment.
+    ///   - Draws 1..N-1 bind each subsequent cluster's `_chain`
+    ///     fragment, which reads the running attachment value via
+    ///     programmable blending (`half4 prev [[color(0)]]`),
+    ///     applies that cluster's bodies, and writes back to the
+    ///     same attachment.
+    ///
+    /// The TBDR architecture keeps the running attachment in tile
+    /// memory across draws, so chaining N clusters needs only ONE
+    /// physical render-target texture — `destination` — instead of
+    /// the N intermediate textures the per-node compute path would
+    /// allocate. That's the Phase-8 memory win.
+    ///
+    /// - Parameters:
+    ///   - clusters: Two or more `.fusedPixelLocalCluster` nodes,
+    ///     listed in execution order. Single-element arrays are
+    ///     also accepted (degenerate to Phase 7's single-cluster
+    ///     case).
+    ///   - source: Sampled by draw 0's init fragment; not read by
+    ///     subsequent draws.
+    ///   - destination: Render target backing the running
+    ///     attachment. Must carry `.renderTarget` usage.
+    static func executeChain(
+        clusters: [Node],
+        source: MTLTexture,
+        destination: MTLTexture,
+        commandBuffer: MTLCommandBuffer,
+        renderCache: UberRenderPipelineCache = .shared
+    ) throws {
+        precondition(!clusters.isEmpty, "executeChain requires at least one cluster")
+        try validateDestination(destination)
 
         let rpd = MTLRenderPassDescriptor()
         rpd.colorAttachments[0].texture = destination
@@ -90,38 +123,95 @@ internal enum RenderBackend {
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: rpd) else {
             throw DispatchError.renderEncoderUnavailable
         }
-        encoder.label = "DCR.Fusion.Render.\(built.fragmentFunction)"
-        encoder.setRenderPipelineState(pso)
+        let chainSummary = clusters.map { $0.debugLabel }.joined(separator: " → ")
+        encoder.label = "DCR.Fusion.RenderChain[\(chainSummary)]"
 
-        // Source texture at fragment slot 0; uniforms at fragment
-        // buffer slots 0..N-1, one per member.
-        encoder.setFragmentTexture(source, index: 0)
-        for (index, member) in members.enumerated() {
-            try bindFragmentUniform(
-                member.uniforms,
-                at: index,
-                encoder: encoder
+        for (drawIndex, cluster) in clusters.enumerated() {
+            let extracted: (members: [FusedClusterMember], wantsLinear: Bool)
+            switch cluster.kind {
+            case let .fusedPixelLocalCluster(members, wantsLinear, _):
+                extracted = (members, wantsLinear)
+            case let .pixelLocal(body, uniforms, wantsLinear, _):
+                // A single pixel-local node is a degenerate one-
+                // member cluster — synthesise the member so the
+                // fragment-cluster builder can reuse the same path.
+                let synth = FusedClusterMember(
+                    body: body,
+                    uniforms: uniforms,
+                    debugLabel: cluster.debugLabel,
+                    additionalRange: 0..<0
+                )
+                extracted = ([synth], wantsLinear)
+            default:
+                encoder.endEncoding()
+                throw DispatchError.unsupportedNodeKind(String(describing: cluster.kind))
+            }
+            let members = extracted.members
+            let wantsLinear = extracted.wantsLinear
+
+            let built = try MetalSourceBuilder.buildFragmentClusterPipeline(
+                members: members,
+                wantsLinearInput: wantsLinear
             )
+            let variant: MetalSourceBuilder.FragmentClusterVariant =
+                (drawIndex == 0) ? .`init` : .chain
+            let fragmentFn: String =
+                (drawIndex == 0) ? built.initFragmentFunction
+                                  : built.chainFragmentFunction
+            let key = UberRenderPipelineCache.Key(
+                vertexFunction: built.vertexFunction,
+                fragmentFunction: fragmentFn,
+                pixelFormat: destination.pixelFormat
+            )
+            let cacheHit = renderCache.containsPipelineState(forKey: key)
+            let pso = try renderCache.pipelineState(source: built.source, key: key)
+            encoder.setRenderPipelineState(pso)
+
+            // Init draw needs the source texture; chain draws read
+            // the running attachment via programmable blending and
+            // never bind a fragment texture.
+            if drawIndex == 0 {
+                encoder.setFragmentTexture(source, index: 0)
+            }
+            for (uniformIndex, member) in members.enumerated() {
+                try bindFragmentUniform(
+                    member.uniforms,
+                    at: uniformIndex,
+                    encoder: encoder
+                )
+            }
+
+            encoder.drawPrimitives(
+                type: .triangleStrip,
+                vertexStart: 0,
+                vertexCount: 4
+            )
+
+            if DCRLogging.diagnosticPipelineLogging {
+                DCRLogging.logger.debug(
+                    "render chain draw",
+                    category: "PipelineBackend",
+                    attributes: [
+                        "fragment": fragmentFn,
+                        "nodeLabel": cluster.debugLabel,
+                        "drawIndex": "\(drawIndex)",
+                        "variant": (variant == .`init`) ? "init" : "chain",
+                        "memberCount": "\(members.count)",
+                        "cache": cacheHit ? "hit" : "miss",
+                    ]
+                )
+            }
         }
 
-        // Full-screen triangle strip — vertex shader fabricates the
-        // clip-space positions from `vertex_id` 0..3.
-        encoder.drawPrimitives(
-            type: .triangleStrip,
-            vertexStart: 0,
-            vertexCount: 4
-        )
         encoder.endEncoding()
 
         if DCRLogging.diagnosticPipelineLogging {
             DCRLogging.logger.debug(
-                "render uber dispatch",
+                "render chain dispatched",
                 category: "PipelineBackend",
                 attributes: [
-                    "fragment": built.fragmentFunction,
-                    "nodeLabel": node.debugLabel,
-                    "memberCount": "\(members.count)",
-                    "cache": cacheHit ? "hit" : "miss",
+                    "clusters": "\(clusters.count)",
+                    "savedIntermediates": "\(max(clusters.count - 1, 0))",
                 ]
             )
         }

@@ -97,11 +97,19 @@ internal final class LifetimeAwareTextureAllocator: @unchecked Sendable {
         // 0-indexed contiguous integers by construction.
         var bucketTextures: [Int: MTLTexture] = [:]
         for (bucket, info) in plan.bucketSpec {
+            // `.renderTarget` is added alongside the compute-path
+            // usages so a single bucket can back either a compute
+            // dispatch (shader read/write) or a Phase-8 render-chain
+            // dispatch (colour attachment) without being
+            // re-allocated. The flag is free on Apple Silicon TBDR
+            // GPUs and lets `RenderBackend.execute*` succeed without
+            // requiring the pool to maintain two parallel
+            // (renderTarget vs shader-only) variants.
             let texture = try pool.dequeue(spec: TexturePoolSpec(
                 width: info.width,
                 height: info.height,
                 pixelFormat: info.pixelFormat,
-                usage: [.shaderRead, .shaderWrite],
+                usage: [.shaderRead, .shaderWrite, .renderTarget],
                 storageMode: .private
             ))
             bucketTextures[bucket] = texture

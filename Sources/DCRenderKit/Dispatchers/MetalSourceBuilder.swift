@@ -574,15 +574,25 @@ internal enum MetalSourceBuilder {
 
     // MARK: - Fragment shader build (Phase 7)
 
-    /// Result of a fragment-pipeline build. Source contains both a
-    /// trivial full-screen vertex shader and the cluster fragment
-    /// that chains every member body call. Render-pipeline caches
-    /// key off `vertexFunction` + `fragmentFunction`; the source
-    /// drives a one-time `MTLDevice.makeLibrary` call.
+    /// Variant of a cluster's fragment shader. `init` samples the
+    /// source texture (used by the first — or only — draw of a
+    /// render pass); `chain` reads the running colour attachment via
+    /// programmable blending (Phase 8 chained-cluster mode).
+    enum FragmentClusterVariant: Sendable, Hashable {
+        case `init`
+        case chain
+    }
+
+    /// Result of a fragment-pipeline build. Source carries both
+    /// fragment variants — `_init` (samples source) and `_chain`
+    /// (programmable-blending input from the running attachment) —
+    /// plus the shared full-screen vertex shader. The dispatcher
+    /// picks which fragment to bind via the variant-keyed PSO cache.
     struct FragmentBuildResult: Sendable {
         let source: String
         let vertexFunction: String
-        let fragmentFunction: String
+        let initFragmentFunction: String
+        let chainFragmentFunction: String
         let bindings: Bindings
     }
 
@@ -654,7 +664,8 @@ internal enum MetalSourceBuilder {
             wantsLinearInput: wantsLinearInput
         )
         let vertexName = "\(baseName)_VS"
-        let fragmentName = "\(baseName)_FS"
+        let initFragmentName = "\(baseName)_FS_init"
+        let chainFragmentName = "\(baseName)_FS_chain"
 
         let uniformParamList = members.enumerated().map { index, member in
             "    constant \(member.body.uniformStructName)& u\(index) [[buffer(\(index))]]"
@@ -697,8 +708,11 @@ internal enum MetalSourceBuilder {
             return out;
         }
 
-        // ── Fragment shader: \(memberSummary) ──
-        fragment half4 \(fragmentName)(
+        // ── Fragment shader (init): samples source texture ─────────
+        // Used as draw 0 of a render pass — initialises the colour
+        // attachment with the input image, then applies every body.
+        // Cluster: \(memberSummary)
+        fragment half4 \(initFragmentName)(
             DCRFullScreenVertexOut in [[stage_in]],
             texture2d<half, access::read> source [[texture(0)]],
         \(uniformParamList))
@@ -709,12 +723,30 @@ internal enum MetalSourceBuilder {
         \(bodyCallChain)
             return half4(rgb, c.a);
         }
+
+        // ── Fragment shader (chain): programmable-blending input ──
+        // Used by every draw after draw 0 inside a Phase-8 chained
+        // render pass. Reads the running colour attachment via the
+        // `[[color(0)]]` blending input — TBDR keeps that value in
+        // tile memory across draws, so no intermediate texture is
+        // allocated between cluster boundaries.
+        // Cluster: \(memberSummary)
+        fragment half4 \(chainFragmentName)(
+            DCRFullScreenVertexOut in [[stage_in]],
+            half4 prev [[color(0)]],
+        \(uniformParamList))
+        {
+            half3 rgb = prev.rgb;
+        \(bodyCallChain)
+            return half4(rgb, prev.a);
+        }
         """
 
         return FragmentBuildResult(
             source: source,
             vertexFunction: vertexName,
-            fragmentFunction: fragmentName,
+            initFragmentFunction: initFragmentName,
+            chainFragmentFunction: chainFragmentName,
             bindings: Bindings(
                 uniformBufferCount: members.count,
                 auxiliaryTextureSlotCount: 0
