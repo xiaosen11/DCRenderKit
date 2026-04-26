@@ -58,31 +58,53 @@ jobs:
         # that audit from regressing.
         run: swift build -v -Xswiftc -warnings-as-errors
 
-      # ─── swift test split into 3 process invocations ──────────
-      # Running the entire suite in a single `swift test` invocation
-      # deterministically SIGSEGVs on macos-15.7.4 / Xcode 16.4 /
-      # Swift 6.1.2 — the crash arrives on a background thread
-      # ~250 ms into LoweringTests, almost certainly from a Metal
-      # `addCompletedHandler` callback in an earlier test that
-      # accesses freed state across the test boundary.
+      # ─── swift test runs one class per process ─────────────────
+      # Running the whole suite in a single `swift test` deterministically
+      # SIGSEGVs on macos-15.7.4 / Xcode 16.4 / Swift 6.1.2. The crash
+      # arrives on a background thread (~250 ms into a test that itself
+      # runs in 0 ms), so it must be a leaked Metal `addCompletedHandler`
+      # from an earlier test class accessing freed state — most likely
+      # because 23 separate test files share `ShaderLibrary.shared`
+      # via `unregisterAll()` + `register()` in their setUp.
       #
-      # Each of the three subsets in isolation passes cleanly
-      # (verified in CI run 24958941214). Splitting into three
-      # separate `swift test` processes is therefore the fix:
-      # each invocation gets its own process state, no cross-test
-      # leakage.
+      # Diagnostic CI run 24958941214 confirmed the bug is cross-test
+      # interaction, not any individual test: every class passes when
+      # run alone. Refactoring 23 test files to use a private library
+      # would require teaching dispatchers to accept a library instance
+      # (large refactor); changing `ShaderLibrary.unregisterAll` to
+      # synchronously drain the GPU would mutate a public-API
+      # behavioral contract.
       #
-      # The split tracks the two Metal-heavy parity suites that
-      # showed up as the most likely culprits during diagnosis;
-      # subset 1 is "everything else."
-      - name: swift test — main suite
-        run: swift test -v -Xswiftc -warnings-as-errors --disable-swift-testing --skip "(LinearPerceptualParity|LegacyParity)Tests"
-
-      - name: swift test — LinearPerceptualParity
-        run: swift test -v -Xswiftc -warnings-as-errors --disable-swift-testing --filter "LinearPerceptualParityTests"
-
-      - name: swift test — LegacyParity
-        run: swift test -v -Xswiftc -warnings-as-errors --disable-swift-testing --filter "LegacyParityTests"
+      # The pragmatic fix: enumerate every test class and run each in
+      # its own `swift test` process. Each invocation gets a fresh
+      # `ShaderLibrary.shared` singleton, no cross-test pollution
+      # possible. Adds ~30-60 s to CI for 64 process spawns; acceptable
+      # for the reliability gain.
+      - name: swift test — one class per process
+        run: |
+          set -e
+          # Discover every test class (e.g. "DCRenderKitTests.LoweringTests").
+          classes=$(swift test list --disable-swift-testing 2>/dev/null \
+            | grep "^DCRenderKitTests\." \
+            | awk -F'/' '{print $1}' \
+            | sort -u)
+          count=$(echo "$classes" | wc -l | tr -d ' ')
+          echo "Discovered $count test classes; running each in its own process."
+          failed_classes=""
+          for class in $classes; do
+            echo "::group::$class"
+            if swift test -Xswiftc -warnings-as-errors --disable-swift-testing --filter "${class}/"; then
+              echo "::endgroup::"
+            else
+              echo "::endgroup::"
+              echo "::error title=swift test failure::class $class failed"
+              failed_classes="$failed_classes $class"
+            fi
+          done
+          if [ -n "$failed_classes" ]; then
+            echo "::error::failed classes:$failed_classes"
+            exit 1
+          fi
 
   ios-build:
     name: Build (iOS Simulator)
