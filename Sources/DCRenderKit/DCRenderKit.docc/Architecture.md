@@ -16,8 +16,9 @@ if advanced use cases demand isolation.
 ## The five layers
 
 1. **Entry (``Pipeline``)**: resolves input via ``TextureLoader``,
-   runs `steps` through ``FilterGraphOptimizer``, dispatches each
-   step, and manages intermediate texture lifecycle.
+   runs the chain through the pipeline compiler (lowering,
+   optimisation, lifetime-aware allocation), dispatches every
+   resulting graph node, and returns the final texture.
 2. **Filters**: 16 ship in the SDK; custom filters conform to
    ``FilterProtocol`` (single-pass) or ``MultiPassFilter``
    (DAG-based).
@@ -35,20 +36,22 @@ if advanced use cases demand isolation.
 
 ## Execution flow
 
-For `pipeline.output()`:
+For `pipeline.process(input:steps:)` / `pipeline.encode(into:source:steps:writingTo:)`:
 
 1. ``TextureLoader`` resolves source to an `MTLTexture`.
-2. ``FilterGraphOptimizer/optimize(_:)`` rewrites the step list
-   (passthrough in Phase 1; fusion active in Phase 2).
+2. The pipeline compiler runs: `Lowering` translates the chain to
+   a `PipelineGraph`, `Optimizer` rewrites it (DCE, vertical
+   fusion, CSE, kernel inlining, tail sink) under
+   ``PipelineOptimization/full``, and
+   `LifetimeAwareTextureAllocator` assigns pooled textures with
+   interval-graph aliasing.
 3. ``CommandBufferPool`` hands out a concurrency-limited command
    buffer.
-4. For each step:
-   - ``AnyFilter/single(_:)`` → ``ComputeDispatcher/dispatch(kernel:uniforms:additionalInputs:source:destination:commandBuffer:psoCache:uniformPool:)``
-     with a texture-pool-backed destination.
-   - ``AnyFilter/multi(_:)`` → the internal multi-pass executor
-     walks the filter's ``Pass`` graph, allocates intermediates,
-     and dispatches each pass.
-5. The chain's last-step output is handed back either as a
+4. The pipeline walks the optimised graph, batching contiguous
+   pixel-local clusters into a single chained render pass with
+   programmable blending and dispatching every other node through
+   ``ComputeBackend`` or ``ComputeDispatcher``.
+5. The chain's tail-node output is handed back either as a
    texture or blitted into a caller-supplied drawable.
 6. `addCompletedHandler` fires on CB completion and returns
    intermediates to the pool for the next frame's dequeue.
@@ -79,6 +82,19 @@ explained in `docs/architecture.md` §4. The highlights:
   hazard under concurrent pipelines.
 - **PassInput.additional(_:)** (§4.10) — caller-supplied masks /
   LUTs reach every pass in a multi-pass graph.
+- **CompiledChainCache** (§4.14) — per-Pipeline fingerprint
+  memoization skips Lowering + Optimizer + Planner on cache hits.
+  Fingerprint hashes uniform bytes; without this, slider drags
+  silently dispatch stale uniforms.
+- **Long-lived Pipeline** (§4.15) — `Pipeline` is a renderer,
+  not a recipe. Create once per view; pass `source` + `steps` at
+  each `encode` call. Per-frame construction wipes the cache.
+- **Frame Graph stream B optimizations** (§4.16) — DCE, CSE,
+  vertical fusion (fragment-cluster), texture aliasing, and tail
+  sink. Vertical fusion has four hard interruption conditions
+  (neighborRead, fan-out, resolution change, `final` flag);
+  everything else fuses automatically under
+  `PipelineOptimization.full`.
 
 For the full treatment, see
 [`docs/architecture.md`](https://github.com/xiaosen11/DCRenderKit/blob/main/docs/architecture.md).

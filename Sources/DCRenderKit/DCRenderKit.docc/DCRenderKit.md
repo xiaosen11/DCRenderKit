@@ -14,14 +14,17 @@ and one-line-switchable `.linear` / `.perceptual` colour spaces.
 ```swift
 import DCRenderKit
 
-let pipeline = Pipeline(input: .uiImage(inputImage), steps: [
-    .single(ExposureFilter(exposure: 10)),
-    .single(ContrastFilter(contrast: 20, lumaMean: 0.5)),
-    .multi(HighlightShadowFilter(highlights: -20, shadows: 15)),
-    .single(SaturationFilter(saturation: 1.2)),
-    .single(LUT3DFilter(cubeURL: lutURL, intensity: 0.8)),
-])
-let output = try await pipeline.output()
+let pipeline = Pipeline()  // long-lived; reuse across many calls
+let output = try await pipeline.process(
+    input: .uiImage(inputImage),
+    steps: [
+        .single(ExposureFilter(exposure: 10)),
+        .single(ContrastFilter(contrast: 20, lumaMean: 0.5)),
+        .multi(HighlightShadowFilter(highlights: -20, shadows: 15)),
+        .single(SaturationFilter(saturation: 1.2)),
+        .single(LUT3DFilter(cubeURL: lutURL, intensity: 0.8)),
+    ]
+)
 ```
 
 ### What makes this SDK different
@@ -55,14 +58,13 @@ See <doc:GettingStarted> for an adoption walkthrough and
 - ``Pipeline``
 - ``AnyFilter``
 - ``PipelineInput``
-- ``FilterGraphOptimizer``
+- ``PipelineOptimization``
 
 ### Filter authoring protocols
 
 - ``FilterProtocol``
 - ``MultiPassFilter``
 - ``ModifierEnum``
-- ``FuseGroup``
 - ``FilterUniforms``
 - ``TextureInfo``
 - ``Pass``

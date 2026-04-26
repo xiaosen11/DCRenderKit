@@ -73,16 +73,22 @@ instances) cover every standard consumer without configuration.
 ```
 ┌───────────────────────────────────────────────────────────────┐
 │  Consumer code                                                │
-│    Pipeline(input: .uiImage(img), steps: […]).output() → tex   │
+│    let pipeline = Pipeline()  // long-lived                    │
+│    try pipeline.encode(                                        │
+│        into: cb, source: tex, steps: [...],                    │
+│        writingTo: drawable.texture)                            │
 └───────────────────────────────────────────────────────────────┘
                               │
 ┌─────────────────────────────┴─────────────────────────────────┐
 │ Pipeline (Pipelines/)                                          │
 │   · resolves source via TextureLoader                          │
-│   · runs FilterGraphOptimizer (passthrough in Phase 1)         │
-│   · chains outputs between steps, ping-pongs intermediates     │
-│   · `.single(…)` → ComputeDispatcher                           │
-│   · `.multi(…)`  → MultiPassExecutor (internal; #48)           │
+│   · runs the pipeline compiler (Lowering → Optimizer →         │
+│     LifetimeAwareTextureAllocator), memoised per Pipeline      │
+│     via CompiledChainCache                                     │
+│   · dispatches each graph node through ComputeBackend /        │
+│     RenderBackend / ComputeDispatcher                          │
+│   · batches contiguous pixel-local clusters into one TBDR      │
+│     render pass with programmable blending                     │
 └─────────────────────────────┬─────────────────────────────────┘
                               │
 ┌───────────────┐   ┌────────┴─────────┐   ┌─────────────────┐
@@ -123,7 +129,7 @@ A few layering rules emerge from this shape:
 
 ---
 
-## 3. Data flow for a single `output()` call
+## 3. Data flow for a single `process(input:steps:)` / `encode(...)` call
 
 1. **Source resolution** (`TextureLoader`). `PipelineInput.uiImage`
    / `.cgImage` go through `MTKTextureLoader` with the SDK's
@@ -131,12 +137,17 @@ A few layering rules emerge from this shape:
    `.pixelBuffer` (camera frames) goes through `CVMetalTextureCache`
    for zero-copy; BGRA vs BGRA_srgb is chosen from the colour-space
    mode. `.texture` passes through.
-2. **Chain optimisation** (`FilterGraphOptimizer`). Phase 1 is
-   passthrough — the step list is unchanged. Phase 2 will fuse
-   adjacent same-`FuseGroup` filters into uber-kernels
-   (`ToneFilter`, `ColorFilter`) to eliminate the per-filter
-   16-float round-trip, but the API is already in place so the
-   activation is a drop-in.
+2. **Pipeline compilation** (lowering + optimisation + texture
+   planning). `Lowering` walks the filter chain and emits a
+   `PipelineGraph`; `Optimizer` rewrites it under
+   `PipelineOptimization.full` (DCE, vertical fusion, CSE, kernel
+   inlining, tail sink); `LifetimeAwareTextureAllocator` colours
+   the lifetime-interval graph to assign a pooled texture to each
+   surviving node. The whole compile result (optimised graph, the
+   chain-internal alias map, and the bucket plan) is memoised by
+   `CompiledChainCache` keyed on the lowered-graph fingerprint —
+   subsequent frames with the same chain topology hit the cache
+   and skip every optimiser pass.
 3. **Command buffer allocation** (`CommandBufferPool`).
    Concurrency-limited by semaphore, tagged with a caller-supplied
    label for diagnostics.
@@ -151,10 +162,10 @@ A few layering rules emerge from this shape:
      intermediates for deferred release once the command buffer
      completes (§4.7).
 5. **Final handoff**. The chain's last-step output is handed to
-   the caller either as an `MTLTexture` (`outputSync()` /
-   `output()` / `encode(into:)`) or blitted via MPS Lanczos into
-   the caller's `CAMetalDrawable` / video-frame target
-   (`encode(into:writingTo:)`).
+   the caller either as an `MTLTexture` (`process(...)` /
+   `processSync(...)` / `encode(into:source:steps:)`) or blitted
+   via MPS Lanczos into the caller's `CAMetalDrawable` /
+   video-frame target (`encode(into:source:steps:writingTo:)`).
 6. **Completion**. `scheduleDeferredEnqueue` fires on
    `addCompletedHandler` and returns the cycle's intermediates to
    the texture pool for the next frame's dequeue.
@@ -430,6 +441,183 @@ freeze still gated on real-device approval.
 
 ---
 
+### 4.14 `CompiledChainCache` — per-Pipeline fingerprint memoization
+
+**Choice**: Each `Pipeline` instance owns a `CompiledChainCache`
+that maps a fingerprint of the lowered `PipelineGraph` → the
+tuple of (optimised graph, `TextureAliasingPlan`). Cache hits skip
+the entire Lowering → Optimizer → Planner stack per encode call.
+
+**Fingerprint design**: The fingerprint hashes every `NodeKind`
+variant **including its uniform bytes**. This is non-obvious: the
+four node variants that carry uniforms (`.pixelLocal`,
+`.neighborRead`, `.nativeCompute`, `.fusedPixelLocalCluster`) must
+hash the raw uniform buffer bytes, not just the function name.
+
+**Critical pitfall fixed in Phase 11**: The original Phase 10
+fingerprint used `_` (ignored uniforms) for all four carrying
+variants. When `Pipeline` was per-frame (Phase ≤10), the cache was
+always empty on the first encode, so the bug was latent — each
+frame started with a cold cache and never got a stale hit. Phase
+11's long-lived `Pipeline` made the cache persist across frames,
+turning the latent bug into a live regression: a slider drag
+produced the same fingerprint as before the drag, and the cached
+stale graph was dispatched with the old uniforms. Fix: hash
+`uniforms.copyBytes(...)` in all four cases.
+
+**Tradeoff**: The fingerprint includes uniform bytes, so a slider
+drag always misses the cache. This is correct behaviour — the
+intent of the cache is to amortise structural recompilation (graph
+shape changes when the filter list changes), not to skip per-frame
+dispatch. Dispatch itself is O(N) in the node count and cannot be
+cached.
+
+**Boundary**: The cache is per-`Pipeline` instance. Two `Pipeline`
+instances serving the same chain have independent caches and do
+not share compiled graphs. There is no process-global graph cache.
+This keeps invalidation simple at the cost of redundant
+compilation when two pipelines run identical chains (e.g. preview
++ export at the same point in time). For current use cases (one
+pipeline per MTKView) this cost does not materialise.
+
+**Origin**: Phase 10 design; fingerprint bug discovered and fixed
+in Phase 11.
+
+---
+
+### 4.15 Long-lived `Pipeline` renderer (Phase 11)
+
+**Choice**: Prior to Phase 11, `Pipeline` stored `source` and
+`steps` as properties and the `encode` family read them from
+`self`. This forced callers to construct a new `Pipeline` (or
+mutate its properties) each frame — wiping the
+`CompiledChainCache` and reintroducing O(N) Optimizer work on
+every frame. Phase 11 removes these properties entirely: `source`
+and `steps` are passed at each `encode(into:source:steps:)` /
+`process(input:steps:)` call site. One `Pipeline` is created when
+a view is set up and reused for every subsequent frame.
+
+**API rule this implies**: `Pipeline` is a long-lived object.
+Never create a `Pipeline` inside a draw callback, inside a
+`URLSession` completion, or in any other per-frame / per-call
+scope. Create it once, store it as an instance property of your
+coordinator, and call `encode` / `process` on it repeatedly.
+
+**Why not keep source/steps as properties**: The property model
+conflates "renderer configuration" (metal device, optimization
+flags, color space) with "current frame data" (source texture,
+filter steps). Separating them at the call site makes the cache
+lifetime obvious — the cache is valid for the lifetime of the
+renderer, not for the lifetime of a single configuration.
+
+**Backward compatibility note**: This is a breaking API change
+(pre-1.0 window used intentionally — see §1.3). There is no
+migration shim. Old code that constructs `Pipeline(source:steps:)`
+or calls `encode(into:)` without arguments will fail to compile.
+
+**Origin**: Phase 11 refactor.
+
+---
+
+### 4.16 Frame Graph stream B — structural optimizations and their boundaries
+
+The pipeline compiler applies five structural rewrites after
+`Lowering` produces the initial `PipelineGraph`. These are
+"stream B" optimizations in the frame-graph sense: they operate
+on graph structure, not on filter semantics.
+
+#### Dead Code Elimination (DCE)
+
+Removes graph nodes whose output is never read by any downstream
+node or the terminal output. Triggered when a multi-pass filter
+emits an auxiliary pass that is conditionally inactive (e.g. a
+debug visualisation pass gated off at call time).
+
+**Boundary**: DCE only removes nodes with zero live consumers. It
+does not reorder nodes or eliminate nodes with side effects
+declared as `alwaysExecute = true`.
+
+#### Common Sub-Expression Elimination (CSE)
+
+Merges structurally identical nodes (same function name, same
+uniforms, same input fingerprint) into a single node with shared
+output. Relevant when two filters in the same chain independently
+apply an identical sub-operation.
+
+**Boundary**: CSE identity is based on the same fingerprint hash
+as `CompiledChainCache` (§4.14). It does not reason about
+mathematical equivalences — `f(g(x))` and `g(f(x))` are never
+merged even if they are numerically equivalent for a specific
+input.
+
+#### Vertical Fusion (VerticalFusion)
+
+Merges adjacent `pixelLocal` (single-pass fragment-shader) nodes
+into a single `fusedPixelLocalCluster` node. The fused cluster
+dispatches once with a chained fragment pipeline (MTL
+programmable blending) instead of N separate render passes.
+
+**Merge conditions** (all must hold):
+1. Both nodes are `pixelLocal` — `neighborRead`, `nativeCompute`,
+   and `multiPass` nodes always interrupt a cluster.
+2. No node has more than one downstream consumer (fan-out
+   interrupts — the intermediate must be observable).
+3. Neither node changes output resolution (a resolution-changing
+   filter must write to a fresh texture, not blit in-chain).
+4. The preceding node is not marked `final` — the `final` flag
+   means the filter explicitly wants to be the terminal of a
+   chain and should not be fused.
+
+**Tradeoff**: Fragment-shader fusion reduces GPU encoder overhead
+and eliminates intermediate texture round-trips. The cost is that
+fused clusters are harder to debug (intermediate values are not
+readable as Metal textures). When debugging a filter chain,
+set `PipelineOptimization.none` to defeat fusion and inspect each
+pass independently.
+
+**Boundary**: Fusion is purely structural. It does not rewrite
+fragment shader source code. The cluster codegen concatenates the
+function bodies with a pass-through connection (`out[n] = in[n]`)
+between them; Metal's programmable blending passes the output of
+pass N as the "source" input to pass N+1.
+
+#### Texture Aliasing (`TextureAliasingPlanner`)
+
+Assigns pooled textures to intermediate graph nodes using
+interval-graph colouring: two nodes share a texture if their
+live-ranges do not overlap. Reduces peak Metal heap footprint by
+reusing intermediate storage.
+
+**Tradeoff**: Aliasing is computed at pipeline-compile time (once
+per unique chain shape, cached by `CompiledChainCache`). This
+means the alias plan is correct for the abstract graph topology
+but does not account for runtime texture format mismatches. If a
+node outputs `.rgba16Float` and the aliased slot holds
+`.bgra8Unorm`, the planner will not alias them — format
+compatibility is checked at slot-assignment time and aliasing
+silently falls back to unique allocation for that node.
+
+**Boundary**: The planner does not alias nodes that are inputs to
+a `fusedPixelLocalCluster` because the cluster holds multiple
+intermediates live simultaneously. Cluster intermediates always
+get unique allocations.
+
+#### Kernel Inlining / Tail Sink
+
+Promotes a constant-producing node (a pass that writes a uniform
+value regardless of input) to a compile-time constant injected
+into the downstream node's uniforms, eliminating the pass
+entirely. Similarly, the tail node's output can be sunk directly
+into the caller-supplied drawable texture when the format matches,
+eliminating the final blit.
+
+**Boundary**: Tail sink requires that the caller-supplied
+drawable's pixel format is compatible with the final node's output
+format. If formats diverge (e.g. the chain produces `rgba16Float`
+but the drawable is `bgra8Unorm`), the tail blit is retained.
+
+---
+
 ## 5. Cross-references
 
 - [`foundation-capability-baseline.md`](foundation-capability-baseline.md) —
@@ -443,6 +631,9 @@ freeze still gated on real-device approval.
 - [`contracts/`](contracts/) — per-Tier-3-filter contract documents.
 - [`maintainer-sop.md`](maintainer-sop.md) — operational playbook
   pointing back to these architecture docs from the review side.
+- [`filter-development.md`](filter-development.md) — complete guide
+  for adding a new filter: algorithm selection, NodeKind choice,
+  fusion compatibility, uniform struct design, and test matrix.
 
 ---
 
