@@ -44,6 +44,12 @@ struct MetalCameraPreview: UIViewRepresentable {
         // Observation.withObservationTracking for slider mutations.
         view.isPaused = true
         view.enableSetNeedsDisplay = true
+        // ProMotion-capable devices default the display refresh rate
+        // to 120Hz. Camera preview is bottlenecked at the camera
+        // delivery rate (~30 fps), so allowing the display to redraw
+        // faster only burns CPU on duplicate frames. Pin to 30 to
+        // match the camera cadence.
+        view.preferredFramesPerSecond = 30
         view.autoResizeDrawable = true
         context.coordinator.view = view
         context.coordinator.registerObservation()
@@ -73,6 +79,24 @@ struct MetalCameraPreview: UIViewRepresentable {
 
         private let commandQueue: MTLCommandQueue
 
+        /// Long-lived `Pipeline` shared across every camera frame.
+        /// Replacing this with per-frame construction would wipe
+        /// the `CompiledChainCache` and reintroduce the
+        /// Optimizer-per-frame CPU cost (Phase 11 root cause).
+        private let pipeline = Pipeline()
+
+        // MARK: - Lightweight per-frame profiling
+        // Accumulates wall-clock for each phase of `performRender`
+        // and prints a one-line breakdown every 60 frames. Cheap
+        // enough to leave on; remove once perf is dialled in.
+        private var profCount = 0
+        private var profTotalNs: UInt64 = 0
+        private var profDrawableWaitNs: UInt64 = 0   // currentDrawable block (vsync / GPU back-pressure)
+        private var profChainBuildNs: UInt64 = 0
+        private var profEncodeNs: UInt64 = 0
+        private var profCommitNs: UInt64 = 0
+        private var profMaxTotalNs: UInt64 = 0
+
         // Latest camera frame lands here from the camera queue.
         private let frameLock = NSLock()
         private var latestFrame: CameraFrame?
@@ -82,6 +106,14 @@ struct MetalCameraPreview: UIViewRepresentable {
         /// of camera FPS, so portrait blur can track a moving subject
         /// without dragging preview frame delivery below 30 fps.
         private let maskCache = CameraPortraitMaskCache()
+
+        /// Camera-queue-readable mirror of `params.portraitBlurStrength > 0`.
+        /// Updated on main when params change (via the observation
+        /// callback). Gates the per-frame Vision mask request so we
+        /// never burn ~50ms of neural-net work for a filter the user
+        /// isn't using.
+        private let maskGateLock = NSLock()
+        private var portraitActive: Bool = false
 
         private var cancelled = false
 
@@ -111,11 +143,18 @@ struct MetalCameraPreview: UIViewRepresentable {
             latestFrame = frame
             frameLock.unlock()
 
-            // Offer this frame's pixel buffer to the mask cache. Most
-            // calls are rejected (throttle), which is cheap; the
-            // accepted one kicks off a detached Vision run that
-            // updates `maskCache.currentMask` whenever it finishes.
-            maskCache.updateIfStale(from: frame.pixelBuffer)
+            // Offer this frame's pixel buffer to the mask cache only
+            // when PortraitBlur is active. When the slider is at zero
+            // the chain excludes PortraitBlurFilter regardless of the
+            // mask state, so running Vision is pure waste (~50 ms of
+            // neural-net work per call).
+            maskGateLock.lock()
+            let shouldRequestMask = portraitActive
+            maskGateLock.unlock()
+
+            if shouldRequestMask {
+                maskCache.updateIfStale(from: frame.pixelBuffer)
+            }
 
             DispatchQueue.main.async { [weak self] in
                 self?.view?.setNeedsDisplay()
@@ -125,6 +164,11 @@ struct MetalCameraPreview: UIViewRepresentable {
         @MainActor
         func registerObservation() {
             guard !cancelled else { return }
+            // Refresh the Vision-gate mirror once per registration —
+            // catches the initial value plus every subsequent param
+            // change (each `onChange` fire re-registers, which lands
+            // here again).
+            updatePortraitGate()
             withObservationTracking {
                 _ = params.fingerprint
             } onChange: { [weak self] in
@@ -134,6 +178,17 @@ struct MetalCameraPreview: UIViewRepresentable {
                     self.registerObservation()
                 }
             }
+        }
+
+        /// Update the camera-queue-readable mirror of "is PortraitBlur
+        /// active". Called from the observation callback so the gate
+        /// flips synchronously with the slider.
+        @MainActor
+        private func updatePortraitGate() {
+            let active = params.portraitBlurStrength > 0
+            maskGateLock.lock()
+            portraitActive = active
+            maskGateLock.unlock()
         }
 
         func cancelObservation() {
@@ -154,30 +209,58 @@ struct MetalCameraPreview: UIViewRepresentable {
 
         @MainActor
         private func performRender(in view: MTKView) {
+            let t0 = mach_absolute_time()
+
             frameLock.lock()
             let frame = latestFrame
             frameLock.unlock()
 
-            guard let frame,
-                  let drawable = view.currentDrawable,
-                  let commandBuffer = commandQueue.makeCommandBuffer()
+            guard let frame else { return }
+
+            // `currentDrawable` is a SYNCHRONOUS BLOCKING call — it waits
+            // for the next free CAMetalDrawable. When the GPU is busy
+            // (long chain) or the display is back-pressured, this can
+            // stall the main thread for ms. We split it out as its own
+            // bucket so we don't blame chain build / encode for vsync
+            // wait.
+            let tDrawableStart = mach_absolute_time()
+            guard let drawable = view.currentDrawable else { return }
+            let tAfterDrawable = mach_absolute_time()
+
+            guard let commandBuffer = commandQueue.makeCommandBuffer()
             else { return }
+
+            // `pixelsPerPoint` is "how many source pixels map onto
+            // 1 pt of on-screen view" — required so visual-texture
+            // filters (Sharpen step, FilmGrain grainSize, CCD sharp
+            // step) read the same pt-size on screen across capture
+            // resolutions. The right formula is `source / view_pt`,
+            // **not** `UIScreen.scale`. They happen to agree at
+            // 1080p source on a 390 pt iPhone screen (3.0 ≈ 2.77),
+            // but diverge sharply at 4K (3 vs 10.3) — so we use the
+            // robust formula here, matching the editing-preview path.
+            let viewWidthPt = max(Float(view.bounds.width), 1)
+            let pixelsPerPoint = Float(frame.texture.width) / viewWidthPt
 
             let chain = FilterChainBuilder.build(
                 from: params,
                 lumaMean: 0.5,
-                pixelsPerPoint: Float(view.window?.screen.scale ?? 3.0),
+                pixelsPerPoint: pixelsPerPoint,
                 portraitMask: maskCache.currentMask
             )
             metrics.chainLength = chain.count
 
-            let pipeline = Pipeline(input: .texture(frame.texture), steps: chain)
+            let tAfterChain = mach_absolute_time()
 
             do {
                 try pipeline.encode(
                     into: commandBuffer,
+                    source: frame.texture,
+                    steps: chain,
                     writingTo: drawable.texture
                 )
+
+                let tAfterEncode = mach_absolute_time()
 
                 let metricsRef = metrics
                 commandBuffer.addCompletedHandler { buf in
@@ -190,11 +273,81 @@ struct MetalCameraPreview: UIViewRepresentable {
 
                 commandBuffer.present(drawable)
                 commandBuffer.commit()
+
+                let tAfterCommit = mach_absolute_time()
+                accumulateProfile(
+                    t0: t0,
+                    tDrawableStart: tDrawableStart,
+                    tAfterDrawable: tAfterDrawable,
+                    tAfterChain: tAfterChain,
+                    tAfterEncode: tAfterEncode,
+                    tAfterCommit: tAfterCommit,
+                    chainLength: chain.count
+                )
             } catch {
                 commandBuffer.commit()
             }
         }
+
+        @MainActor
+        private func accumulateProfile(
+            t0: UInt64,
+            tDrawableStart: UInt64,
+            tAfterDrawable: UInt64,
+            tAfterChain: UInt64,
+            tAfterEncode: UInt64,
+            tAfterCommit: UInt64,
+            chainLength: Int
+        ) {
+            let total = tAfterCommit - t0
+            profTotalNs += machTimeToNs(total)
+            profDrawableWaitNs += machTimeToNs(tAfterDrawable - tDrawableStart)
+            profChainBuildNs += machTimeToNs(tAfterChain - tAfterDrawable)
+            profEncodeNs += machTimeToNs(tAfterEncode - tAfterChain)
+            profCommitNs += machTimeToNs(tAfterCommit - tAfterEncode)
+            profMaxTotalNs = max(profMaxTotalNs, machTimeToNs(total))
+            profCount += 1
+
+            guard profCount >= 60 else { return }
+            let n = Double(profCount)
+            let avgTotalMs = Double(profTotalNs) / n / 1_000_000
+            let avgDrawableMs = Double(profDrawableWaitNs) / n / 1_000_000
+            let avgChainMs = Double(profChainBuildNs) / n / 1_000_000
+            let avgEncodeMs = Double(profEncodeNs) / n / 1_000_000
+            let avgCommitMs = Double(profCommitNs) / n / 1_000_000
+            let maxTotalMs = Double(profMaxTotalNs) / 1_000_000
+
+            print(String(format:
+                "[CamPerf] chain=%d frames=%d  avg_total=%.2fms  " +
+                "(drawableWait=%.2f chainBuild=%.2f encode=%.2f commit=%.2f)  max=%.2fms",
+                chainLength, profCount,
+                avgTotalMs, avgDrawableMs, avgChainMs, avgEncodeMs, avgCommitMs,
+                maxTotalMs
+            ))
+
+            profCount = 0
+            profTotalNs = 0
+            profDrawableWaitNs = 0
+            profChainBuildNs = 0
+            profEncodeNs = 0
+            profCommitNs = 0
+            profMaxTotalNs = 0
+        }
     }
+}
+
+// MARK: - mach_time helper
+
+/// Lazily-initialised, never-mutated timebase. `mach_timebase_info_data_t`
+/// is a pair of `UInt32`s — Sendable by nature.
+private let machTimebase: mach_timebase_info_data_t = {
+    var info = mach_timebase_info_data_t()
+    mach_timebase_info(&info)
+    return info
+}()
+
+private func machTimeToNs(_ ticks: UInt64) -> UInt64 {
+    return ticks * UInt64(machTimebase.numer) / UInt64(machTimebase.denom)
 }
 
 // MARK: - CameraPortraitMaskCache

@@ -25,6 +25,11 @@ struct MetalImagePreview: UIViewRepresentable {
     /// PortraitBlur from the chain.
     let portraitMask: MTLTexture?
     let device: MTLDevice
+    /// Called on every drawn frame with the current view width in points.
+    /// Used by callers (e.g. `PhotoEditModel`) to track the edit view
+    /// width so that export can compute the same `pixelsPerPoint` ratio
+    /// as the live preview.
+    var onViewWidthChanged: ((Float) -> Void)? = nil
 
     func makeCoordinator() -> Coordinator {
         Coordinator(device: device, metrics: metrics)
@@ -53,7 +58,8 @@ struct MetalImagePreview: UIViewRepresentable {
         context.coordinator.bind(
             params: params,
             sourceTexture: sourceTexture,
-            portraitMask: portraitMask
+            portraitMask: portraitMask,
+            onViewWidthChanged: onViewWidthChanged
         )
     }
 
@@ -72,7 +78,14 @@ struct MetalImagePreview: UIViewRepresentable {
         private var params: EditParameters?
         private var sourceTexture: MTLTexture?
         private var portraitMask: MTLTexture?
+        private var onViewWidthChanged: ((Float) -> Void)?
         private let commandQueue: MTLCommandQueue
+
+        /// Long-lived `Pipeline` shared across every preview frame.
+        /// Replacing this with per-frame construction would wipe
+        /// the `CompiledChainCache` and reintroduce the
+        /// Optimizer-per-frame CPU cost (Phase 11 root cause).
+        private let pipeline = Pipeline()
 
         /// Set to `true` when the coordinator has been dismantled; stops
         /// the observation loop from re-registering after that point.
@@ -94,11 +107,13 @@ struct MetalImagePreview: UIViewRepresentable {
         func bind(
             params: EditParameters,
             sourceTexture: MTLTexture?,
-            portraitMask: MTLTexture?
+            portraitMask: MTLTexture?,
+            onViewWidthChanged: ((Float) -> Void)?
         ) {
             self.params = params
             self.sourceTexture = sourceTexture
             self.portraitMask = portraitMask
+            self.onViewWidthChanged = onViewWidthChanged
             view?.setNeedsDisplay()
             registerObservation()
         }
@@ -155,7 +170,9 @@ struct MetalImagePreview: UIViewRepresentable {
                 let commandBuffer = commandQueue.makeCommandBuffer()
             else { return }
 
-            let pixelsPerPoint = Float(source.width) / max(Float(view.bounds.width), 1)
+            let viewWidthPt = max(Float(view.bounds.width), 1)
+            let pixelsPerPoint = Float(source.width) / viewWidthPt
+            onViewWidthChanged?(viewWidthPt)
 
             let chain = FilterChainBuilder.build(
                 from: params,
@@ -165,11 +182,11 @@ struct MetalImagePreview: UIViewRepresentable {
             )
             metrics.chainLength = chain.count
 
-            let pipeline = Pipeline(input: .texture(source), steps: chain)
-
             do {
                 try pipeline.encode(
                     into: commandBuffer,
+                    source: source,
+                    steps: chain,
                     writingTo: drawable.texture
                 )
 

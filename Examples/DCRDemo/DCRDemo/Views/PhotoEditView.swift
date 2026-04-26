@@ -77,7 +77,8 @@ struct PhotoEditView: View {
                 metrics: metrics,
                 sourceTexture: editModel.sourceTexture,
                 portraitMask: editModel.portraitMask,
-                device: device
+                device: device,
+                onViewWidthChanged: { [editModel] w in editModel.lastEditViewWidthPt = w }
             )
 
             PerformanceHUD(metrics: metrics)

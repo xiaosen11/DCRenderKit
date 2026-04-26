@@ -82,6 +82,15 @@ final class PhotoEditModel {
     /// mask after the user has moved on.
     private var maskTask: Task<Void, Never>?
 
+    /// Last known edit-preview view width in points, updated on every
+    /// preview draw by `MetalImagePreview.onViewWidthChanged`. Drives the
+    /// export `pixelsPerPoint` so that grain and sharpening sizes are
+    /// identical between live preview and the exported full-res image.
+    /// Starts at 390 (a reasonable default for typical iPhone screen
+    /// widths) so that an export before the first draw still produces a
+    /// plausible result.
+    var lastEditViewWidthPt: Float = 390
+
     /// Export progress / result.
     private(set) var exportState: ExportState = .idle
 
@@ -187,11 +196,11 @@ final class PhotoEditModel {
             let chain = FilterChainBuilder.build(
                 from: currentParams,
                 lumaMean: 0.5,
-                pixelsPerPoint: Float(source.width) / 390.0,  // approximate for export context
+                pixelsPerPoint: Float(source.width) / max(lastEditViewWidthPt, 1),
                 portraitMask: portraitMask
             )
-            let pipeline = Pipeline(input: .texture(source), steps: chain)
-            let output = try await pipeline.output()
+            let pipeline = Pipeline()
+            let output = try await pipeline.process(input: .texture(source), steps: chain)
 
             let dt = (CACurrentMediaTime() - start) * 1000
             lastExportMs = dt
