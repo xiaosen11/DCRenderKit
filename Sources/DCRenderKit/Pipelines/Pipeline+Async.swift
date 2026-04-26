@@ -24,7 +24,7 @@ extension Pipeline {
     public func process(
         input: PipelineInput,
         steps: [AnyFilter]
-    ) async throws -> MTLTexture {
+    ) async throws -> sending MTLTexture {
         // Encode synchronously on the current thread — Metal encoding is
         // thread-safe and fast; only the wait is asynchronous.
         let (commandBuffer, finalTexture) = try encodeAll(input: input, steps: steps)
