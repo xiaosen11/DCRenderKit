@@ -97,7 +97,15 @@ internal enum FusionHelperSource {
 
     static inline float3 DCROKLabToOKLCh(float3 lab) {
         const float C = length(lab.yz);
-        const float h = atan2(lab.z, lab.y);
+        // `atan2(0, 0)` returns NaN on some Apple Metal GPU
+        // implementations even though IEEE 754 specifies 0. At C = 0
+        // the hue is mathematically undefined and downstream
+        // `OKLChToOKLab` rebuilds `(C·cos(h), C·sin(h))` — multiplying
+        // NaN by 0 leaves NaN in IEEE 754, propagating through Sat /
+        // Vib bodies as visible "脏黑斑" on neutral pixels. See
+        // canonical OKLab.metal for the full diagnosis; this is a
+        // mirror.
+        const float h = (C < (1.0f / 4096.0f)) ? 0.0f : atan2(lab.z, lab.y);
         return float3(lab.x, C, h);
     }
 
@@ -278,8 +286,6 @@ internal enum FusionHelperSource {
     /// `DCRRawSourceTap` / `KernelInlining` fused-tap codegen
     /// (see `sourceTap`).
     static let ccdPrivate: String = """
-    constant float3 kDCRCCDLumaRec709 = float3(0.2126f, 0.7152f, 0.0722f);
-
     inline half dcr_ccdSoftLight(half base, half blend) {
         return base + (2.0h * blend - 1.0h) * base * (1.0h - base);
     }

@@ -66,7 +66,19 @@ static inline float3 DCROKLabToLinearSRGB(float3 lab) {
 
 static inline float3 DCROKLabToOKLCh(float3 lab) {
     const float C = length(lab.yz);
-    const float h = atan2(lab.z, lab.y);
+    // `atan2(0, 0)` returns NaN on Apple Metal GPU (macOS 15.7.4 /
+    // Xcode 16.4 verified, observed on iPhone editing previews) even
+    // though IEEE 754 specifies 0. At C = 0 the hue `h` is
+    // mathematically undefined; downstream `OKLChToOKLab` rebuilds
+    // `(a, b) = (C·cos(h), C·sin(h))` which would multiply NaN by 0
+    // — but `0 · NaN = NaN` in IEEE 754, propagating to all
+    // downstream pixels and producing the visible "脏黑斑 / dirty
+    // black blob" symptom on neutral or near-neutral pixels.
+    // Substituting `h = 0` for C ≈ 0 is mathematically equivalent
+    // (OKLChToOKLab gives (L, 0, 0) regardless of `h` once C = 0
+    // and we use a non-NaN h). See OKLab.metal for the full
+    // rationale; this is a mirror.
+    const float h = (C < (1.0f / 4096.0f)) ? 0.0f : atan2(lab.z, lab.y);
     return float3(lab.x, C, h);
 }
 

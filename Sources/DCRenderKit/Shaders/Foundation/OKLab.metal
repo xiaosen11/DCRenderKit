@@ -108,7 +108,35 @@ static inline float3 DCROKLabToLinearSRGB(float3 lab) {
 /// Callers that want `[0, 2π)` should add `2π` when `h < 0`.
 static inline float3 DCROKLabToOKLCh(float3 lab) {
     const float C = length(lab.yz);
-    const float h = atan2(lab.z, lab.y);
+    // IEEE 754 specifies `atan2(0, 0) = 0`, but the Apple Metal GPU
+    // implementation on macOS 15.7.4 / Xcode 16.4 (and observed on
+    // iPhone editing previews) returns NaN for that input. The only
+    // way to feed `atan2(0, 0)` is when the OKLab pixel is exactly
+    // neutral (C = 0) — i.e. a perceptually-grey pixel — and at C = 0
+    // the value of `h` is mathematically undefined (a 1-D point on
+    // the L axis has no hue). Downstream `DCROKLChToOKLab` rebuilds
+    // `a = C·cos(h), b = C·sin(h)`; with C = 0 the result is (0, 0)
+    // regardless of `h`, but **only if we guarantee `h` is finite** —
+    // a NaN `h` propagates through `cos/sin` and `0 · NaN = NaN` in
+    // IEEE 754 (the multiplicative identity does NOT collapse NaN).
+    //
+    // This bug surfaces as scattered black/dirty blobs on neutral or
+    // near-neutral pixels when Saturation / Vibrance run. The grey
+    // pixels feed `atan2(0, 0)` → `h = NaN` → OKLCh→OKLab gives
+    // `(L, NaN, NaN)` → linearSRGB gives all-NaN RGB → final output
+    // pixels are NaN, which the bgra8Unorm output stage encodes as
+    // arbitrary garbage (Apple GPUs typically render NaN as 0,
+    // producing the visible black blob). Substituting `h = 0` for
+    // `C ≈ 0` is mathematically equivalent (the OKLCh→OKLab inverse
+    // gives `(L, 0, 0)` either way) and IEEE-correct.
+    //
+    // The threshold `1/4096 ≈ 0.000244` matches the
+    // `kDCROKLabGamutMargin` constant defined further down in this
+    // file; we inline the literal here to avoid the forward-
+    // reference (the constant must appear before its first use, and
+    // moving it earlier would tangle the canonical-helper section
+    // ordering that the mirroring discipline depends on).
+    const float h = (C < (1.0f / 4096.0f)) ? 0.0f : atan2(lab.z, lab.y);
     return float3(lab.x, C, h);
 }
 

@@ -6,7 +6,14 @@
 #include <metal_stdlib>
 using namespace metal;
 
-constant float3 kDCRCCDLumaRec709 = float3(0.2126f, 0.7152f, 0.0722f);
+// Rec.709 luma coefficients (0.2126, 0.7152, 0.0722) are inlined at
+// each use site instead of declared as a file-scope `constant`: Metal
+// emits a "Variable 'X' is not needed and will not be emitted"
+// diagnostic when a `constant` value is fully resolved at compile
+// time (the optimiser folds it into use sites and drops the symbol),
+// and the SDK's `-warnings-as-errors` CI gate elevates the diagnostic
+// to a build failure. Inlining the literal is equivalent and silences
+// the warning.
 
 inline half dcr_ccdSoftLight(half base, half blend) {
     return base + (2.0h * blend - 1.0h) * base * (1.0h - base);
@@ -104,7 +111,7 @@ inline half3 DCRCCDBody(
 
     // 2. Saturation boost: Rec.709 luma anchor.
     if (saturation > 1.001f) {
-        half luma = dot(color.rgb, half3(kDCRCCDLumaRec709));
+        half luma = dot(color.rgb, half3(0.2126h, 0.7152h, 0.0722h));
         color.rgb = luma + (color.rgb - luma) * half(saturation);
         color.rgb = clamp(color.rgb, half3(0.0h), half3(1.0h));
     }
@@ -139,7 +146,7 @@ inline half3 DCRCCDBody(
     //    fringes don't get re-sharpened, and only luminance detail is
     //    lifted (keeps color fringing soft).
     if (sharpAmount > 0.001f) {
-        const half3 kLumaH = half3(kDCRCCDLumaRec709);
+        const half3 kLumaH = half3(0.2126h, 0.7152h, 0.0722h);
         half4 origCenter = src.read(int2(gid));
         half4 left  = src.read(pos + int2(-sharpStep,  0));
         half4 right = src.read(pos + int2( sharpStep,  0));

@@ -600,7 +600,11 @@ static inline float3 DCROKLabToLinearSRGB(float3 lab) {
 
 static inline float3 DCROKLabToOKLCh(float3 lab) {
     const float C = length(lab.yz);
-    const float h = atan2(lab.z, lab.y);
+    // `atan2(0, 0)` returns NaN on some Apple Metal GPU
+    // implementations; substitute h = 0 at C ≈ 0 to keep
+    // downstream OKLChToOKLab from producing NaN-poisoned output.
+    // See canonical OKLab.metal for the full diagnosis; mirror.
+    const float h = (C < (1.0f / 4096.0f)) ? 0.0f : atan2(lab.z, lab.y);
     return float3(lab.x, C, h);
 }
 
@@ -780,7 +784,11 @@ static inline float3 DCROKLabToLinearSRGB(float3 lab) {
 
 static inline float3 DCROKLabToOKLCh(float3 lab) {
     const float C = length(lab.yz);
-    const float h = atan2(lab.z, lab.y);
+    // `atan2(0, 0)` returns NaN on some Apple Metal GPU
+    // implementations; substitute h = 0 at C ≈ 0 to keep
+    // downstream OKLChToOKLab from producing NaN-poisoned output.
+    // See canonical OKLab.metal for the full diagnosis; mirror.
+    const float h = (C < (1.0f / 4096.0f)) ? 0.0f : atan2(lab.z, lab.y);
     return float3(lab.x, C, h);
 }
 
@@ -1118,7 +1126,10 @@ inline half3 DCRWhiteBalanceBody(half3 rgbIn, constant WhiteBalanceUniforms& u) 
 #include <metal_stdlib>
 using namespace metal;
 
-constant float3 kDCRCCDLumaRec709 = float3(0.2126f, 0.7152f, 0.0722f);
+// Rec.709 luma coefficients (0.2126, 0.7152, 0.0722) inlined at use
+// site — file-scope `constant` triggered Metal "will not be emitted"
+// warning that the SDK's `-warnings-as-errors` CI gate elevates to
+// an error.
 
 inline half dcr_ccdSoftLight(half base, half blend) {
     return base + (2.0h * blend - 1.0h) * base * (1.0h - base);
@@ -1216,7 +1227,7 @@ inline half3 DCRCCDBody(
 
     // 2. Saturation boost: Rec.709 luma anchor.
     if (saturation > 1.001f) {
-        half luma = dot(color.rgb, half3(kDCRCCDLumaRec709));
+        half luma = dot(color.rgb, half3(0.2126h, 0.7152h, 0.0722h));
         color.rgb = luma + (color.rgb - luma) * half(saturation);
         color.rgb = clamp(color.rgb, half3(0.0h), half3(1.0h));
     }
@@ -1251,7 +1262,7 @@ inline half3 DCRCCDBody(
     //    fringes don't get re-sharpened, and only luminance detail is
     //    lifted (keeps color fringing soft).
     if (sharpAmount > 0.001f) {
-        const half3 kLumaH = half3(kDCRCCDLumaRec709);
+        const half3 kLumaH = half3(0.2126h, 0.7152h, 0.0722h);
         half4 origCenter = src.read(int2(gid));
         half4 left  = src.read(pos + int2(-sharpStep,  0));
         half4 right = src.read(pos + int2( sharpStep,  0));

@@ -59,7 +59,8 @@ static inline float3 DCROKLabToLinearSRGB(float3 lab) {
 
 static inline float3 DCROKLabToOKLCh(float3 lab) {
     const float C = length(lab.yz);
-    const float h = atan2(lab.z, lab.y);
+    // Mirror of production atan2(0,0) NaN guard.
+    const float h = (C < (1.0f / 4096.0f)) ? 0.0f : atan2(lab.z, lab.y);
     return float3(lab.x, C, h);
 }
 

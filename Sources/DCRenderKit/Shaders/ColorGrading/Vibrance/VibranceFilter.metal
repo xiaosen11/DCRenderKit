@@ -59,7 +59,10 @@ static inline float3 DCROKLabToLinearSRGB(float3 lab) {
 
 static inline float3 DCROKLabToOKLCh(float3 lab) {
     const float C = length(lab.yz);
-    const float h = atan2(lab.z, lab.y);
+    // `atan2(0, 0)` returns NaN on Apple Metal GPU at C = 0 — see
+    // OKLab.metal for full rationale. Substituting `h = 0` is
+    // mathematically equivalent and IEEE-correct.
+    const float h = (C < (1.0f / 4096.0f)) ? 0.0f : atan2(lab.z, lab.y);
     return float3(lab.x, C, h);
 }
 
