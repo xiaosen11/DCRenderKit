@@ -475,7 +475,9 @@ not share compiled graphs. There is no process-global graph cache.
 This keeps invalidation simple at the cost of redundant
 compilation when two pipelines run identical chains (e.g. preview
 + export at the same point in time). For current use cases (one
-pipeline per MTKView) this cost does not materialise.
+pipeline per MTKView) this cost does not materialise. Multi-
+Pipeline scenarios are explicitly supported — see §4.17 for the
+isolation model and the recommended budget shapes.
 
 **Why Phase 11's long-lived `Pipeline` (§4.15) matters here**:
 Before Phase 11, callers built a fresh `Pipeline` per frame, which
@@ -507,6 +509,9 @@ Never create a `Pipeline` inside a draw callback, inside a
 `URLSession` completion, or in any other per-frame / per-call
 scope. Create it once, store it as an instance property of your
 coordinator, and call `encode` / `process` on it repeatedly.
+Multiple long-lived Pipelines can coexist (e.g. one per MTKView
+in a multi-tab app); see §4.17 for resource isolation when you
+have more than one.
 
 **Why not keep source/steps as properties**: The property model
 conflates "renderer configuration" (metal device, optimization
@@ -703,6 +708,127 @@ question is handled separately by the dispatch layer at
 
 ---
 
+### 4.17 Multi-Pipeline isolation
+
+DCRenderKit supports multiple `Pipeline` instances coexisting in
+the same process. Typical scenarios:
+
+- A camera-preview tab and a photo-editor tab are both
+  instantiated; the camera Coordinator and the editor Coordinator
+  each own a long-lived Pipeline.
+- A user starts an export (a transient Pipeline) while a preview
+  is still running — three Pipelines briefly coexist.
+- Two camera surfaces (e.g. picture-in-picture) each render into
+  their own MTKView with a dedicated Pipeline.
+
+**Choice**: every `Pipeline` accepts injected resources at
+construction time. The default `Pipeline()` no-arg init binds
+every dependency to the SDK-wide `.shared` instances, which is
+correct for single-renderer apps. Apps with multiple concurrent
+Pipelines should inject independent pools where budget contention
+matters.
+
+**Categorisation of resources**:
+
+| Resource | Default | Multi-Pipeline strategy | Why |
+|---|---|---|---|
+| `Device` | `.shared` | Always share | Single GPU per process |
+| `TextureLoader` | `.shared` | Share | Stateless |
+| `SamplerCache` | `.shared` | Share | Sampler descriptors immutable |
+| `PipelineStateCache` | `.shared` | Share | PSOs are immutable; cache key includes library identity (see §4.14, library-aware key) so independent libraries don't collide on same kernel name |
+| `UberKernelCache` / `UberRenderPipelineCache` | `.shared` | Share by default; inject independent only for test isolation | Uber kernel hashes already exclude uniforms; cross-Pipeline reuse is pure win |
+| `ShaderLibrary` | `.shared` | Share by default; **inject independent if you register custom shaders dynamically per Pipeline** | The only correctness risk is name collision when two Pipelines register different shaders under the same name — independent libraries solve this |
+| `TexturePool` | `.shared` | **Inject independent for budget isolation** | Memory budget is global; one Pipeline's bursty allocation can starve another |
+| `CommandBufferPool` | `.shared` | **Inject independent for in-flight CB budget** | Concurrent CB count is global; a 1-shot export can block 30fps preview |
+| `UniformBufferPool` | `.shared` | **Inject independent if rapid uniform churn matters** | Slot-pool fence-blocks under contention |
+
+**Convenience factories**: `Pipeline.makeIsolated(...)` constructs
+a Pipeline with **independent texture / CB / uniform pools** but
+**shared PSO caches and ShaderLibrary** — the standard shape for
+"two Pipelines in two tabs." `Pipeline.makeFullyIsolated(...)`
+gives every dependency a fresh instance — used by tests and the
+rare case where shader-name conflicts require library separation.
+
+**Diagnostics**: `Pipeline.diagnostics` returns a snapshot of the
+Pipeline's per-instance utilisation (texture bytes cached,
+uniform slots in use, uber-kernel PSO count). Apps can call this
+on a 1 Hz timer to feed a HUD; the demo's
+`MultiPipelineStatusView` is a working example.
+
+**Origin**: Phase 12 (post-Phase-11 multi-Pipeline support).
+
+---
+
+### 4.18 Pipeline coexistence patterns
+
+The three canonical Pipeline budget profiles in the bundled Demo
+illustrate common multi-Pipeline shapes:
+
+#### Real-time preview (camera, video)
+
+```swift
+Pipeline.makeIsolated(
+    textureBudgetMB: 16,            // 6× rgba16Float 1080p frames
+    maxInFlightCommandBuffers: 3,    // 30fps double-buffer + safety
+    uniformPoolCapacity: 4
+)
+```
+
+Source frames are small (1080p), filter chain is per-frame, slider
+churn moderate. The texture pool is small but in-flight CB count
+is 3 to keep GPU busy without dropping frames.
+
+#### Interactive editing (full-res photo)
+
+```swift
+Pipeline.makeIsolated(
+    textureBudgetMB: 64,             // 4K source + multi-pass intermediates
+    maxInFlightCommandBuffers: 2,    // interactive but not stale-queued
+    uniformPoolCapacity: 6           // rapid slider drags update many filters
+)
+```
+
+4K rgba16Float source ≈ 32 MiB, multi-pass intermediates after
+aliasing peak around 24-48 MiB; 64 MiB covers comfortably.
+Uniform-slot churn is higher than camera (slider drags update
+many filters in parallel) so allocate 6 slots.
+
+#### One-shot export (no live preview)
+
+```swift
+Pipeline.makeIsolated(
+    textureBudgetMB: 256,            // 4K full-pass peak
+    maxInFlightCommandBuffers: 1,    // export is one-shot
+    uniformPoolCapacity: 1           // single dispatch
+)
+```
+
+Export pays a transient large allocation but doesn't need
+double-buffering. Critically, the export Pipeline must be
+**isolated from any concurrent preview Pipeline** — a 256 MiB
+transient pool that shared budget with a 16 MiB preview pool
+would starve the preview.
+
+#### Decision tree
+
+When designing a new Pipeline owner, ask:
+
+1. **Will my Pipeline coexist with others?** No → just use
+   `Pipeline()`. Yes → continue.
+2. **Will my allocations be very different in size from
+   neighbours' (10×+ disparity)?** Yes → use `makeIsolated` with
+   appropriately sized pools. No → `Pipeline()` with shared pools
+   is fine.
+3. **Do I register custom shaders that other Pipelines should
+   not see?** Yes → use `makeFullyIsolated` (or pass an explicit
+   `shaderLibrary:` to the full init).
+4. **Am I in a test that needs precise PSO compile counts /
+   pool budget observations?** Yes → `makeFullyIsolated`.
+
+**Origin**: Phase 12.
+
+---
+
 ## 5. Cross-references
 
 - [`foundation-capability-baseline.md`](foundation-capability-baseline.md) —
@@ -719,6 +845,9 @@ question is handled separately by the dispatch layer at
 - [`filter-development.md`](filter-development.md) — complete guide
   for adding a new filter: algorithm selection, NodeKind choice,
   fusion compatibility, uniform struct design, and test matrix.
+- [`multi-pipeline-cookbook.md`](multi-pipeline-cookbook.md) —
+  3 working recipes for running multiple `Pipeline` instances
+  with the right resource isolation strategy.
 
 ---
 

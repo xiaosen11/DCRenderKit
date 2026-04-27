@@ -65,6 +65,44 @@ func applyBasicChain(to image: UIImage) async throws -> MTLTexture {
 `MultiPassFilter` for graph-based filters (Clarity,
 HighlightShadow, SoftGlow, PortraitBlur).
 
+### Multiple concurrent Pipelines
+
+Apps that run multiple renderers concurrently (camera preview in
+one tab + photo editor in another, live preview while exporting,
+etc.) should use `Pipeline.makeIsolated(...)` to give each
+renderer its own texture / command-buffer / uniform budget — the
+default `Pipeline()` shares those budgets across instances, which
+is fine for one renderer but causes contention with multiple.
+
+```swift
+// Camera preview: small budget, real-time
+let camPipeline = Pipeline.makeIsolated(
+    textureBudgetMB: 16,
+    maxInFlightCommandBuffers: 3
+)
+
+// Photo editor: medium budget, interactive
+let editPipeline = Pipeline.makeIsolated(
+    textureBudgetMB: 64,
+    maxInFlightCommandBuffers: 2,
+    uniformPoolCapacity: 6
+)
+
+// Export: large budget, one-shot
+let exportPipeline = Pipeline.makeIsolated(
+    textureBudgetMB: 256,
+    maxInFlightCommandBuffers: 1,
+    uniformPoolCapacity: 1
+)
+```
+
+All three Pipelines transparently share the SDK's compiled PSO
+caches and built-in shader library — only the resource pools are
+independent, so no compile cost is duplicated.
+
+For the full pattern catalogue (single / shared-PSO / fully
+isolated) see [`docs/multi-pipeline-cookbook.md`](https://github.com/xiaosen11/DCRenderKit/blob/main/docs/multi-pipeline-cookbook.md).
+
 ## Input sources
 
 `PipelineInput` accepts four source types:

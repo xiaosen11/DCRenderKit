@@ -67,7 +67,7 @@ For `pipeline.process(input:steps:)` / `pipeline.encode(into:source:steps:writin
 
 ## Key cross-cutting decisions
 
-Sixteen architectural decisions anchor the design; each is
+Eighteen architectural decisions anchor the design; each is
 explained in `docs/architecture.md` §4. The highlights:
 
 - **rgba16Float intermediates** (§4.1) — no 8-bit banding in long
@@ -95,6 +95,14 @@ explained in `docs/architecture.md` §4. The highlights:
   interruption conditions (neighborRead, fan-out, resolution
   change, `final` flag); everything else fuses automatically under
   `PipelineOptimization.full`.
+- **Multi-Pipeline isolation** (§4.17 / §4.18) — multiple `Pipeline`
+  instances coexist with injectable `TexturePool` /
+  `CommandBufferPool` / `UniformBufferPool` for budget isolation
+  while still sharing `PipelineStateCache` / `UberKernelCache` /
+  `ShaderLibrary` for compile-time amortisation. Use
+  `Pipeline.makeIsolated(...)` for the standard "two tabs" shape;
+  `Pipeline.makeFullyIsolated(...)` for tests that need complete
+  separation. See `docs/multi-pipeline-cookbook.md` for recipes.
 
 For the full treatment, see
 [`docs/architecture.md`](https://github.com/xiaosen11/DCRenderKit/blob/main/docs/architecture.md).
