@@ -85,17 +85,47 @@ struct MetalImagePreview: UIViewRepresentable {
         /// Replacing this with per-frame construction would wipe
         /// the `CompiledChainCache` and reintroduce the
         /// Optimizer-per-frame CPU cost (Phase 11 root cause).
-        private let pipeline = Pipeline()
+        ///
+        /// Uses `Pipeline.makeIsolated(...)` so the editor's bursty
+        /// allocations (4K source × multi-pass intermediates) don't
+        /// starve a coexisting camera Pipeline in another tab.
+        ///
+        /// Budget rationale (full-res photo editing, up to 4K):
+        /// - 64 MiB texture pool: 4K rgba16Float frame ≈ 32 MiB; this
+        ///   covers source + a few multi-pass intermediates that
+        ///   alias-overlap (HighlightShadow's 5-pass guided graph
+        ///   peaks at ~3 live intermediates after aliasing)
+        /// - 2 in-flight CBs: editing is interactive but slider drags
+        ///   don't need 3-deep pipelining — 2 keeps GPU busy without
+        ///   stale-frame queueing
+        /// - 6 uniform slots: rapid slider drags update 4-6 filter
+        ///   uniforms per frame; 6 avoids fence-block waits
+        private let pipeline = Pipeline.makeIsolated(
+            textureBudgetMB: 64,
+            maxInFlightCommandBuffers: 2,
+            uniformPoolCapacity: 6
+        )
 
         /// Set to `true` when the coordinator has been dismantled; stops
         /// the observation loop from re-registering after that point.
         private var cancelled = false
 
+        /// Token returned by `DemoPipelineRegistry.register(_:label:)`,
+        /// used to drop the registry slot in `deinit`.
+        private let registryID: Int
+
         init(device: MTLDevice, metrics: PerformanceMetrics) {
             self.device = device
             self.metrics = metrics
             self.commandQueue = device.makeCommandQueue()!
+            self.registryID = DemoPipelineRegistry.shared.register(
+                self.pipeline, label: "Editor"
+            )
             super.init()
+        }
+
+        deinit {
+            DemoPipelineRegistry.shared.unregister(id: registryID)
         }
 
         /// Called by `updateUIView` whenever SwiftUI hands new values

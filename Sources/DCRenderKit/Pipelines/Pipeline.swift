@@ -221,6 +221,41 @@ public final class Pipeline: @unchecked Sendable {
         self.uberRenderCache = uberRenderCache
     }
 
+    // MARK: - Diagnostics
+
+    /// Snapshot of this Pipeline's resource utilisation. Useful for
+    /// debug HUDs and instrumentation in apps that run multiple
+    /// Pipelines and want to monitor per-Pipeline budgets.
+    public struct Diagnostics: Sendable {
+        /// Bytes currently held in this Pipeline's `TexturePool`.
+        public let textureBytesCached: Int
+        /// Number of distinct textures cached in the pool.
+        public let textureCachedCount: Int
+        /// Slots currently occupied in this Pipeline's `UniformBufferPool`.
+        public let uniformSlotsInUse: Int
+        /// Total slots reserved in this Pipeline's `UniformBufferPool`.
+        public let uniformSlotsReserved: Int
+        /// Number of compiled compute PSOs in this Pipeline's
+        /// `UberKernelCache`.
+        public let uberComputePSOCount: Int
+        /// Number of compiled fragment PSOs in this Pipeline's
+        /// `UberRenderPipelineCache`.
+        public let uberRenderPSOCount: Int
+    }
+
+    /// Read this Pipeline's current resource utilisation. Cheap;
+    /// safe to call every frame from a debug HUD.
+    public var diagnostics: Diagnostics {
+        Diagnostics(
+            textureBytesCached: texturePool.currentBytes,
+            textureCachedCount: texturePool.cachedTextureCount,
+            uniformSlotsInUse: uniformPool.currentSlotCount,
+            uniformSlotsReserved: uniformPool.reservedSlotCount,
+            uberComputePSOCount: uberKernelCache.cachedPipelineCount,
+            uberRenderPSOCount: uberRenderCache.cachedPipelineCount
+        )
+    }
+
     // MARK: - Hot-path encode (caller-managed command buffer)
 
     /// Encode `steps` into `commandBuffer`, sampling from `source`,

@@ -199,7 +199,29 @@ final class PhotoEditModel {
                 pixelsPerPoint: Float(source.width) / max(lastEditViewWidthPt, 1),
                 portraitMask: portraitMask
             )
-            let pipeline = Pipeline()
+            // Export uses `makeIsolated` with a much larger texture
+            // budget than preview Pipelines (4K rgba16Float source +
+            // multi-pass peak ≈ 200 MiB) and just 1 in-flight CB
+            // (export is one-shot, no double-buffering benefit).
+            // Critically, this Pipeline does not share resource pools
+            // with the camera or editing-preview Pipelines that may
+            // coexist while the user navigated to export — so the
+            // export's transient 200 MiB allocation can't squeeze
+            // them out of memory.
+            let pipeline = Pipeline.makeIsolated(
+                textureBudgetMB: 256,
+                maxInFlightCommandBuffers: 1,
+                uniformPoolCapacity: 1
+            )
+            // Show up in the multi-Pipeline HUD for the duration of
+            // the export so users can see all 3 Pipelines (camera +
+            // editor + export) coexist with independent budgets.
+            let registryID = DemoPipelineRegistry.shared.register(
+                pipeline, label: "Export"
+            )
+            defer {
+                DemoPipelineRegistry.shared.unregister(id: registryID)
+            }
             let output = try await pipeline.process(input: .texture(source), steps: chain)
 
             let dt = (CACurrentMediaTime() - start) * 1000

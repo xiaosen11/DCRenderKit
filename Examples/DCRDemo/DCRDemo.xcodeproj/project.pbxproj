@@ -16,6 +16,7 @@
 		261F69636C2F77E0C6460BF1 /* DCRenderKit in Frameworks */ = {isa = PBXBuildFile; productRef = D0BC8E0476EED2301E4E8E57 /* DCRenderKit */; };
 		2F38511B194F2BE6769D751B /* CameraView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A4E625691E9F025936F2461 /* CameraView.swift */; };
 		59857B44B703AB59FA46CD2A /* portrait.jpg in Resources */ = {isa = PBXBuildFile; fileRef = EE22E6493E17FB621A6D092E /* portrait.jpg */; };
+		6514C2F06AB99AB294FE3E95 /* DemoPipelineRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = B30BD01B23536EBF39384566 /* DemoPipelineRegistry.swift */; };
 		6EA1312ADE27C8A100451871 /* frost.cube in Resources */ = {isa = PBXBuildFile; fileRef = C9385A8F07CC3AD760FF6676 /* frost.cube */; };
 		7C636011DF06F092E890892D /* CameraController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8937C7442A7C91D712CFD5B1 /* CameraController.swift */; };
 		89954293CD34AAC0B4BB1112 /* DCRDemoApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2851220BBF8F2567967F67DE /* DCRDemoApp.swift */; };
@@ -27,6 +28,7 @@
 		B836A7D4280ED9A31CB41E32 /* FilterChainBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1EDF6E4CCFAF6D0BB5BCFFF /* FilterChainBuilder.swift */; };
 		BB6F4F4394FA2EDB861FB358 /* amber.cube in Resources */ = {isa = PBXBuildFile; fileRef = DE15EED6FD28F7007E960590 /* amber.cube */; };
 		C145A6C9D99BBDD02067C577 /* MetalImagePreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C8A0BAD3E740D4F2E06C412 /* MetalImagePreview.swift */; };
+		C260BA507639CA99D692668E /* MultiPipelineStatusView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0350CEE531805C38255B88B1 /* MultiPipelineStatusView.swift */; };
 		C43B7E0D44287F8310D92835 /* bridge.jpg in Resources */ = {isa = PBXBuildFile; fileRef = 27CEF912510028489020A687 /* bridge.jpg */; };
 		CB092E5A72C508ABFBE62983 /* castle_night.jpg in Resources */ = {isa = PBXBuildFile; fileRef = E547584B16D7873986311A67 /* castle_night.jpg */; };
 		CD8945EFC9966CEAF8CDCD1C /* RootTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AA71D118E8F4A6B8F24E29D /* RootTabView.swift */; };
@@ -34,7 +36,8 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		04DE116BE5C3042F7B7FF6B3 /* jade.cube */ = {isa = PBXFileReference; lastKnownFileType = text; path = jade.cube; sourceTree = "<group>"; };
+		0350CEE531805C38255B88B1 /* MultiPipelineStatusView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MultiPipelineStatusView.swift; sourceTree = "<group>"; };
+		04DE116BE5C3042F7B7FF6B3 /* jade.cube */ = {isa = PBXFileReference; path = jade.cube; sourceTree = "<group>"; };
 		243DC8DE7E626BE78FB900FE /* EditParameters.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditParameters.swift; sourceTree = "<group>"; };
 		27CEF912510028489020A687 /* bridge.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = bridge.jpg; sourceTree = "<group>"; };
 		2851220BBF8F2567967F67DE /* DCRDemoApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DCRDemoApp.swift; sourceTree = "<group>"; };
@@ -42,7 +45,7 @@
 		4C8A0BAD3E740D4F2E06C412 /* MetalImagePreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalImagePreview.swift; sourceTree = "<group>"; };
 		60FD2B20A6F22CA465D7F977 /* PhotoEditModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoEditModel.swift; sourceTree = "<group>"; };
 		65C16B7DA4F5332AC33F3AB8 /* EffectSlidersPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EffectSlidersPanel.swift; sourceTree = "<group>"; };
-		680BEB5FAE33B47CD2B1E11B /* DCRDemo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DCRDemo.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		680BEB5FAE33B47CD2B1E11B /* DCRDemo.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = DCRDemo.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		72FC6856BB21B1C63AF98CC5 /* PerformanceHUD.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerformanceHUD.swift; sourceTree = "<group>"; };
 		8937C7442A7C91D712CFD5B1 /* CameraController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraController.swift; sourceTree = "<group>"; };
 		9A4E625691E9F025936F2461 /* CameraView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraView.swift; sourceTree = "<group>"; };
@@ -50,11 +53,12 @@
 		9D75C17F6275C6CF3FF23D00 /* tower.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = tower.jpg; sourceTree = "<group>"; };
 		A1EDF6E4CCFAF6D0BB5BCFFF /* FilterChainBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilterChainBuilder.swift; sourceTree = "<group>"; };
 		A1FE0909F10511BD15366121 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		C9385A8F07CC3AD760FF6676 /* frost.cube */ = {isa = PBXFileReference; lastKnownFileType = text; path = frost.cube; sourceTree = "<group>"; };
-		DE15EED6FD28F7007E960590 /* amber.cube */ = {isa = PBXFileReference; lastKnownFileType = text; path = amber.cube; sourceTree = "<group>"; };
+		B30BD01B23536EBF39384566 /* DemoPipelineRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoPipelineRegistry.swift; sourceTree = "<group>"; };
+		C9385A8F07CC3AD760FF6676 /* frost.cube */ = {isa = PBXFileReference; path = frost.cube; sourceTree = "<group>"; };
+		DE15EED6FD28F7007E960590 /* amber.cube */ = {isa = PBXFileReference; path = amber.cube; sourceTree = "<group>"; };
 		E44627CC30DF49297F1E3344 /* MetalCameraPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalCameraPreview.swift; sourceTree = "<group>"; };
 		E547584B16D7873986311A67 /* castle_night.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = castle_night.jpg; sourceTree = "<group>"; };
-		E7B2929550F8AB0A6BF49C50 /* honey.cube */ = {isa = PBXFileReference; lastKnownFileType = text; path = honey.cube; sourceTree = "<group>"; };
+		E7B2929550F8AB0A6BF49C50 /* honey.cube */ = {isa = PBXFileReference; path = honey.cube; sourceTree = "<group>"; };
 		E9CBD04E0680A3E8CAD86A13 /* LUTRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LUTRegistry.swift; sourceTree = "<group>"; };
 		EBEAAE20F60E447FCA764490 /* PhotoEditView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoEditView.swift; sourceTree = "<group>"; };
 		EE22E6493E17FB621A6D092E /* portrait.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = portrait.jpg; sourceTree = "<group>"; };
@@ -73,6 +77,14 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		0462662CADAB8701579075F5 /* Diagnostics */ = {
+			isa = PBXGroup;
+			children = (
+				B30BD01B23536EBF39384566 /* DemoPipelineRegistry.swift */,
+			);
+			path = Diagnostics;
+			sourceTree = "<group>";
+		};
 		093A1D5771443CC3C2DB9683 /* Products */ = {
 			isa = PBXGroup;
 			children = (
@@ -87,6 +99,7 @@
 				A1FE0909F10511BD15366121 /* Assets.xcassets */,
 				2851220BBF8F2567967F67DE /* DCRDemoApp.swift */,
 				691CD798ADEF3671C5E78F53 /* Camera */,
+				0462662CADAB8701579075F5 /* Diagnostics */,
 				63EE101842BF3429C448A11A /* Editing */,
 				9FF23153199C4F318EE6DD02 /* Resources */,
 				E6FD170A48DAE041DA48B655 /* Shared */,
@@ -126,6 +139,7 @@
 			children = (
 				9A4E625691E9F025936F2461 /* CameraView.swift */,
 				65C16B7DA4F5332AC33F3AB8 /* EffectSlidersPanel.swift */,
+				0350CEE531805C38255B88B1 /* MultiPipelineStatusView.swift */,
 				72FC6856BB21B1C63AF98CC5 /* PerformanceHUD.swift */,
 				EBEAAE20F60E447FCA764490 /* PhotoEditView.swift */,
 				9AA71D118E8F4A6B8F24E29D /* RootTabView.swift */,
@@ -214,9 +228,10 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
-				LastUpgradeCheck = 2610;
+				LastUpgradeCheck = 1430;
 				TargetAttributes = {
 					101177289E6020EE6643C395 = {
+						DevelopmentTeam = TVF664WMUM;
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -270,12 +285,14 @@
 				7C636011DF06F092E890892D /* CameraController.swift in Sources */,
 				2F38511B194F2BE6769D751B /* CameraView.swift in Sources */,
 				89954293CD34AAC0B4BB1112 /* DCRDemoApp.swift in Sources */,
+				6514C2F06AB99AB294FE3E95 /* DemoPipelineRegistry.swift in Sources */,
 				90D5454A61D459F81E019322 /* EditParameters.swift in Sources */,
 				20496DFC44C7D6F8B3B2C0F4 /* EffectSlidersPanel.swift in Sources */,
 				B836A7D4280ED9A31CB41E32 /* FilterChainBuilder.swift in Sources */,
 				AB86E60A2E2BD39FACE4D87E /* LUTRegistry.swift in Sources */,
 				083755A0E0A3B626E30BAD0B /* MetalCameraPreview.swift in Sources */,
 				C145A6C9D99BBDD02067C577 /* MetalImagePreview.swift in Sources */,
+				C260BA507639CA99D692668E /* MultiPipelineStatusView.swift in Sources */,
 				B57F5EA998CC42D36B5A3798 /* PerformanceHUD.swift in Sources */,
 				1D4F301241214E9887869037 /* PerformanceMetrics.swift in Sources */,
 				A8C7BFE28A75288B63F9D1BB /* PhotoEditModel.swift in Sources */,
@@ -323,11 +340,9 @@
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = dwarf;
-				DEVELOPMENT_TEAM = 599595H77X;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
@@ -348,7 +363,6 @@
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_STRICT_CONCURRENCY = complete;
@@ -362,11 +376,9 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = TVF664WMUM;
 				INFOPLIST_FILE = DCRDemo/Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-				);
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
 				PRODUCT_BUNDLE_IDENTIFIER = com.digirender.me;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -378,11 +390,9 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = TVF664WMUM;
 				INFOPLIST_FILE = DCRDemo/Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-				);
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
 				PRODUCT_BUNDLE_IDENTIFIER = com.digirender.me;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -425,11 +435,9 @@
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = 599595H77X;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
@@ -443,7 +451,6 @@
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_STRICT_CONCURRENCY = complete;

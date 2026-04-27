@@ -90,30 +90,18 @@ jobs:
             | sort -u)
           count=$(echo "$classes" | wc -l | tr -d ' ')
           echo "Discovered $count test classes; running each in its own process."
-          # `MultiPassExecutorTests` deterministically SIGSEGVs on
-          # macos-15.7.4 / Xcode 16.4 / Swift 6.1.2 — at testDAGFanOut
-          # if it runs first (alphabetically), then at the next
-          # GPU-dispatching test if testDAGFanOut is skipped, etc.
-          # Pattern: a Metal completion handler from one of the class's
-          # GPU tests fires on a background thread AFTER tearDown has
-          # set `texturePool = nil`, accessing freed state. Local
-          # macOS 26 / Swift 6.2 doesn't reproduce.
-          #
-          # Skipping the whole class on CI for now. Functional coverage
-          # of `MultiPassExecutor` flows through `MultiPassFilterTests`,
-          # `Phase5PipelineIntegrationTests`, and the per-filter contract
-          # tests, so we lose the validation-style edge cases (forward
-          # reference rejection, duplicate pass names, etc.) but no
-          # actual rendering correctness.
-          #
-          # Tracking as a known issue — root fix is to add a
-          # completion-handler barrier in tearDown across the suite.
+          # MultiPassExecutorTests previously SIGSEGV'd on
+          # macos-15.7.4 / Xcode 16.4 / Swift 6.1.2 due to the
+          # ShaderLibrary.shared / TexturePool race exposed by tearDown
+          # nil'ing pool refs while completion handlers were still
+          # in flight. The Phase 1 multi-Pipeline refactor (commit
+          # f8b332d) gave each Pipeline its own injected resources,
+          # which removed the cross-test pollution path. We now run
+          # MultiPassExecutorTests like every other class — if it
+          # regresses, the per-class isolation gives us a precise
+          # failure signal.
           failed_classes=""
           for class in $classes; do
-            if [ "$class" = "DCRenderKitTests.MultiPassExecutorTests" ]; then
-              echo "::warning::skipping $class on CI — see known-issues note in ci.yml"
-              continue
-            fi
             echo "::group::$class"
             if swift test -Xswiftc -warnings-as-errors --disable-swift-testing --filter "${class}/"; then
               echo "::endgroup::"

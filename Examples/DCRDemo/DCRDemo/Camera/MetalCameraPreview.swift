@@ -83,7 +83,24 @@ struct MetalCameraPreview: UIViewRepresentable {
         /// Replacing this with per-frame construction would wipe
         /// the `CompiledChainCache` and reintroduce the
         /// Optimizer-per-frame CPU cost (Phase 11 root cause).
-        private let pipeline = Pipeline()
+        ///
+        /// Uses `Pipeline.makeIsolated(...)` so the camera path's
+        /// resource pools (texture / command buffer / uniform) are
+        /// independent of the photo-edit Pipeline running in another
+        /// tab. Without isolation, the editor's bursty 4K-multi-pass
+        /// allocations would starve the camera's 30fps preview.
+        ///
+        /// Budget rationale (camera preview, ≤ 1080p source):
+        /// - 16 MiB texture pool: ~6 BGRA8 1080p frames cached
+        /// - 3 in-flight CBs: 30fps double-buffering + safety margin
+        /// - 4 uniform slots: enough for a typical preview chain
+        ///   (Exposure / Contrast / Saturation / WhiteBalance) all
+        ///   updating per-frame
+        private let pipeline = Pipeline.makeIsolated(
+            textureBudgetMB: 16,
+            maxInFlightCommandBuffers: 3,
+            uniformPoolCapacity: 4
+        )
 
         // MARK: - Lightweight per-frame profiling
         // Accumulates wall-clock for each phase of `performRender`
@@ -117,6 +134,10 @@ struct MetalCameraPreview: UIViewRepresentable {
 
         private var cancelled = false
 
+        /// Token returned by `DemoPipelineRegistry.register(_:label:)`,
+        /// used to drop the registry slot in `deinit`.
+        private let registryID: Int
+
         init(
             device: MTLDevice,
             params: EditParameters,
@@ -128,11 +149,21 @@ struct MetalCameraPreview: UIViewRepresentable {
             self.metrics = metrics
             self.cameraController = cameraController
             self.commandQueue = device.makeCommandQueue()!
+            self.registryID = DemoPipelineRegistry.shared.register(
+                self.pipeline, label: "Camera"
+            )
             super.init()
 
             cameraController.onFrame = { [weak self] frame in
                 self?.storeFrame(frame)
             }
+        }
+
+        deinit {
+            // Pipeline registration is weakly-held so cleanup isn't
+            // strictly required, but explicit deregistration keeps
+            // the HUD list tight rather than waiting for next tick.
+            DemoPipelineRegistry.shared.unregister(id: registryID)
         }
 
         /// Camera-queue callback. Lock-synchronized write, opportunistic
