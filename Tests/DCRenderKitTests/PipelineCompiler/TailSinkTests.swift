@@ -158,6 +158,81 @@ final class TailSinkTests: XCTestCase {
         }
     }
 
+    /// Regression — TailSink must NOT absorb a non-final pixelLocal
+    /// that still has downstream consumers. This pattern occurs when
+    /// a multi-pass filter's later pass references an earlier
+    /// pixelLocal-style node by `NodeRef.node(P.id)`. Dropping P would
+    /// orphan that reference, and `PipelineGraph.init`'s validator
+    /// then aborts with "node X references Y which is not declared
+    /// earlier".
+    ///
+    /// Original repro: a real-world chain ending with
+    /// HighlightShadow + ClarityFilter (multi-pass) — Clarity's pass
+    /// #7 (downsample) referenced an earlier pixelLocal that
+    /// TailSink had absorbed. The crash was deterministic.
+    func testNonFinalPixelLocalWithDownstreamConsumerIsNotAbsorbed() {
+        // Producer M: a fused cluster the optimiser is happy to
+        // extend if its only consumer is the next pixelLocal P.
+        let cluster = Node(
+            id: 0,
+            kind: .fusedPixelLocalCluster(
+                members: [
+                    FusedClusterMember(
+                        body: Fx.dummyBody("Exposure"),
+                        uniforms: .empty,
+                        debugLabel: "Exposure",
+                        additionalRange: 0..<0
+                    ),
+                ],
+                wantsLinearInput: false,
+                additionalNodeInputs: []
+            ),
+            inputs: [.source],
+            outputSpec: .sameAsSource,
+            isFinal: false,
+            debugLabel: "ClusterExposure"
+        )
+
+        // P: pixelLocal with M as its only input. Crucially, P is
+        // *not* final and is read by another node downstream.
+        let p = Fx.pixelLocalNode(
+            id: 1,
+            bodyName: "PreClarity",
+            input: .node(0),
+            isFinal: false
+        )
+
+        // The downstream consumer that still needs P's id intact.
+        // Modeled as a `.downsample` (the same kind that triggered
+        // the original ClarityFilter#7 crash) which `dependencyRefs`
+        // counts via `inputs`.
+        let downstream = Node(
+            id: 2,
+            kind: .downsample(factor: 4, kind: .guidedLuma),
+            inputs: [.node(1)],
+            outputSpec: .scaled(factor: 0.25),
+            isFinal: true,
+            debugLabel: "ClarityFilter#0.downsample"
+        )
+
+        let graph = PipelineGraph(
+            nodes: [cluster, p, downstream],
+            totalAdditionalInputs: 0
+        )
+
+        // `pass.run` re-builds the result through the validating
+        // PipelineGraph initialiser, so the original bug surfaced as
+        // a fatalError inside this call. The fix turns the run into a
+        // no-op for this graph shape.
+        let out = pass.run(graph)
+
+        // All three nodes must survive — TailSink is forbidden from
+        // absorbing P because doing so would orphan node 2's
+        // reference to node 1.
+        XCTAssertEqual(out.nodes.count, 3, "TailSink must not drop P when P has downstream consumers")
+        XCTAssertEqual(Set(out.nodes.map { $0.id }), [0, 1, 2])
+    }
+
     /// NativeCompute producer is opaque → no sink.
     func testNativeComputeProducerIsNotAbsorbed() {
         let nc = Fx.nativeComputeNode(id: 0, kernelName: "Opaque")

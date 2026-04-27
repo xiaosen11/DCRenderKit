@@ -27,8 +27,8 @@
 
 import Foundation
 
-/// Absorb a downstream single-consumer `.pixelLocal` into its
-/// producer's write path.
+/// Absorb a downstream tail `.pixelLocal` into its producer's
+/// write path.
 ///
 /// ## Merge conditions
 ///
@@ -41,13 +41,22 @@ import Foundation
 /// 2. `P.inputs == [.node(M.id)]` — P reads M directly and
 ///    nothing else.
 /// 3. `M` has exactly one consumer (namely P).
-/// 4. `M.outputSpec == P.outputSpec == .sameAsSource` — no
+/// 4. **`P` has no consumers** — P must be a graph leaf
+///    (typically `isFinal == true`). When P is non-final but
+///    still has downstream consumers (common when a multi-pass
+///    filter's later passes reference an earlier pixelLocal-style
+///    intermediate by `NodeRef.node(P.id)`), absorbing P into M
+///    would drop P's id from the graph and leave dangling
+///    references — the validator at `PipelineGraph.init` rejects
+///    these as "node X references Y which is not declared
+///    earlier" with a fatal error.
+/// 5. `M.outputSpec == P.outputSpec == .sameAsSource` — no
 ///    resolution change across the boundary.
-/// 5. `M.kind` is one of `.fusedPixelLocalCluster` or
+/// 6. `M.kind` is one of `.fusedPixelLocalCluster` or
 ///    `.neighborRead`. `.pixelLocal` producers are already handled
 ///    by `VerticalFusion`; `.nativeCompute` producers are opaque
 ///    to the codegen and therefore skipped.
-/// 6. `M.tailSinkedBody == nil` — no double-sinking yet.
+/// 7. `M.tailSinkedBody == nil` — no double-sinking yet.
 ///
 /// When the conditions hold:
 ///
@@ -82,9 +91,19 @@ internal struct TailSink: OptimizerPass {
                 let primary = node.inputs.first,
                 case .node(let producerID) = primary,
                 let producer = byID[producerID],
-                // The replacement must become the new final node if
-                // P was final — we propagate `isFinal` down.
+                // M's only consumer must be P — otherwise other downstream
+                // nodes still see M's pre-absorption output and the merged
+                // M+P kernel would change their input.
                 (consumerCount[producerID] ?? 0) == 1,
+                // P itself must have no consumers — i.e. be a graph leaf
+                // (typically the final node). When P is non-final but
+                // still consumed (common when a multi-pass filter's later
+                // pass references an earlier pixelLocal intermediate via
+                // NodeRef.node(P.id)), absorbing P into M would drop P's
+                // id from the graph and leave dangling references that
+                // PipelineGraph.init rejects as "node X references Y
+                // which is not declared earlier".
+                (consumerCount[node.id] ?? 0) == 0,
                 producer.outputSpec == .sameAsSource,
                 producer.tailSinkedBody == nil
             else {
