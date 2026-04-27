@@ -58,9 +58,39 @@ public struct SaturationFilter: FilterProtocol {
     /// Saturation multiplier. Range `0 ... 2`; identity at `1`.
     public var saturation: Float
 
-    /// Create a ``SaturationFilter`` with the given chroma multiplier.
-    public init(saturation: Float = 1.0) {
+    /// Color space the input texture is encoded in. Drives the
+    /// shader's gamma-linear conversion:
+    ///
+    ///   - ``DCRColorSpace/perceptual``: input is sRGB-gamma encoded
+    ///     (raw `bgra8Unorm` source — typically a JPEG/PNG decoded
+    ///     into a non-`_srgb` texture). The shader linearises with
+    ///     IEC 61966-2-1 piecewise sRGB before running OKLab math,
+    ///     then re-encodes on output.
+    ///   - ``DCRColorSpace/linear``: input is already linear
+    ///     scene-light (texture loaded with `.SRGB: true`, or
+    ///     upstream filter produced linear values). Shader skips the
+    ///     conversion and runs OKLab on the values directly.
+    ///
+    /// **Why this parameter exists**: OKLab's perceptual-uniformity
+    /// (Ottosson 2020) is calibrated for **linear sRGB**. Feeding
+    /// gamma-encoded values to `DCRLinearSRGBToOKLab` produces a
+    /// perceptually-wrong `L`: the cube-root pre-shaping and
+    /// downstream gamut clamp converge on too-low `L` for chromatic
+    /// pixels, surfacing as the "脏黑斑 / dirty black blob" symptom
+    /// users observed in edit-preview chains where the source was
+    /// loaded perceptually-encoded. Defaults to
+    /// ``DCRenderKit/defaultColorSpace`` so the SDK-wide mode drives
+    /// the filter without consumer plumbing.
+    public var colorSpace: DCRColorSpace
+
+    /// Create a ``SaturationFilter`` with the given chroma multiplier
+    /// and the pipeline's current color-space mode.
+    public init(
+        saturation: Float = 1.0,
+        colorSpace: DCRColorSpace = DCRenderKit.defaultColorSpace
+    ) {
         self.saturation = saturation
+        self.colorSpace = colorSpace
     }
 
     /// Compute-kernel binding. See ``FilterProtocol/modifier``.
@@ -70,23 +100,27 @@ public struct SaturationFilter: FilterProtocol {
 
     /// Typed uniform payload. See ``FilterProtocol/uniforms``.
     public var uniforms: FilterUniforms {
-        FilterUniforms(SaturationUniforms(saturation: saturation))
+        FilterUniforms(SaturationUniforms(
+            saturation: saturation,
+            isLinearSpace: colorSpace == .linear ? 1 : 0
+        ))
     }
 
     /// Fusion metadata. See ``FilterProtocol/fusionBody`` and
-    /// `docs/pipeline-compiler-design.md` §4. The body function
-    /// `DCRSaturationBody` lands in `SaturationFilter.metal` in Phase 3.
+    /// `docs/pipeline-compiler-design.md` §4.
     ///
-    /// `wantsLinearInput = true` because the OKLab chroma-scaling math
-    /// is defined on linear sRGB (Ottosson 2020); the compiler wraps
-    /// the body with sRGB linearisation when the pipeline carries
-    /// gamma-encoded intermediates.
+    /// `wantsLinearInput = false` matches the pattern Exposure /
+    /// Contrast / WhiteBalance use: the body internally branches on
+    /// `isLinearSpace` and self-converts when the pipeline runs in
+    /// perceptual mode, so VerticalFusion can cluster Saturation
+    /// alongside the other tone operators without an intermediate
+    /// gamma round-trip.
     public var fusionBody: FusionBodyDescriptor {
         FusionBodyDescriptor(
             functionName: "DCRSaturationBody",
             uniformStructName: "SaturationUniforms",
             kind: .pixelLocal,
-            wantsLinearInput: true,
+            wantsLinearInput: false,
             sourceText: BundledShaderSources.saturationFilter,
             sourceLabel: "SaturationFilter.metal"
         )
@@ -97,4 +131,7 @@ public struct SaturationFilter: FilterProtocol {
 struct SaturationUniforms {
     /// `0 ... 2`, identity at `1`. Shader clamps.
     var saturation: Float
+    /// 1 = input is linear-light; 0 = input is perceptually-gamma-encoded.
+    /// Written as UInt32 to match Metal `uint` layout alignment.
+    var isLinearSpace: UInt32
 }

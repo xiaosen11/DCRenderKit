@@ -36,16 +36,34 @@ public struct SharpenFilter: FilterProtocol {
     /// Sharpen amount slider, `0 ... 100`.
     public var amount: Float
 
-    /// Laplacian sampling step in **pixels of the current texture**. For a
-    /// visually consistent effect across capture / editing / export, pass
-    /// `round(1.0 * pixelsPerPoint)`. Minimum effective value is 1.
-    public var step: Float
+    /// Laplacian sampling step in **pixels of the current texture**.
+    ///
+    /// **This is a pixel value, not a pt value.** Visual-texture
+    /// parameters (sharpening edge width, grain size, CCD CA offset)
+    /// must look identical in pt on screen across capture preview
+    /// (3× scale), editing preview (proxy at view pt), and export
+    /// (full resolution). Per `.claude/rules/spatial-params.md` the
+    /// caller is responsible for the conversion:
+    ///
+    /// ```swift
+    /// SharpenFilter(amount: 50, stepPixels: round(1.0 * pixelsPerPoint))
+    /// ```
+    ///
+    /// where `pixelsPerPoint = textureWidth / viewWidthPt` (camera
+    /// preview), or `imageWidth / viewWidthPt` (editing preview), or
+    /// the same factor as editing preview (export). Filter does not
+    /// know the display context; passing a fixed pixel constant
+    /// produces visually inconsistent sharpening across resolutions.
+    /// Minimum effective value is 1; shader clamps.
+    public var stepPixels: Float
 
     /// Create a ``SharpenFilter`` with the given amount slider and
-    /// `pixelsPerPoint`-scaled Laplacian sampling step.
-    public init(amount: Float = 0, step: Float = 3.0) {
+    /// `pixelsPerPoint`-scaled Laplacian sampling step. See
+    /// ``stepPixels`` for the consumer's `basePt × pixelsPerPoint`
+    /// contract.
+    public init(amount: Float = 0, stepPixels: Float = 3.0) {
         self.amount = amount
-        self.step = step
+        self.stepPixels = stepPixels
     }
 
     /// Compute-kernel binding. See ``FilterProtocol/modifier``.
@@ -66,7 +84,7 @@ public struct SharpenFilter: FilterProtocol {
         // update.
         FilterUniforms(SharpenUniforms(
             amount: (amount / 100.0) * 1.6,
-            step: step
+            step: stepPixels
         ))
     }
 

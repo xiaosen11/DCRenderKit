@@ -30,10 +30,11 @@ import Foundation
 ///
 /// ## Spatial parameter (rules/spatial-params.md §1)
 ///
-/// `grainSize` is a visual-texture parameter. Grain must look the same
-/// size in pt on screen across capture / editing / export. Consumers
-/// inject `grainSize = 1.5pt * pixelsPerPoint` (the product-tuned
-/// constant; see `docs/metal-engine-plan.md §5.4`).
+/// `grainSizePixels` is a visual-texture parameter (pixel value, not
+/// pt). Grain must look the same size in pt on screen across capture
+/// / editing / export. Consumers inject `grainSizePixels = 1.5pt *
+/// pixelsPerPoint` (the product-tuned constant; see
+/// `docs/metal-engine-plan.md §5.4`).
 ///
 /// Identity at `density = 0` is exact (dead-zone short-circuit).
 @available(iOS 18.0, *)
@@ -53,23 +54,38 @@ public struct FilmGrainFilter: FilterProtocol {
     /// share one noise value), `1` = fully independent R/G/B noise.
     public var chromaticity: Float
 
-    /// Grain size in **pixels of the current texture**. For visual
-    /// consistency across display contexts, pass
-    /// `1.5pt * pixelsPerPoint`. Minimum effective value is 1.
-    public var grainSize: Float
+    /// Grain block size in **pixels of the current texture**.
+    ///
+    /// **This is a pixel value, not a pt value.** Per
+    /// `.claude/rules/spatial-params.md` §1 the consumer must pre-
+    /// multiply by `pixelsPerPoint`:
+    ///
+    /// ```swift
+    /// FilmGrainFilter(
+    ///     density: 0.4, roughness: 0.5, chromaticity: 0.3,
+    ///     grainSizePixels: max(1.5 * pixelsPerPoint, 1)
+    /// )
+    /// ```
+    ///
+    /// Filter does not know the display context. A fixed pixel
+    /// constant produces grain that looks bigger on small previews
+    /// than on full-resolution exports. Minimum effective value is
+    /// 1; shader clamps.
+    public var grainSizePixels: Float
 
     /// Create a ``FilmGrainFilter`` with the four sliders and a
-    /// `pixelsPerPoint`-scaled grain size.
+    /// `pixelsPerPoint`-scaled grain size. See ``grainSizePixels``
+    /// for the consumer's `basePt × pixelsPerPoint` contract.
     public init(
         density: Float = 0,
         roughness: Float = 0,
         chromaticity: Float = 0,
-        grainSize: Float = 9.0
+        grainSizePixels: Float = 9.0
     ) {
         self.density = density
         self.roughness = roughness
         self.chromaticity = chromaticity
-        self.grainSize = grainSize
+        self.grainSizePixels = grainSizePixels
     }
 
     /// Compute-kernel binding. See ``FilterProtocol/modifier``.
@@ -81,7 +97,7 @@ public struct FilmGrainFilter: FilterProtocol {
     public var uniforms: FilterUniforms {
         FilterUniforms(FilmGrainUniforms(
             density: density,
-            grainSize: grainSize,
+            grainSize: grainSizePixels,
             roughness: roughness,
             chromaticity: chromaticity
         ))
@@ -95,7 +111,7 @@ public struct FilmGrainFilter: FilterProtocol {
     /// shader reads the block-centre texel (not the thread's own
     /// pixel) to compute block-constant luma for the sin-trick
     /// hash. 16 bounds the grain size at typical settings
-    /// (grainSize default 4.5 × 3× preview scale up to ~16 px). The
+    /// (grainSizePixels default 9.0 × 3× preview scale up to ~16 px). The
     /// body therefore needs a `texture2d` source parameter, encoded
     /// via `signatureShape: .neighborReadWithSource`.
     public var fusionBody: FusionBodyDescriptor {

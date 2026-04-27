@@ -72,9 +72,9 @@ final class DeferredEnqueueTests: XCTestCase {
         let source = try makeSource(width: 32, height: 32)
         let pipeline = makePipeline(pool: pool)
         let steps: [AnyFilter] = [
-            .single(SharpenFilter(amount: 30, step: 1)),
-            .single(SharpenFilter(amount: 10, step: 1)),
-            .single(SharpenFilter(amount: 20, step: 1)),
+            .single(SharpenFilter(amount: 30, stepPixels: 1)),
+            .single(SharpenFilter(amount: 10, stepPixels: 1)),
+            .single(SharpenFilter(amount: 20, stepPixels: 1)),
         ]
 
         XCTAssertEqual(pool.cachedTextureCount, 0, "Pool starts empty")
@@ -167,13 +167,13 @@ final class DeferredEnqueueTests: XCTestCase {
         let sourceB = try makeSource(width: 32, height: 32)
         let pipelineA = makePipeline(pool: pool)
         let stepsA: [AnyFilter] = [
-            .single(SharpenFilter(amount: 20, step: 1)),
-            .single(SharpenFilter(amount: 15, step: 1)),
+            .single(SharpenFilter(amount: 20, stepPixels: 1)),
+            .single(SharpenFilter(amount: 15, stepPixels: 1)),
         ]
         let pipelineB = makePipeline(pool: pool)
         let stepsB: [AnyFilter] = [
-            .single(SharpenFilter(amount: 30, step: 1)),
-            .single(SharpenFilter(amount: 10, step: 1)),
+            .single(SharpenFilter(amount: 30, stepPixels: 1)),
+            .single(SharpenFilter(amount: 10, stepPixels: 1)),
         ]
 
         // Encode pipeline A into cbA, don't commit yet.

@@ -58,15 +58,20 @@ final class MetalSourceBuilderTests: XCTestCase {
 
     /// Saturation pulls in the OKLab helper block instead of the
     /// SRGBGamma one (OKLab is Saturation's sole helper dependency).
-    func testSaturationGeneratedSourcePullsOKLabHelpers() throws {
+    func testSaturationGeneratedSourcePullsOKLabAndSRGBHelpers() throws {
         let filter = SaturationFilter(saturation: 1.3)
         let node = loweredSingleNode(for: .single(filter))
 
         let result = try MetalSourceBuilder.build(for: node)
         XCTAssertTrue(result.source.contains("DCRLinearSRGBToOKLab"))
         XCTAssertTrue(result.source.contains("DCROKLChGamutClamp"))
-        XCTAssertFalse(result.source.contains("inline float DCRSRGBLinearToGamma"),
-                       "Saturation doesn't reference SRGBGamma directly; helper block must not be injected")
+        // Post-fix: Saturation now linearises gamma input in
+        // perceptual mode and re-encodes on output, so it requires
+        // the canonical SRGBGamma helpers alongside OKLab. See
+        // SaturationFilter.metal for the rationale.
+        XCTAssertTrue(result.source.contains("DCRSRGBGammaToLinear"),
+                      "SRGBGamma helper must be injected for the perceptual-mode round-trip")
+        XCTAssertTrue(result.source.contains("DCRSRGBLinearToGamma"))
     }
 
     /// Vibrance pulls in OKLab + its own private helpers
@@ -387,6 +392,225 @@ final class MetalSourceBuilderTests: XCTestCase {
             nameForward, nameReversed,
             "Order matters: Exposure→Contrast and Contrast→Exposure aren't the same kernel"
         )
+    }
+
+    // MARK: - Source-tap fusion (KernelInlining + TailSink)
+
+    /// `KernelInlining` head fusion: the `.neighborRead` node carries
+    /// `inlinedBodyBeforeSample`. The codegen must:
+    ///   · emit a `DCRFusedTap_<P>` struct that pre-applies P to every
+    ///     sample (so `tap.read(int2(gid))` for the centre and
+    ///     `tap.read(pos + offset)` for neighbours both go through P)
+    ///   · bind P's uniform at `buffer(1)` (head slot)
+    ///   · keep N's uniform at `buffer(0)` and emit no aux textures
+    func testKernelInliningHeadFusionGeneratesFusedTapAndCompiles() throws {
+        let sharpen = SharpenFilter(amount: 1.0, stepPixels: 1)
+        let exposure = ExposureFilter(exposure: 25)
+        let sharpenNode = loweredSingleNode(for: .single(sharpen))
+        let exposureNode = loweredSingleNode(for: .single(exposure))
+        guard
+            case let .neighborRead(nBody, _, _, _) = sharpenNode.kind,
+            case let .pixelLocal(pBody, pUniforms, _, _) = exposureNode.kind
+        else {
+            return XCTFail("Lowering produced unexpected node kinds")
+        }
+
+        let inlined = FusedClusterMember(
+            body: pBody,
+            uniforms: pUniforms,
+            debugLabel: "Exposure[inlined]",
+            additionalRange: 0..<0
+        )
+        let fused = Node(
+            id: sharpenNode.id,
+            kind: sharpenNode.kind,
+            inputs: sharpenNode.inputs,
+            outputSpec: sharpenNode.outputSpec,
+            isFinal: sharpenNode.isFinal,
+            debugLabel: "Sharpen[inline:Exposure]",
+            inlinedBodyBeforeSample: inlined
+        )
+
+        let result = try MetalSourceBuilder.build(for: fused)
+
+        XCTAssertEqual(result.bindings.uniformBufferCount, 2,
+                       "Head fusion adds one uniform slot for P")
+        XCTAssertEqual(result.bindings.auxiliaryTextureSlotCount, 0)
+        XCTAssertTrue(result.source.contains("struct DCRFusedTap_\(pBody.functionName)"),
+                      "Head fusion must emit a fused tap struct named after P")
+        XCTAssertTrue(result.source.contains("DCRFusedTap_\(pBody.functionName) tap{input, uHead};"),
+                      "Kernel must construct the fused tap with input + uHead")
+        XCTAssertTrue(result.source.contains("uHead [[buffer(1)]]"),
+                      "P's uniform must bind at buffer(1)")
+        XCTAssertTrue(result.source.contains("\(nBody.functionName)(c.rgb, u0, gid, tap)"),
+                      "N's body must be called with the templated tap")
+
+        let library = try device.makeLibrary(source: result.source, options: nil)
+        XCTAssertNotNil(library.makeFunction(name: result.functionName))
+    }
+
+    /// `TailSink` tail fusion: the `.neighborRead` node carries
+    /// `tailSinkedBody`. The codegen must:
+    ///   · emit `pTailBody(rgb, uTail)` between N's body and the
+    ///     `output.write`
+    ///   · bind P's uniform at `buffer(1)` (tail slot, since no head)
+    ///   · still use `DCRRawSourceTap` (no head fusion)
+    func testTailSinkTailFusionAppendsBodyCallAndCompiles() throws {
+        let sharpen = SharpenFilter(amount: 1.0, stepPixels: 1)
+        let saturation = SaturationFilter(saturation: 1.2)
+        let sharpenNode = loweredSingleNode(for: .single(sharpen))
+        let satNode = loweredSingleNode(for: .single(saturation))
+        guard
+            case let .neighborRead(nBody, _, _, _) = sharpenNode.kind,
+            case let .pixelLocal(pBody, pUniforms, _, _) = satNode.kind
+        else {
+            return XCTFail("Lowering produced unexpected node kinds")
+        }
+
+        let sunk = FusedClusterMember(
+            body: pBody,
+            uniforms: pUniforms,
+            debugLabel: "Saturation[sunk]",
+            additionalRange: 0..<0
+        )
+        let fused = Node(
+            id: sharpenNode.id,
+            kind: sharpenNode.kind,
+            inputs: sharpenNode.inputs,
+            outputSpec: sharpenNode.outputSpec,
+            isFinal: sharpenNode.isFinal,
+            debugLabel: "Sharpen+Saturation",
+            tailSinkedBody: sunk
+        )
+
+        let result = try MetalSourceBuilder.build(for: fused)
+
+        XCTAssertEqual(result.bindings.uniformBufferCount, 2,
+                       "Tail fusion adds one uniform slot for P_tail")
+        XCTAssertEqual(result.bindings.auxiliaryTextureSlotCount, 0)
+        XCTAssertTrue(result.source.contains("DCRRawSourceTap tap{input};"),
+                      "No head fusion → kernel uses the raw source tap")
+        XCTAssertTrue(result.source.contains("uTail [[buffer(1)]]"),
+                      "P_tail's uniform must bind at buffer(1) (no head occupies the slot)")
+        XCTAssertTrue(result.source.contains("rgb = \(pBody.functionName)(rgb, uTail);"),
+                      "Tail body call must appear between N's body and output.write")
+        XCTAssertTrue(result.source.contains("\(nBody.functionName)(c.rgb, u0, gid, tap)"))
+
+        let library = try device.makeLibrary(source: result.source, options: nil)
+        XCTAssertNotNil(library.makeFunction(name: result.functionName))
+    }
+
+    /// Combined head + tail fusion. Slot ordering is fixed: head
+    /// always lives at `buffer(1)` (so the binding logic in
+    /// `ComputeBackend.bindUniforms` can rely on a stable layout)
+    /// and tail moves to `buffer(2)` when both partners are present.
+    func testHeadAndTailFusionAllocateDistinctSlotsAndCompile() throws {
+        let sharpen = SharpenFilter(amount: 1.0, stepPixels: 1)
+        let exposure = ExposureFilter(exposure: 25)
+        let saturation = SaturationFilter(saturation: 1.2)
+        let sharpenNode = loweredSingleNode(for: .single(sharpen))
+        let exposureNode = loweredSingleNode(for: .single(exposure))
+        let satNode = loweredSingleNode(for: .single(saturation))
+        guard
+            case let .pixelLocal(headBody, headUniforms, _, _) = exposureNode.kind,
+            case let .pixelLocal(tailBody, tailUniforms, _, _) = satNode.kind
+        else {
+            return XCTFail("Lowering produced unexpected pixelLocal kinds")
+        }
+
+        let head = FusedClusterMember(
+            body: headBody,
+            uniforms: headUniforms,
+            debugLabel: "Exposure[inlined]",
+            additionalRange: 0..<0
+        )
+        let tail = FusedClusterMember(
+            body: tailBody,
+            uniforms: tailUniforms,
+            debugLabel: "Saturation[sunk]",
+            additionalRange: 0..<0
+        )
+        let fused = Node(
+            id: sharpenNode.id,
+            kind: sharpenNode.kind,
+            inputs: sharpenNode.inputs,
+            outputSpec: sharpenNode.outputSpec,
+            isFinal: sharpenNode.isFinal,
+            debugLabel: "Sharpen[inline:Exposure]+Saturation",
+            inlinedBodyBeforeSample: head,
+            tailSinkedBody: tail
+        )
+
+        let result = try MetalSourceBuilder.build(for: fused)
+
+        XCTAssertEqual(result.bindings.uniformBufferCount, 3)
+        XCTAssertTrue(result.source.contains("uHead [[buffer(1)]]"))
+        XCTAssertTrue(result.source.contains("uTail [[buffer(2)]]"))
+        XCTAssertTrue(result.source.contains("DCRFusedTap_\(headBody.functionName) tap{input, uHead};"))
+        XCTAssertTrue(result.source.contains("rgb = \(tailBody.functionName)(rgb, uTail);"))
+
+        let library = try device.makeLibrary(source: result.source, options: nil)
+        XCTAssertNotNil(library.makeFunction(name: result.functionName))
+    }
+
+    /// Function-name hash must distinguish (a) un-fused, (b) head-only,
+    /// (c) tail-only, (d) head+tail variants — otherwise the PSO cache
+    /// would alias structurally-different kernels under one entry.
+    func testHeadAndTailFusionFunctionNamesAreAllDistinct() throws {
+        let sharpen = SharpenFilter(amount: 1.0, stepPixels: 1)
+        let exposure = ExposureFilter(exposure: 25)
+        let saturation = SaturationFilter(saturation: 1.2)
+        let sharpenNode = loweredSingleNode(for: .single(sharpen))
+        let exposureNode = loweredSingleNode(for: .single(exposure))
+        let satNode = loweredSingleNode(for: .single(saturation))
+        guard
+            case let .pixelLocal(headBody, headUniforms, _, _) = exposureNode.kind,
+            case let .pixelLocal(tailBody, tailUniforms, _, _) = satNode.kind
+        else {
+            return XCTFail("Lowering produced unexpected pixelLocal kinds")
+        }
+
+        let head = FusedClusterMember(
+            body: headBody,
+            uniforms: headUniforms,
+            debugLabel: "Exposure",
+            additionalRange: 0..<0
+        )
+        let tail = FusedClusterMember(
+            body: tailBody,
+            uniforms: tailUniforms,
+            debugLabel: "Saturation",
+            additionalRange: 0..<0
+        )
+
+        let plain = sharpenNode
+        let withHead = Node(
+            id: sharpenNode.id, kind: sharpenNode.kind,
+            inputs: sharpenNode.inputs, outputSpec: sharpenNode.outputSpec,
+            isFinal: sharpenNode.isFinal, debugLabel: "h",
+            inlinedBodyBeforeSample: head
+        )
+        let withTail = Node(
+            id: sharpenNode.id, kind: sharpenNode.kind,
+            inputs: sharpenNode.inputs, outputSpec: sharpenNode.outputSpec,
+            isFinal: sharpenNode.isFinal, debugLabel: "t",
+            tailSinkedBody: tail
+        )
+        let withBoth = Node(
+            id: sharpenNode.id, kind: sharpenNode.kind,
+            inputs: sharpenNode.inputs, outputSpec: sharpenNode.outputSpec,
+            isFinal: sharpenNode.isFinal, debugLabel: "ht",
+            inlinedBodyBeforeSample: head, tailSinkedBody: tail
+        )
+
+        let names = [
+            try MetalSourceBuilder.build(for: plain).functionName,
+            try MetalSourceBuilder.build(for: withHead).functionName,
+            try MetalSourceBuilder.build(for: withTail).functionName,
+            try MetalSourceBuilder.build(for: withBoth).functionName,
+        ]
+        XCTAssertEqual(Set(names).count, 4,
+                       "Each fusion arrangement must hash to a distinct kernel name")
     }
 
     // MARK: - Helpers

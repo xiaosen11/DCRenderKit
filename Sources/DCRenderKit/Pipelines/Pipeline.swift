@@ -850,7 +850,7 @@ public final class Pipeline: @unchecked Sendable {
         guard isChainInitEligible(head) else {
             return [head]
         }
-        let consumers = consumerCounts(graph: graph)
+        let consumers = graph.consumerCounts()
         var chain: [Node] = [head]
         var lastID = head.id
         var cursor = startIndex + 1
@@ -905,21 +905,6 @@ public final class Pipeline: @unchecked Sendable {
         default:
             return false
         }
-    }
-
-    /// Tally how many other nodes reference each node's output.
-    /// Mirrors the helper `VerticalFusion` / `KernelInlining` use,
-    /// duplicated here to keep `Pipeline` self-contained.
-    private static func consumerCounts(graph: PipelineGraph) -> [NodeID: Int] {
-        var counts: [NodeID: Int] = [:]
-        for node in graph.nodes {
-            for ref in node.dependencyRefs {
-                if case .node(let id) = ref {
-                    counts[id, default: 0] += 1
-                }
-            }
-        }
-        return counts
     }
 
     /// Walk the graph the same way `executeChain`'s dispatch loop

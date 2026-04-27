@@ -484,25 +484,23 @@ using namespace metal;
 // Center-pixel alpha is used (not neighbor alpha — that would introduce
 // edge-of-texture alpha bleed).
 
-inline half4 dcr_sharpenSafeRead(texture2d<half, access::read> tex, int2 pos) {
-    uint2 clamped = uint2(
-        clamp(pos.x, 0, int(tex.get_width()) - 1),
-        clamp(pos.y, 0, int(tex.get_height()) - 1)
-    );
-    return tex.read(clamped);
-}
-
 struct SharpenUniforms {
     float amount;   // 0 ... 2
     float step;     // sampling step in pixels
 };
 
+// Body templated on `Tap` so codegen can substitute either
+// `DCRRawSourceTap` (default) or a `KernelInlining`-generated
+// fused tap that pre-applies an upstream pixelLocal body to each
+// sample. Tap.read(int2) handles bounds clamping internally.
+//
 // @dcr:body-begin DCRSharpenBody
+template <typename Tap>
 inline half3 DCRSharpenBody(
     half3 rgbIn,
     constant SharpenUniforms& u,
     uint2 gid,
-    texture2d<half, access::read> src
+    Tap src
 ) {
     const float amount = clamp(u.amount, 0.0f, 2.0f);
     const int step     = max(int(round(u.step)), 1);
@@ -512,10 +510,10 @@ inline half3 DCRSharpenBody(
     }
 
     const int2 pos = int2(gid);
-    half4 left  = dcr_sharpenSafeRead(src, pos + int2(-step,  0));
-    half4 right = dcr_sharpenSafeRead(src, pos + int2( step,  0));
-    half4 top   = dcr_sharpenSafeRead(src, pos + int2( 0, -step));
-    half4 bot   = dcr_sharpenSafeRead(src, pos + int2( 0,  step));
+    half4 left  = src.read(pos + int2(-step,  0));
+    half4 right = src.read(pos + int2( step,  0));
+    half4 top   = src.read(pos + int2( 0, -step));
+    half4 bot   = src.read(pos + int2( 0,  step));
 
     const half s = half(amount);
     const half centerMul = 1.0h + 4.0h * s;
@@ -639,19 +637,57 @@ static inline float3 DCROKLChGamutClamp(float3 lch) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// MIRROR: Foundation/SRGBGamma.metal
+// ═══════════════════════════════════════════════════════════════════
+
+inline float DCRSRGBLinearToGamma(float c) {
+    float cc = max(c, 0.0f);
+    return cc <= 0.0031308f ? 12.92f * cc
+                             : 1.055f * pow(cc, 1.0f / 2.4f) - 0.055f;
+}
+inline float DCRSRGBGammaToLinear(float c) {
+    float cc = max(c, 0.0f);
+    return cc <= 0.04045f ? cc / 12.92f
+                          : pow((cc + 0.055f) / 1.055f, 2.4f);
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // Saturation kernel
 // ═══════════════════════════════════════════════════════════════════
 
 struct SaturationUniforms {
     float saturation;
+    uint  isLinearSpace;
 };
 
 // @dcr:body-begin DCRSaturationBody
 inline half3 DCRSaturationBody(half3 rgbIn, constant SaturationUniforms& u) {
     const float s = clamp(u.saturation, 0.0f, 2.0f);
+    const bool isLinear = (u.isLinearSpace != 0u);
+
+    // OKLab is defined for non-negative linear sRGB (Ottosson 2020).
+    // Two-stage input normalisation:
+    //   1. Clamp sub-gamut overshoot (`x < 0` → `0`) — handles
+    //      WhiteBalance YIQ-tint extremes and any other upstream
+    //      OOG.
+    //   2. Linearise (perceptual mode only) — handles gamma-encoded
+    //      `bgra8Unorm` source (the edit-preview JPEG/PNG path).
+    // The gamma helper has its own `max(c, 0)`, so stage 1 is
+    // redundant on the perceptual branch. Keeping it explicit makes
+    // the sanitisation contract visible at the call site rather than
+    // buried inside a helper's edge-case guard. HDR overshoot
+    // (`> 1`) is preserved.
+    const float3 rgbSanitised = max(float3(rgbIn), 0.0f);
+    const float3 rgbLinear = isLinear
+        ? rgbSanitised
+        : float3(
+            DCRSRGBGammaToLinear(rgbSanitised.x),
+            DCRSRGBGammaToLinear(rgbSanitised.y),
+            DCRSRGBGammaToLinear(rgbSanitised.z)
+        );
 
     // linear sRGB → OKLCh
-    const float3 lab = DCRLinearSRGBToOKLab(float3(rgbIn));
+    const float3 lab = DCRLinearSRGBToOKLab(rgbLinear);
     float3 lch = DCROKLabToOKLCh(lab);
 
     // Uniform chroma scaling (Adobe-like saturation — no hue protect).
@@ -662,9 +698,16 @@ inline half3 DCRSaturationBody(half3 rgbIn, constant SaturationUniforms& u) {
 
     // OKLCh → linear sRGB
     const float3 lab_out = DCROKLChToOKLab(lch);
-    const float3 rgb = DCROKLabToLinearSRGB(lab_out);
+    const float3 rgbOut = DCROKLabToLinearSRGB(lab_out);
 
-    return half3(rgb);
+    if (isLinear) {
+        return half3(rgbOut);
+    }
+    return half3(
+        DCRSRGBLinearToGamma(rgbOut.x),
+        DCRSRGBLinearToGamma(rgbOut.y),
+        DCRSRGBLinearToGamma(rgbOut.z)
+    );
 }
 // @dcr:body-end
 
@@ -822,16 +865,43 @@ float DCRVibranceSkinHueGate(float h) {
 // Vibrance kernel
 // ═══════════════════════════════════════════════════════════════════
 
+// MIRROR: Foundation/SRGBGamma.metal (perceptual-mode round-trip)
+inline float DCRSRGBLinearToGamma(float c) {
+    float cc = max(c, 0.0f);
+    return cc <= 0.0031308f ? 12.92f * cc
+                             : 1.055f * pow(cc, 1.0f / 2.4f) - 0.055f;
+}
+inline float DCRSRGBGammaToLinear(float c) {
+    float cc = max(c, 0.0f);
+    return cc <= 0.04045f ? cc / 12.92f
+                          : pow((cc + 0.055f) / 1.055f, 2.4f);
+}
+
 struct VibranceUniforms {
     float vibrance;
+    uint  isLinearSpace;
 };
 
 // @dcr:body-begin DCRVibranceBody
 inline half3 DCRVibranceBody(half3 rgbIn, constant VibranceUniforms& u) {
     const float vib = clamp(u.vibrance, -1.0f, 1.0f);
+    const bool isLinear = (u.isLinearSpace != 0u);
+
+    // See SaturationFilter.metal for the full rationale. Two-stage
+    // sanitisation: clamp sub-gamut overshoot to zero, then linearise
+    // gamma-encoded input (perceptual mode) before OKLab round-trip.
+    // HDR overshoot (`> 1`) is preserved.
+    const float3 rgbSanitised = max(float3(rgbIn), 0.0f);
+    const float3 rgbLinear = isLinear
+        ? rgbSanitised
+        : float3(
+            DCRSRGBGammaToLinear(rgbSanitised.x),
+            DCRSRGBGammaToLinear(rgbSanitised.y),
+            DCRSRGBGammaToLinear(rgbSanitised.z)
+        );
 
     // linear sRGB → OKLCh
-    const float3 lab = DCRLinearSRGBToOKLab(float3(rgbIn));
+    const float3 lab = DCRLinearSRGBToOKLab(rgbLinear);
     float3 lch = DCROKLabToOKLCh(lab);
 
     // Selective weights.
@@ -850,9 +920,16 @@ inline half3 DCRVibranceBody(half3 rgbIn, constant VibranceUniforms& u) {
 
     // OKLCh → linear sRGB
     const float3 lab_out = DCROKLChToOKLab(lch);
-    const float3 rgb     = DCROKLabToLinearSRGB(lab_out);
+    const float3 rgbOut  = DCROKLabToLinearSRGB(lab_out);
 
-    return half3(rgb);
+    if (isLinear) {
+        return half3(rgbOut);
+    }
+    return half3(
+        DCRSRGBLinearToGamma(rgbOut.x),
+        DCRSRGBLinearToGamma(rgbOut.y),
+        DCRSRGBLinearToGamma(rgbOut.z)
+    );
 }
 // @dcr:body-end
 
@@ -1000,6 +1077,20 @@ inline half3 DCRWhiteBalanceBody(half3 rgbIn, constant WhiteBalanceUniforms& u) 
 
     half3 mixed = mix(rgbTinted, blended, half(tempCoef));
 
+    // SDK output contract: every filter must emit non-negative linear-
+    // sRGB. The YIQ tint matrix at extreme `tint` values can drive
+    // individual gamma channels to ≈ -0.17 on saturated primaries
+    // (verified: red input + tint=+200 → G ≈ -0.116). In linear mode
+    // the subsequent `DCRSRGBGammaToLinear` strips negatives via its
+    // internal `max(c, 0)`, but in perceptual mode the gamma value is
+    // returned directly — propagating the negative downstream and
+    // producing the "脏黑斑 / dirty black blob" symptom in any
+    // OKLab-using consumer (Saturation, Vibrance) further down the
+    // chain. Clamping here at the producer's output enforces the
+    // contract for both modes uniformly. HDR overshoot (`> 1`) is
+    // preserved.
+    mixed = max(mixed, half3(0.0h));
+
     // Re-linearize before write (no-op in perceptual mode).
     if (isLinear) {
         mixed.r = half(DCRSRGBGammaToLinear(float(mixed.r)));
@@ -1028,14 +1119,6 @@ inline half3 DCRWhiteBalanceBody(half3 rgbIn, constant WhiteBalanceUniforms& u) 
 using namespace metal;
 
 constant float3 kDCRCCDLumaRec709 = float3(0.2126f, 0.7152f, 0.0722f);
-
-inline half4 dcr_ccdSafeRead(texture2d<half, access::read> tex, int2 pos) {
-    uint2 clamped = uint2(
-        clamp(pos.x, 0, int(tex.get_width()) - 1),
-        clamp(pos.y, 0, int(tex.get_height()) - 1)
-    );
-    return tex.read(clamped);
-}
 
 inline half dcr_ccdSoftLight(half base, half blend) {
     return base + (2.0h * blend - 1.0h) * base * (1.0h - base);
@@ -1097,12 +1180,18 @@ struct CCDUniforms {
 //   app technical disclosures when available; none publicly documented
 //   at time of verification)
 
+// Body templated on `Tap` so codegen can substitute either
+// `DCRRawSourceTap` (default) or a `KernelInlining`-generated
+// fused tap that pre-applies an upstream pixelLocal body to each
+// sample. Tap.read(int2) handles bounds clamping internally.
+//
 // @dcr:body-begin DCRCCDBody
+template <typename Tap>
 inline half3 DCRCCDBody(
     half3 rgbIn,
     constant CCDUniforms& u,
     uint2 gid,
-    texture2d<half, access::read> src
+    Tap src
 ) {
     const float strength    = clamp(u.strength, 0.0f, 1.0f);
     const float density     = clamp(u.density, 0.0f, 1.0f);
@@ -1121,8 +1210,8 @@ inline half3 DCRCCDBody(
         float caPx = caAmount * caMaxOffset;
         int2 posR = pos + int2(int(-round(caPx)), 0);
         int2 posB = pos + int2(int( round(caPx)), 0);
-        color.r = dcr_ccdSafeRead(src, posR).r;
-        color.b = dcr_ccdSafeRead(src, posB).b;
+        color.r = src.read(posR).r;
+        color.b = src.read(posB).b;
     }
 
     // 2. Saturation boost: Rec.709 luma anchor.
@@ -1135,8 +1224,8 @@ inline half3 DCRCCDBody(
     // 3. Digital noise: block-quantized sin-trick, chromaticity = 0.6.
     if (density > 0.001f) {
         float2 grainPos = floor(float2(gid) / grainSize);
-        uint2 blockCenter = uint2(grainPos * grainSize + grainSize * 0.5f);
-        blockCenter = min(blockCenter, uint2(src.get_width() - 1, src.get_height() - 1));
+        // Tap.read() clamps out-of-range coords to the texture extent.
+        int2 blockCenter = int2(grainPos * grainSize + grainSize * 0.5f);
         float luma = dot(float3(src.read(blockCenter).rgb), float3(0.299f, 0.587f, 0.114f));
 
         float nR = fract(sin(dot(grainPos, float2(12.9898f, 78.233f)) + luma * 43.0f) * 43758.5453f) * 2.0f - 1.0f;
@@ -1163,11 +1252,11 @@ inline half3 DCRCCDBody(
     //    lifted (keeps color fringing soft).
     if (sharpAmount > 0.001f) {
         const half3 kLumaH = half3(kDCRCCDLumaRec709);
-        half4 origCenter = src.read(gid);
-        half4 left  = dcr_ccdSafeRead(src, pos + int2(-sharpStep,  0));
-        half4 right = dcr_ccdSafeRead(src, pos + int2( sharpStep,  0));
-        half4 top   = dcr_ccdSafeRead(src, pos + int2( 0, -sharpStep));
-        half4 bot   = dcr_ccdSafeRead(src, pos + int2( 0,  sharpStep));
+        half4 origCenter = src.read(int2(gid));
+        half4 left  = src.read(pos + int2(-sharpStep,  0));
+        half4 right = src.read(pos + int2( sharpStep,  0));
+        half4 top   = src.read(pos + int2( 0, -sharpStep));
+        half4 bot   = src.read(pos + int2( 0,  sharpStep));
         // FIXME(§8.6 Tier 2): × 0.96 = 60% of SharpenFilter's × 1.6 product
         // compression (see SharpenFilter.swift's ×1.6 block). Derivation chain:
         // sharpAmount slider → SharpenFilter would apply × 1.6 → CCD uses
@@ -1262,12 +1351,18 @@ struct FilmGrainUniforms {
     float chromaticity;   // 0 ... 1
 };
 
+// Body templated on `Tap` so codegen can substitute either
+// `DCRRawSourceTap` (default) or a `KernelInlining`-generated
+// fused tap that pre-applies an upstream pixelLocal body to each
+// sample. Tap.read(int2) handles bounds clamping internally.
+//
 // @dcr:body-begin DCRFilmGrainBody
+template <typename Tap>
 inline half3 DCRFilmGrainBody(
     half3 rgbIn,
     constant FilmGrainUniforms& u,
     uint2 gid,
-    texture2d<half, access::read> src
+    Tap src
 ) {
     const float density      = clamp(u.density, 0.0f, 1.0f);
     const float grainSize    = max(u.grainSize, 1.0f);
@@ -1283,9 +1378,10 @@ inline half3 DCRFilmGrainBody(
     float2 grainPos = floor(float2(gid) / grainSize);
 
     // Block-center pixel luma (shared across the block so luma-driven
-    // randomness doesn't re-break the quantization).
-    uint2 center = uint2(grainPos * grainSize + grainSize * 0.5f);
-    center = min(center, uint2(src.get_width() - 1, src.get_height() - 1));
+    // randomness doesn't re-break the quantization). Tap.read() clamps
+    // out-of-range coords to the texture extent so we don't need to
+    // pre-clamp `center` here.
+    int2 center = int2(grainPos * grainSize + grainSize * 0.5f);
     float luma = dot(float3(src.read(center).rgb), float3(0.299f, 0.587f, 0.114f));
 
     // sin-trick noise in [-1, 1].

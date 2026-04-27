@@ -199,12 +199,20 @@ extension CompiledChainCache {
         case let .pixelLocal(body, uniforms, linear, aux):
             hasher.combine(0)
             hasher.combine(body.functionName)
+            // Including signatureShape in the key is defensive: the SDK
+            // ships unique functionNames per filter today so the shape
+            // discriminator is redundant, but mixing it in costs one
+            // hash combine and protects the cache key against a future
+            // user-registered filter that happens to reuse a built-in
+            // body name with a different shape.
+            hasher.combine(body.signatureShape)
             hasher.combine(uniformBytes(uniforms))
             hasher.combine(linear)
             hasher.combine(aux)
         case let .neighborRead(body, uniforms, radius, aux):
             hasher.combine(1)
             hasher.combine(body.functionName)
+            hasher.combine(body.signatureShape)
             hasher.combine(uniformBytes(uniforms))
             hasher.combine(radius)
             hasher.combine(aux)

@@ -295,6 +295,46 @@ internal struct Node: Sendable, Identifiable {
     }
 }
 
+// MARK: - Optimizer-pass copy helper
+
+extension Node {
+
+    /// Return a copy of this node with `kind` and `inputs` replaced
+    /// while preserving every other field — `id`, `outputSpec`,
+    /// `isFinal`, `debugLabel`, plus the optimiser markers
+    /// `inlinedBodyBeforeSample` and `tailSinkedBody`.
+    ///
+    /// **Optimiser passes that rewrite NodeRefs (CSE, VerticalFusion,
+    /// TailSink, …) MUST use this helper** instead of constructing a
+    /// fresh `Node` via the designated initialiser. Hand-written
+    /// `Node.init` calls are silent-drop-prone: any future field added
+    /// to `Node` would have to be threaded through every rewrite site,
+    /// and the failure mode (the field defaulting to `nil` / a zero
+    /// value via the initialiser's default arguments) is invisible at
+    /// compile time. Centralising the field-preservation discipline
+    /// here makes "Node.init in an optimiser pass" stand out as a code
+    /// smell during review.
+    ///
+    /// Use the designated initialiser only when constructing a Node
+    /// from genuinely fresh material (lowering, or VF's cluster build
+    /// where the optimiser markers are deliberately reset to nil).
+    internal func withReplacedRefs(
+        kind: NodeKind,
+        inputs: [NodeRef]
+    ) -> Node {
+        Node(
+            id: self.id,
+            kind: kind,
+            inputs: inputs,
+            outputSpec: self.outputSpec,
+            isFinal: self.isFinal,
+            debugLabel: self.debugLabel,
+            inlinedBodyBeforeSample: self.inlinedBodyBeforeSample,
+            tailSinkedBody: self.tailSinkedBody
+        )
+    }
+}
+
 // MARK: - Node dependency traversal
 
 extension Node {
@@ -309,6 +349,14 @@ extension Node {
     /// fan-out tests for VerticalFusion / KernelInlining, etc.).
     /// Return order matches input order so diagnostics see deps in
     /// the order the shader sees them.
+    ///
+    /// **Contract for new `Node` fields**: any future field that
+    /// carries a `NodeRef` (or a collection of them) MUST be appended
+    /// to the switch below. Optimiser passes rely on this method as
+    /// the single source of truth for "does node X depend on node Y?".
+    /// Forgetting to update it would let DCE silently delete reachable
+    /// nodes and let `consumerCount` under-count, opening the door to
+    /// fan-out misjudgement in KernelInlining / TailSink / VF.
     internal var dependencyRefs: [NodeRef] {
         var refs = inputs
         switch kind {

@@ -84,7 +84,7 @@ internal struct TailSink: OptimizerPass {
         let byID: [NodeID: Node] = Dictionary(
             uniqueKeysWithValues: graph.nodes.map { ($0.id, $0) }
         )
-        let consumerCount = computeConsumerCount(graph)
+        let consumerCount = graph.consumerCounts()
 
         var replacement: [NodeID: Node] = [:]
         var dropped: Set<NodeID> = []
@@ -106,6 +106,13 @@ internal struct TailSink: OptimizerPass {
                 // nodes still see M's pre-absorption output and the merged
                 // M+P kernel would change their input.
                 (consumerCount[producerID] ?? 0) == 1,
+                // M cannot be the pipeline's final output (final nodes
+                // have zero consumers, which is already implied by the
+                // `consumerCount == 1` guard above — this explicit check
+                // is defensive symmetry with `KernelInlining`'s
+                // `!pred.isFinal` line and surfaces intent to readers
+                // skimming the fusion conditions).
+                producer.isFinal == false,
                 producer.outputSpec == .sameAsSource,
                 producer.tailSinkedBody == nil
             else {
@@ -126,18 +133,15 @@ internal struct TailSink: OptimizerPass {
                 else { continue }
 
                 // Cluster codegen (`MetalSourceBuilder.buildFusedPixelLocalCluster`)
-                // requires every member to use `.pixelLocalOnly` shape — it
-                // emits a uniform `(rgb, uN)` member-call signature. Other
-                // shapes (`.pixelLocalWithLUT3D` / `.pixelLocalWithOverlay` /
-                // `.pixelLocalWithGid` / `.neighborReadWithSource`) need
-                // additional bound textures or `gid` parameters. Absorbing a
-                // P with a non-`.pixelLocalOnly` shape produced a mixed-shape
+                // requires every member to use the `(rgb, u)` call form.
+                // Absorbing a P with a non-fusable shape produced a mixed
                 // cluster that codegen rejected with
                 // `BuildError.unsupportedSignatureShape`, surfacing as a
                 // hung preview + CPU spike (every frame retried the failing
                 // build). LUT3DFilter (`.pixelLocalWithLUT3D`) was the
-                // observed trigger.
-                guard pBody.signatureShape == .pixelLocalOnly else {
+                // observed trigger. The fusable shape set is centralised in
+                // `FusionBodySignatureShape.canFuseAsPixelLocalMember`.
+                guard pBody.signatureShape.canFuseAsPixelLocalMember else {
                     continue
                 }
 
@@ -169,6 +173,15 @@ internal struct TailSink: OptimizerPass {
                 refRewrite[node.id] = producer.id
 
             case .neighborRead(let nBody, let nUniforms, let nRadius, let nAux):
+                // Codegen for `.neighborRead` with tail-sunk body emits
+                // `rgb = pBody(rgb, uTail);` between N's body call and
+                // `output.write`. P's body needs the `(rgb, u)` call
+                // form — same fusability gate as the cluster branch
+                // above. Centralised in
+                // `FusionBodySignatureShape.canFuseAsPixelLocalMember`.
+                guard pBody.signatureShape.canFuseAsPixelLocalMember else {
+                    continue
+                }
                 let rangeStart = nAux.count
                 let combinedAux = nAux + pAux
                 let sinked = FusedClusterMember(
@@ -277,16 +290,12 @@ internal struct TailSink: OptimizerPass {
             newKind = node.kind
         }
 
-        return Node(
-            id: node.id,
-            kind: newKind,
-            inputs: newInputs,
-            outputSpec: node.outputSpec,
-            isFinal: node.isFinal,
-            debugLabel: node.debugLabel,
-            inlinedBodyBeforeSample: node.inlinedBodyBeforeSample,
-            tailSinkedBody: node.tailSinkedBody
-        )
+        // `withReplacedRefs` preserves `inlinedBodyBeforeSample` and
+        // `tailSinkedBody` automatically — important here because
+        // TailSink's input graph may already carry those markers from
+        // earlier passes (KernelInlining), and the rewriter must not
+        // strip them.
+        return node.withReplacedRefs(kind: newKind, inputs: newInputs)
     }
 
     private func rewriteRef(_ ref: NodeRef, using map: [NodeID: NodeID]) -> NodeRef {
@@ -296,15 +305,4 @@ internal struct TailSink: OptimizerPass {
         return ref
     }
 
-    private func computeConsumerCount(_ graph: PipelineGraph) -> [NodeID: Int] {
-        var counts: [NodeID: Int] = [:]
-        for node in graph.nodes {
-            for ref in node.dependencyRefs {
-                if case .node(let id) = ref {
-                    counts[id, default: 0] += 1
-                }
-            }
-        }
-        return counts
-    }
 }

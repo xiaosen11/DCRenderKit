@@ -221,3 +221,40 @@ public enum FusionBodySignatureShape: Sendable, Hashable {
     /// so the body can sample arbitrary offsets.
     case neighborReadWithSource
 }
+
+@available(iOS 18.0, *)
+extension FusionBodySignatureShape {
+
+    /// Whether a body of this shape can ride as a non-init member of
+    /// a fused pixel-local execution context — either an interior
+    /// member of a `.fusedPixelLocalCluster`, or the head/tail body
+    /// absorbed by `KernelInlining` / `TailSink` into a neighbour-
+    /// read uber kernel.
+    ///
+    /// Only `.pixelLocalOnly` qualifies today: the codegen sites that
+    /// embed a fused member emit a `body(rgb, u)` call form with no
+    /// `gid`, no `lut` / `overlay` aux texture, and no `outputSize` —
+    /// so any body whose signature needs more than `(rgb, u)` cannot
+    /// be spliced in.
+    ///
+    /// **All optimiser passes and codegen branches that filter on
+    /// "can absorb this pixel-local body" MUST go through this
+    /// property** rather than spelling `== .pixelLocalOnly` inline.
+    /// Centralising it means a future expansion (e.g. a new
+    /// `.pixelLocalOnlyAlpha` variant that keeps the `(rgb, u)`
+    /// signature shape but threads alpha) only has to touch this
+    /// property — every gate that already opted into the abstraction
+    /// updates automatically. The single-line spelling is also a
+    /// stronger code-review signal than a bare equality check.
+    internal var canFuseAsPixelLocalMember: Bool {
+        switch self {
+        case .pixelLocalOnly:
+            return true
+        case .pixelLocalWithGid,
+             .pixelLocalWithLUT3D,
+             .pixelLocalWithOverlay,
+             .neighborReadWithSource:
+            return false
+        }
+    }
+}

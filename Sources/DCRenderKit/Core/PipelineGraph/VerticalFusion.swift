@@ -66,7 +66,7 @@ internal struct VerticalFusion: OptimizerPass {
         // Needed for the fan-out guard — A is only mergeable if it
         // has exactly one consumer (the B we're trying to merge it
         // into) and isn't the final node.
-        let consumerCount = computeConsumerCounts(graph)
+        let consumerCount = graph.consumerCounts()
 
         var newNodes: [Node] = []
         var remap: [NodeID: NodeID] = [:]
@@ -184,6 +184,24 @@ internal struct VerticalFusion: OptimizerPass {
             return false
         }
 
+        // Even if both members share a shape, the compute-path
+        // cluster codegen (`MetalSourceBuilder.buildFusedPixelLocal
+        // Cluster`) only emits the `body(rgb, u)` call form. A
+        // cluster of, say, two `.pixelLocalWithLUT3D` filters would
+        // pass the same-shape guard above but throw
+        // `unsupportedSignatureShape` at dispatch time — which the
+        // runtime surfaces as "command encoder released without
+        // endEncoding" plus a CPU spike (the failed compile retries
+        // every frame). This is the same root cause as
+        // `TailSink`'s cluster-absorption guard (TailSink.swift:140),
+        // applied at fusion-creation time instead of fusion-extension
+        // time. Filters that carry additional textures or `gid`
+        // remain dispatchable as standalone nodes; the fragment-
+        // chain path can still batch them via programmable blending.
+        guard candBody.signatureShape.canFuseAsPixelLocalMember else {
+            return false
+        }
+
         return true
     }
 
@@ -249,22 +267,6 @@ internal struct VerticalFusion: OptimizerPass {
 
     // MARK: - Helpers
 
-    /// Build a map from nodeID to the number of other nodes that
-    /// consume it. Uses `Node.dependencyRefs` so every kind's
-    /// auxiliary slots count. Nodes not present in any other node's
-    /// deps map to zero.
-    private func computeConsumerCounts(_ graph: PipelineGraph) -> [NodeID: Int] {
-        var counts: [NodeID: Int] = [:]
-        for node in graph.nodes {
-            for ref in node.dependencyRefs {
-                if case .node(let id) = ref {
-                    counts[id, default: 0] += 1
-                }
-            }
-        }
-        return counts
-    }
-
     /// Rewrite any `NodeRef.node(oldID)` in the node's inputs /
     /// kind-specific auxiliary refs according to `using`. Node
     /// fields not referencing node IDs (outputSpec, uniforms,
@@ -304,14 +306,13 @@ internal struct VerticalFusion: OptimizerPass {
         case .downsample, .upsample, .reduce:
             remappedKind = node.kind
         }
-        return Node(
-            id: node.id,
-            kind: remappedKind,
-            inputs: remappedInputs,
-            outputSpec: node.outputSpec,
-            isFinal: node.isFinal,
-            debugLabel: node.debugLabel
-        )
+        // Use `withReplacedRefs` (not `Node.init`) so the optimiser
+        // markers `inlinedBodyBeforeSample` / `tailSinkedBody` (and
+        // any future field on Node) propagate through unchanged.
+        // VF runs before KI / TailSink in the default pass order so
+        // those markers are nil today; the helper makes the rewrite
+        // robust against future pass-order changes.
+        return node.withReplacedRefs(kind: remappedKind, inputs: remappedInputs)
     }
 
     private func remapSingle(_ ref: NodeRef, using remap: [NodeID: NodeID]) -> NodeRef {

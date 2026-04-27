@@ -199,7 +199,7 @@ final class PortraitBlurMaskPipelineTests: XCTestCase {
             )),
             .multi(PortraitBlurFilter(strength: 80, maskTexture: mask)),
             .single(SaturationFilter(saturation: 1.1)),
-            .single(SharpenFilter(amount: 20, step: 1.0)),
+            .single(SharpenFilter(amount: 20, stepPixels: 1.0)),
         ]
 
         let pipeline = Pipeline(

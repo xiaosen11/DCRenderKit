@@ -60,7 +60,7 @@ final class EffectsFilterTests: XCTestCase {
 
     func testSharpenIdentityAtZero() throws {
         let source = try makeEffectSource(red: 0.4, green: 0.4, blue: 0.4)
-        let output = try runSingle(source, filter: SharpenFilter(amount: 0, step: 1))
+        let output = try runSingle(source, filter: SharpenFilter(amount: 0, stepPixels: 1))
         let p = try readEffectTexture(output)[4][4]
         XCTAssertEqual(p.r, 0.4, accuracy: 0.01)
     }
@@ -71,7 +71,7 @@ final class EffectsFilterTests: XCTestCase {
         // If the kernel weights are wrong (e.g. center mul is `4s` instead
         // of `1 + 4s`), this test fails catastrophically.
         let source = try makeEffectSource(red: 0.4, green: 0.4, blue: 0.4, width: 16, height: 16)
-        let output = try runSingle(source, filter: SharpenFilter(amount: 100, step: 1))
+        let output = try runSingle(source, filter: SharpenFilter(amount: 100, stepPixels: 1))
         let p = try readEffectTexture(output)[8][8]
         XCTAssertEqual(
             p.r, 0.4, accuracy: 0.02,
@@ -85,7 +85,7 @@ final class EffectsFilterTests: XCTestCase {
         // (x=0 and x=15) sample clamped neighbors that break linearity — so
         // we only check interior x∈[2,13].
         let source = try makeRampSource()  // horizontal 0→1 ramp, 16×16
-        let output = try runSingle(source, filter: SharpenFilter(amount: 100, step: 1))
+        let output = try runSingle(source, filter: SharpenFilter(amount: 100, stepPixels: 1))
         let pixels = try readEffectTexture(output)
         for x in 2...13 {
             let expected = Float(x) / 15.0
@@ -109,7 +109,7 @@ final class EffectsFilterTests: XCTestCase {
         //   Σneighbors = 0.4 + 0.6 + 0.6 + 0.6 = 2.2
         //   y = 0.6·7.4 − 2.2·1.6 = 4.44 − 3.52 = 0.92
         let source = try makeStepEdgeSource(darkValue: 0.4, brightValue: 0.6, width: 16, height: 16)
-        let output = try runSingle(source, filter: SharpenFilter(amount: 100, step: 1))
+        let output = try runSingle(source, filter: SharpenFilter(amount: 100, stepPixels: 1))
         let pixels = try readEffectTexture(output)
 
         XCTAssertEqual(pixels[8][7].r, 0.08, accuracy: 0.03, "Dark side of edge must undershoot to 0.08")
@@ -122,7 +122,7 @@ final class EffectsFilterTests: XCTestCase {
         let source = try makeEffectSource(red: 0.5, green: 0.5, blue: 0.5)
         let output = try runSingle(
             source,
-            filter: FilmGrainFilter(density: 0, roughness: 0.5, chromaticity: 0.5, grainSize: 4)
+            filter: FilmGrainFilter(density: 0, roughness: 0.5, chromaticity: 0.5, grainSizePixels: 4)
         )
         let p = try readEffectTexture(output)[4][4]
         XCTAssertEqual(p.r, 0.5, accuracy: 0.01)
@@ -134,7 +134,7 @@ final class EffectsFilterTests: XCTestCase {
         let source = try makeEffectSource(red: 0.5, green: 0.5, blue: 0.5)
         let output = try runSingle(
             source,
-            filter: FilmGrainFilter(density: 1.0, roughness: 1.0, chromaticity: 1.0, grainSize: 4)
+            filter: FilmGrainFilter(density: 1.0, roughness: 1.0, chromaticity: 1.0, grainSizePixels: 4)
         )
         let pixels = try readEffectTexture(output)
         for row in pixels {
@@ -151,7 +151,7 @@ final class EffectsFilterTests: XCTestCase {
         let source = try makeEffectSource(red: 0.5, green: 0.5, blue: 0.5, width: 32, height: 32)
         let output = try runSingle(
             source,
-            filter: FilmGrainFilter(density: 1.0, roughness: 0.5, chromaticity: 0, grainSize: 4)
+            filter: FilmGrainFilter(density: 1.0, roughness: 0.5, chromaticity: 0, grainSizePixels: 4)
         )
         let pixels = try readEffectTexture(output)
 
@@ -234,9 +234,9 @@ final class EffectsFilterTests: XCTestCase {
             chromaticAberration: 100,
             sharpening: 0,
             saturationBoost: 0,
-            grainSize: 2,
-            sharpStep: 1,
-            caMaxOffset: 6
+            grainSizePixels: 2,
+            sharpStepPixels: 1,
+            caMaxOffsetPixels: 6
         )
         let output = try runSingle(source, filter: filter)
         let pixels = try readEffectTexture(output)
@@ -273,9 +273,9 @@ final class EffectsFilterTests: XCTestCase {
             chromaticAberration: 0,
             sharpening: 0,
             saturationBoost: 100,   // maximum: saturation multiplier = 1.3
-            grainSize: 2,
-            sharpStep: 1,
-            caMaxOffset: 0
+            grainSizePixels: 2,
+            sharpStepPixels: 1,
+            caMaxOffsetPixels: 0
         )
         let output = try runSingle(source, filter: filter)
         let pixels = try readEffectTexture(output)
@@ -320,9 +320,9 @@ final class EffectsFilterTests: XCTestCase {
             chromaticAberration: 0,
             sharpening: 0,
             saturationBoost: 0,
-            grainSize: grainBlock,
-            sharpStep: 1,
-            caMaxOffset: 0
+            grainSizePixels: grainBlock,
+            sharpStepPixels: 1,
+            caMaxOffsetPixels: 0
         )
         let output = try runSingle(source, filter: filter)
         let pixels = try readEffectTexture(output)
@@ -370,9 +370,9 @@ final class EffectsFilterTests: XCTestCase {
                 chromaticAberration: 30,
                 sharpening: 40,
                 saturationBoost: 20,
-                grainSize: 2,
-                sharpStep: 1,
-                caMaxOffset: 2
+                grainSizePixels: 2,
+                sharpStepPixels: 1,
+                caMaxOffsetPixels: 2
             )
             let output = try runSingle(source, filter: filter)
             return try readEffectTexture(output)

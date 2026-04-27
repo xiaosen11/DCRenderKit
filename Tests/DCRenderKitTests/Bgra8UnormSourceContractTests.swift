@@ -108,7 +108,7 @@ final class Bgra8UnormSourceContractTests: XCTestCase {
         let source = try makeBgra8UnormStepEdge(darkValue: 0.4, brightValue: 0.6, width: 16, height: 16)
         let output = try runPipeline(
             source: source,
-            steps: [.single(SharpenFilter(amount: 100, step: 1))]
+            steps: [.single(SharpenFilter(amount: 100, stepPixels: 1))]
         )
         XCTAssertEqual(output.pixelFormat, .rgba16Float)
         let pixels = try readRgbaFloat(output)

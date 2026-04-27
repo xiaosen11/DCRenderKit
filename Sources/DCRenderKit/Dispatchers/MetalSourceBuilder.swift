@@ -113,20 +113,28 @@ internal enum MetalSourceBuilder {
                 )
             }
 
-        case let .neighborRead(body, _, _, _):
+        case let .neighborRead(body, _, _, additionalAux):
             switch body.signatureShape {
             case .neighborReadWithSource:
-                return try buildNeighborReadWithSource(body: body)
+                return try buildNeighborReadWithSource(
+                    body: body,
+                    additionalAux: additionalAux,
+                    inlinedBody: node.inlinedBodyBeforeSample,
+                    tailSinkedBody: node.tailSinkedBody
+                )
             default:
                 throw BuildError.unsupportedSignatureShape(body.signatureShape)
             }
 
         case let .fusedPixelLocalCluster(members, wantsLinear, aux):
-            // Every member must use the `.pixelLocalOnly` shape —
-            // mixed-shape clusters need the richer codegen that
-            // lands in later steps.
+            // Every member must satisfy the `(rgb, u)` call form;
+            // centralised in `canFuseAsPixelLocalMember`. Mixed
+            // clusters that slipped through earlier optimiser passes
+            // (e.g. a hypothetical `[LUT3D, LUT3D]` cluster) surface
+            // here as a clear error rather than as an opaque Metal
+            // compile failure.
             for member in members {
-                guard member.body.signatureShape == .pixelLocalOnly else {
+                guard member.body.signatureShape.canFuseAsPixelLocalMember else {
                     throw BuildError.unsupportedSignatureShape(member.body.signatureShape)
                 }
             }
@@ -173,36 +181,9 @@ internal enum MetalSourceBuilder {
     ///         output.write(half4(rgb, c.a), gid);
     ///     }
     private static func buildPixelLocalOnly(body: FusionBody) throws -> BuildResult {
-        // Helper text blocks for this body. Empty result means the
-        // builder doesn't know how to supply dependencies for this
-        // filter — surface it rather than produce a source that
-        // fails to compile at runtime.
-        let helpers = FusionHelperSource.helpersForBody(named: body.functionName)
-        guard !helpers.isEmpty else {
-            throw BuildError.unsupportedBodyHelpers(functionName: body.functionName)
-        }
-
-        // Extract the uniform struct and body-function texts from
-        // the filter's bundled source string.
-        let uniformStructText: String
-        let bodyText: String
-        do {
-            uniformStructText = try ShaderSourceExtractor.extractUniformStruct(
-                named: body.uniformStructName,
-                from: body.sourceText,
-                sourceLabel: body.sourceLabel
-            )
-            bodyText = try ShaderSourceExtractor.extractBody(
-                named: body.functionName,
-                from: body.sourceText,
-                sourceLabel: body.sourceLabel
-            )
-        } catch {
-            throw BuildError.extractionFailed(error)
-        }
-
+        let a = try extractArtefacts(for: body)
         let functionName = uberFunctionName(for: body)
-        let joinedHelpers = helpers.joined(separator: "\n\n")
+        let joinedHelpers = a.helpers.joined(separator: "\n\n")
 
         let source = """
         #include <metal_stdlib>
@@ -212,10 +193,10 @@ internal enum MetalSourceBuilder {
         \(joinedHelpers)
 
         // ── Filter uniform struct (from \(body.sourceLabel)) ──
-        \(uniformStructText)
+        \(a.uniformStructText)
 
         // ── Filter body (from \(body.sourceLabel)) ──
-        \(bodyText)
+        \(a.bodyText)
 
         // ── Uber kernel ────────────────────────────────────────────
         kernel void \(functionName)(
@@ -248,7 +229,7 @@ internal enum MetalSourceBuilder {
     /// addition to `rgb / u / gid`. LUT binds at texture slot 2;
     /// output and source stay at 0 and 1.
     private static func buildPixelLocalWithLUT3D(body: FusionBody) throws -> BuildResult {
-        let (helpers, uniformStructText, bodyText) = try extractArtefacts(for: body)
+        let a = try extractArtefacts(for: body)
         let functionName = uberFunctionName(for: body)
 
         let source = """
@@ -256,13 +237,13 @@ internal enum MetalSourceBuilder {
         using namespace metal;
 
         // ── Injected helpers ────────────────────────────────────────
-        \(helpers)
+        \(a.helpers.joined(separator: "\n\n"))
 
         // ── Filter uniform struct (from \(body.sourceLabel)) ──
-        \(uniformStructText)
+        \(a.uniformStructText)
 
         // ── Filter body (from \(body.sourceLabel)) ──
-        \(bodyText)
+        \(a.bodyText)
 
         // ── Uber kernel (pixelLocalWithLUT3D) ──────────────────────
         kernel void \(functionName)(
@@ -297,7 +278,7 @@ internal enum MetalSourceBuilder {
     /// as the body's last argument. Note the body takes and returns
     /// `half4` (not `half3`) — alpha is needed for Porter-Duff.
     private static func buildPixelLocalWithOverlay(body: FusionBody) throws -> BuildResult {
-        let (helpers, uniformStructText, bodyText) = try extractArtefacts(for: body)
+        let a = try extractArtefacts(for: body)
         let functionName = uberFunctionName(for: body)
 
         let source = """
@@ -305,13 +286,13 @@ internal enum MetalSourceBuilder {
         using namespace metal;
 
         // ── Injected helpers ────────────────────────────────────────
-        \(helpers)
+        \(a.helpers.joined(separator: "\n\n"))
 
         // ── Filter uniform struct (from \(body.sourceLabel)) ──
-        \(uniformStructText)
+        \(a.uniformStructText)
 
         // ── Filter body (from \(body.sourceLabel)) ──
-        \(bodyText)
+        \(a.bodyText)
 
         // ── Uber kernel (pixelLocalWithOverlay) ────────────────────
         kernel void \(functionName)(
@@ -342,57 +323,272 @@ internal enum MetalSourceBuilder {
 
     // MARK: - Shape: neighborReadWithSource (Sharpen / FilmGrain / CCD)
 
-    /// Build an uber kernel whose body samples the primary source
-    /// at offsets relative to `gid`. No aux texture slot — the body
-    /// receives the input texture itself as its `src` parameter.
-    private static func buildNeighborReadWithSource(body: FusionBody) throws -> BuildResult {
-        let (helpers, uniformStructText, bodyText) = try extractArtefacts(for: body)
-        let functionName = uberFunctionName(for: body)
+    /// Build an uber kernel for a `.neighborRead` node, optionally
+    /// fused with one upstream `.pixelLocal` body (head fusion via
+    /// `KernelInlining`) and/or one downstream `.pixelLocal` body
+    /// (tail fusion via `TailSink`).
+    ///
+    /// Fusion mechanics:
+    ///
+    /// * **Tail fusion** appends `rgb = pTail(rgb, u)` between the
+    ///   neighbour-read body call and `output.write`. Conceptually
+    ///   simple — the per-pixel transform runs once on the final
+    ///   result.
+    ///
+    /// * **Head fusion** uses the *source-tap* pattern. NeighborRead
+    ///   bodies are templated on a `Tap` parameter and call
+    ///   `tap.read(int2)` for every sample (centre + neighbours).
+    ///   When head fusion is scheduled, the kernel substitutes a
+    ///   `DCRFusedTap_<pHead>` whose `read()` applies the inlined
+    ///   `pHead(rgb, u)` body to the texture sample before returning.
+    ///   This means the per-pixel transform runs **once per sample**
+    ///   inside the neighbour-read kernel, which is the intent of
+    ///   head fusion: replace one full pixelLocal dispatch + its
+    ///   intermediate texture with N more sample-time function
+    ///   calls.
+    ///
+    /// Slot allocation:
+    ///   · `texture(0)` = output, `texture(1)` = source input
+    ///   · `buffer(0)` = N's uniforms (always)
+    ///   · `buffer(1)` = head-fused P's uniforms (when present)
+    ///   · next free slot = tail-fused P's uniforms (slot 1 if no
+    ///     head, slot 2 if both)
+    ///
+    /// `ComputeBackend.bindUniforms` mirrors this layout.
+    private static func buildNeighborReadWithSource(
+        body: FusionBody,
+        additionalAux: [NodeRef] = [],
+        inlinedBody: FusedClusterMember? = nil,
+        tailSinkedBody: FusedClusterMember? = nil
+    ) throws -> BuildResult {
+        // The source-tap codegen does not emit any auxiliary texture
+        // bindings: `.neighborReadWithSource` body signature is
+        // `body(rgb, u, gid, tap)` with no aux parameter, and the
+        // head/tail bodies (gated by `canFuseAsPixelLocalMember`) are
+        // `(rgb, u)` with no aux either. If the node arrived here with
+        // any auxiliary refs in its `additionalNodeInputs`,
+        // `ComputeBackend.bindAuxiliaryTextures` would `setTexture` at
+        // slot 2+ — slots the generated kernel does not declare — so
+        // the kernel and the binding would be out of contract. Surface
+        // the mismatch loudly instead of letting it manifest as a
+        // silent runtime corruption.
+        guard additionalAux.isEmpty else {
+            throw BuildError.unsupportedNodeKind(
+                "neighborReadWithSource source-tap codegen does not emit aux texture slots, but node carries \(additionalAux.count) auxiliary input(s) — earlier optimiser pass would have to extend codegen first"
+            )
+        }
+        // N's artefacts (the neighborRead body) and the optional
+        // head/tail fusion partners. `extractFusableArtefacts`
+        // returns nil when the partner is absent and throws on a
+        // shape-incompatible partner.
+        let nArt = try extractArtefacts(for: body)
+        let headArt = try extractFusableArtefacts(of: inlinedBody?.body)
+        let tailArt = try extractFusableArtefacts(of: tailSinkedBody?.body)
+
+        // Dedup helpers by exact text content. N, head P, and tail P
+        // may reference shared blocks (e.g. `srgbGamma`); each is
+        // emitted at most once.
+        var seenHelpers: Set<String> = []
+        var helpers: [String] = []
+        let allHelpers = nArt.helpers
+            + (headArt?.helpers ?? [])
+            + (tailArt?.helpers ?? [])
+        for block in allHelpers {
+            if seenHelpers.insert(block).inserted {
+                helpers.append(block)
+            }
+        }
+
+        // Dedup uniform structs by struct name. Two members of the
+        // same filter (theoretically possible if the same filter is
+        // both head- and tail-fused) share one declaration but two
+        // distinct uniform buffer bindings.
+        var seenStructs: Set<String> = [body.uniformStructName]
+        var uniformStructs: [String] = [nArt.uniformStructText]
+        if let headBody = inlinedBody?.body, let art = headArt,
+           seenStructs.insert(headBody.uniformStructName).inserted {
+            uniformStructs.append(art.uniformStructText)
+        }
+        if let tailBody = tailSinkedBody?.body, let art = tailArt,
+           seenStructs.insert(tailBody.uniformStructName).inserted {
+            uniformStructs.append(art.uniformStructText)
+        }
+
+        // Dedup body function definitions by name.
+        var seenBodies: Set<String> = [body.functionName]
+        var bodyTexts: [String] = [nArt.bodyText]
+        if let headBody = inlinedBody?.body, let art = headArt,
+           seenBodies.insert(headBody.functionName).inserted {
+            bodyTexts.append(art.bodyText)
+        }
+        if let tailBody = tailSinkedBody?.body, let art = tailArt,
+           seenBodies.insert(tailBody.functionName).inserted {
+            bodyTexts.append(art.bodyText)
+        }
+
+        let functionName = uberFunctionName(
+            for: body,
+            inlinedBody: inlinedBody,
+            tailSinkedBody: tailSinkedBody
+        )
+
+        // Build the fused tap struct definition (head fusion only).
+        // The struct's `read(int2)` runs the inlined pixelLocal body
+        // on every sample, so the templated neighbour-read body sees
+        // the post-P pixel value at every coordinate it touches —
+        // including `gid` itself, so head fusion automatically
+        // applies to the centre read too.
+        let fusedTapTypeName: String?
+        let fusedTapDecl: String?
+        if let headBody = inlinedBody?.body {
+            let typeName = "DCRFusedTap_\(headBody.functionName)"
+            fusedTapTypeName = typeName
+            fusedTapDecl = """
+            // ── Head-fused source tap (KernelInlining: \(headBody.functionName)) ──
+            // Substitutes for `DCRRawSourceTap`; applies the inlined
+            // pixel-local body to every sample the neighbour-read body
+            // requests (centre + neighbours).
+            struct \(typeName) {
+                texture2d<half, access::read> src;
+                constant \(headBody.uniformStructName)& uHead;
+                inline half4 read(int2 pos) const {
+                    const uint2 c = uint2(
+                        clamp(pos.x, 0, int(src.get_width()) - 1),
+                        clamp(pos.y, 0, int(src.get_height()) - 1)
+                    );
+                    const half4 raw = src.read(c);
+                    const half3 transformed = \(headBody.functionName)(raw.rgb, uHead);
+                    return half4(transformed, raw.a);
+                }
+            };
+            """
+        } else {
+            fusedTapTypeName = nil
+            fusedTapDecl = nil
+        }
+
+        // Compose kernel parameter list and body slot indices. The
+        // ordering is fixed (head before tail) so that the head's
+        // uniform always lives at `buffer(1)` when present, simplifying
+        // the binding logic in `ComputeBackend.bindUniforms`.
+        var paramLines: [String] = [
+            "    texture2d<half, access::write> output [[texture(0)]]",
+            "    texture2d<half, access::read>  input  [[texture(1)]]",
+            "    constant \(body.uniformStructName)& u0 [[buffer(0)]]",
+        ]
+        var nextBufferSlot = 1
+        var headSlot: Int? = nil
+        var tailSlot: Int? = nil
+        if let headBody = inlinedBody?.body {
+            headSlot = nextBufferSlot
+            paramLines.append(
+                "    constant \(headBody.uniformStructName)& uHead [[buffer(\(nextBufferSlot))]]"
+            )
+            nextBufferSlot += 1
+        }
+        if let tailBody = tailSinkedBody?.body {
+            tailSlot = nextBufferSlot
+            paramLines.append(
+                "    constant \(tailBody.uniformStructName)& uTail [[buffer(\(nextBufferSlot))]]"
+            )
+            nextBufferSlot += 1
+        }
+        paramLines.append("    uint2 gid [[thread_position_in_grid]]")
+        let kernelParams = paramLines.joined(separator: ",\n")
+
+        // Tap construction site. Auto-deduced template lets the body
+        // call site stay shape-agnostic.
+        let tapConstruction: String
+        if let typeName = fusedTapTypeName {
+            tapConstruction = "\(typeName) tap{input, uHead};"
+        } else {
+            tapConstruction = "DCRRawSourceTap tap{input};"
+        }
+
+        // Body call chain. `tap.read(int2(gid))` for the centre read
+        // means the head-fused body (if any) is applied to the centre
+        // pixel automatically, matching the per-sample behaviour
+        // inside the neighbour-read body.
+        var callChainLines: [String] = [
+            "    \(tapConstruction)",
+            "    const half4 c = tap.read(int2(gid));",
+            "    half3 rgb = \(body.functionName)(c.rgb, u0, gid, tap);",
+        ]
+        if let tailBody = tailSinkedBody?.body {
+            callChainLines.append("    rgb = \(tailBody.functionName)(rgb, uTail);")
+        }
+        callChainLines.append("    output.write(half4(rgb, c.a), gid);")
+        let bodyCallChain = callChainLines.joined(separator: "\n")
+
+        var headingTags: [String] = []
+        if let h = inlinedBody?.body { headingTags.append("head:\(h.functionName)") }
+        if let t = tailSinkedBody?.body { headingTags.append("tail:\(t.functionName)") }
+        let kernelHeading: String
+        if headingTags.isEmpty {
+            kernelHeading = "Uber kernel (neighborReadWithSource)"
+        } else {
+            kernelHeading = "Uber kernel (neighborReadWithSource + \(headingTags.joined(separator: " + ")))"
+        }
 
         let source = """
         #include <metal_stdlib>
         using namespace metal;
 
         // ── Injected helpers ────────────────────────────────────────
-        \(helpers)
+        \(helpers.joined(separator: "\n\n"))
 
-        // ── Filter uniform struct (from \(body.sourceLabel)) ──
-        \(uniformStructText)
+        // ── Filter uniform struct\(uniformStructs.count > 1 ? "s" : "") ──
+        \(uniformStructs.joined(separator: "\n\n"))
 
-        // ── Filter body (from \(body.sourceLabel)) ──
-        \(bodyText)
+        // ── Filter bod\(bodyTexts.count > 1 ? "ies" : "y") ──
+        \(bodyTexts.joined(separator: "\n\n"))
 
-        // ── Uber kernel (neighborReadWithSource) ───────────────────
+        \(fusedTapDecl ?? "")
+
+        // ── \(kernelHeading) ───────────────────
         kernel void \(functionName)(
-            texture2d<half, access::write> output [[texture(0)]],
-            texture2d<half, access::read>  input  [[texture(1)]],
-            constant \(body.uniformStructName)& u0 [[buffer(0)]],
-            uint2 gid [[thread_position_in_grid]])
+        \(kernelParams))
         {
             if (gid.x >= output.get_width() || gid.y >= output.get_height()) return;
-            const half4 c = input.read(gid);
-            half3 rgb = \(body.functionName)(c.rgb, u0, gid, input);
-            output.write(half4(rgb, c.a), gid);
+        \(bodyCallChain)
         }
         """
 
+        _ = headSlot
+        _ = tailSlot
         return BuildResult(
             source: source,
             functionName: functionName,
             bindings: Bindings(
-                uniformBufferCount: 1,
+                uniformBufferCount: nextBufferSlot,
                 auxiliaryTextureSlotCount: 0
             )
         )
     }
 
-    /// Shared extraction for single-body shapes — pulls helper
-    /// blocks + uniform struct + body text, wrapping any
-    /// `ShaderSourceExtractor` failure in `BuildError
-    /// .extractionFailed`.
-    private static func extractArtefacts(
-        for body: FusionBody
-    ) throws -> (helpers: String, uniformStruct: String, body: String) {
+    // MARK: - Artefact extraction (single source of truth)
+
+    /// Helper / uniform-struct / body-text trio extracted from a
+    /// `FusionBody`'s bundled source string. Helpers are returned as
+    /// an array so callers can dedup across multiple bodies before
+    /// joining; single-body callsites can `.joined(separator: "\n\n")`
+    /// inline.
+    private struct Artefacts {
+        let helpers: [String]
+        let uniformStructText: String
+        let bodyText: String
+    }
+
+    /// Pull a `FusionBody`'s artefacts, throwing
+    /// `BuildError.unsupportedBodyHelpers` when no helper-injection
+    /// rule is registered (caller passed a body the codegen doesn't
+    /// know how to support) and `BuildError.extractionFailed` when
+    /// the bundled source text fails to parse.
+    ///
+    /// Single source of truth for "Metal source for this body" —
+    /// every build* function consumes it instead of re-implementing
+    /// the extraction inline.
+    private static func extractArtefacts(for body: FusionBody) throws -> Artefacts {
         let helperBlocks = FusionHelperSource.helpersForBody(named: body.functionName)
         guard !helperBlocks.isEmpty else {
             throw BuildError.unsupportedBodyHelpers(functionName: body.functionName)
@@ -413,7 +609,25 @@ internal enum MetalSourceBuilder {
         } catch {
             throw BuildError.extractionFailed(error)
         }
-        return (helperBlocks.joined(separator: "\n\n"), uniformStructText, bodyText)
+        return Artefacts(
+            helpers: helperBlocks,
+            uniformStructText: uniformStructText,
+            bodyText: bodyText
+        )
+    }
+
+    /// Wrapper for an optional pixel-local fusion partner. Returns
+    /// `nil` when `body == nil`; throws
+    /// `BuildError.unsupportedSignatureShape` if the body's shape
+    /// isn't fusable as a `(rgb, u)` member — defence in depth on
+    /// top of `KernelInlining` / `TailSink` which already gate on
+    /// the same predicate.
+    private static func extractFusableArtefacts(of body: FusionBody?) throws -> Artefacts? {
+        guard let body = body else { return nil }
+        guard body.signatureShape.canFuseAsPixelLocalMember else {
+            throw BuildError.unsupportedSignatureShape(body.signatureShape)
+        }
+        return try extractArtefacts(for: body)
     }
 
     // MARK: - Shape: fusedPixelLocalCluster (pixelLocalOnly members)
@@ -820,12 +1034,13 @@ internal enum MetalSourceBuilder {
             auxTextureCount = 1
 
         case .neighborReadWithSource:
-            // body signature: rgb = body(rgb, u, gid, source).
-            // The body samples `source` at offsets, so chain mode is
-            // not viable — programmable blending exposes only the
-            // current pixel of the running attachment. Init only.
+            // body signature: rgb = body(rgb, u, gid, tap).
+            // The body samples `tap.read(int2)` at offsets via the
+            // `DCRRawSourceTap` wrapper. Chain mode is not viable —
+            // programmable blending exposes only the current pixel of
+            // the running attachment. Init only.
             let calls = members.enumerated().map { i, m in
-                "    rgb = \(m.body.functionName)(rgb, u\(i), gid, source);"
+                "    rgb = \(m.body.functionName)(rgb, u\(i), gid, tap);"
             }.joined(separator: "\n")
             initFragment = """
             // ── Fragment (init, neighborReadWithSource) ───────────────
@@ -836,7 +1051,8 @@ internal enum MetalSourceBuilder {
             \(uniformParamList))
             {
                 const uint2 gid = uint2(in.position.xy);
-                const half4 c = source.read(gid);
+                DCRRawSourceTap tap{source};
+                const half4 c = tap.read(int2(gid));
                 half3 rgb = c.rgb;
             \(calls)
                 return half4(rgb, c.a);
@@ -917,6 +1133,42 @@ internal enum MetalSourceBuilder {
         hasher.combine(body.functionName)
         hasher.combine(body.uniformStructName)
         hasher.combine(shapeTag(body.signatureShape))
+        return "DCR_Uber_\(String(hasher.finalize(), radix: 16))"
+    }
+
+    /// Variant for `.neighborRead` kernels that have absorbed an
+    /// upstream `.pixelLocal` (via `KernelInlining`) and/or a
+    /// downstream `.pixelLocal` (via `TailSink`). Each fused partner
+    /// changes the kernel's structural identity — different P → a
+    /// different kernel source — so the cache must mint a distinct
+    /// PSO per (N, head P, tail P) combination.
+    ///
+    /// The hash includes the function name + uniform-struct name of
+    /// each partner, plus an `hf:` / `tf:` tag to prevent two
+    /// different arrangements from colliding (e.g. head=A,tail=B vs
+    /// head=B,tail=A would otherwise hash identically).
+    internal static func uberFunctionName(
+        for body: FusionBody,
+        inlinedBody: FusedClusterMember? = nil,
+        tailSinkedBody: FusedClusterMember? = nil
+    ) -> String {
+        if inlinedBody == nil && tailSinkedBody == nil {
+            return uberFunctionName(for: body)
+        }
+        var hasher = FNV1aHasher()
+        hasher.combine(body.functionName)
+        hasher.combine(body.uniformStructName)
+        hasher.combine(shapeTag(body.signatureShape))
+        if let head = inlinedBody?.body {
+            hasher.combine("hf:")
+            hasher.combine(head.functionName)
+            hasher.combine(head.uniformStructName)
+        }
+        if let tail = tailSinkedBody?.body {
+            hasher.combine("tf:")
+            hasher.combine(tail.functionName)
+            hasher.combine(tail.uniformStructName)
+        }
         return "DCR_Uber_\(String(hasher.finalize(), radix: 16))"
     }
 

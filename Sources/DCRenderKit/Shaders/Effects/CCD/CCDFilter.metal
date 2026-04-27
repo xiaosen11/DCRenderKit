@@ -8,14 +8,6 @@ using namespace metal;
 
 constant float3 kDCRCCDLumaRec709 = float3(0.2126f, 0.7152f, 0.0722f);
 
-inline half4 dcr_ccdSafeRead(texture2d<half, access::read> tex, int2 pos) {
-    uint2 clamped = uint2(
-        clamp(pos.x, 0, int(tex.get_width()) - 1),
-        clamp(pos.y, 0, int(tex.get_height()) - 1)
-    );
-    return tex.read(clamped);
-}
-
 inline half dcr_ccdSoftLight(half base, half blend) {
     return base + (2.0h * blend - 1.0h) * base * (1.0h - base);
 }
@@ -76,12 +68,18 @@ struct CCDUniforms {
 //   app technical disclosures when available; none publicly documented
 //   at time of verification)
 
+// Body templated on `Tap` so codegen can substitute either
+// `DCRRawSourceTap` (default) or a `KernelInlining`-generated
+// fused tap that pre-applies an upstream pixelLocal body to each
+// sample. Tap.read(int2) handles bounds clamping internally.
+//
 // @dcr:body-begin DCRCCDBody
+template <typename Tap>
 inline half3 DCRCCDBody(
     half3 rgbIn,
     constant CCDUniforms& u,
     uint2 gid,
-    texture2d<half, access::read> src
+    Tap src
 ) {
     const float strength    = clamp(u.strength, 0.0f, 1.0f);
     const float density     = clamp(u.density, 0.0f, 1.0f);
@@ -100,8 +98,8 @@ inline half3 DCRCCDBody(
         float caPx = caAmount * caMaxOffset;
         int2 posR = pos + int2(int(-round(caPx)), 0);
         int2 posB = pos + int2(int( round(caPx)), 0);
-        color.r = dcr_ccdSafeRead(src, posR).r;
-        color.b = dcr_ccdSafeRead(src, posB).b;
+        color.r = src.read(posR).r;
+        color.b = src.read(posB).b;
     }
 
     // 2. Saturation boost: Rec.709 luma anchor.
@@ -114,8 +112,8 @@ inline half3 DCRCCDBody(
     // 3. Digital noise: block-quantized sin-trick, chromaticity = 0.6.
     if (density > 0.001f) {
         float2 grainPos = floor(float2(gid) / grainSize);
-        uint2 blockCenter = uint2(grainPos * grainSize + grainSize * 0.5f);
-        blockCenter = min(blockCenter, uint2(src.get_width() - 1, src.get_height() - 1));
+        // Tap.read() clamps out-of-range coords to the texture extent.
+        int2 blockCenter = int2(grainPos * grainSize + grainSize * 0.5f);
         float luma = dot(float3(src.read(blockCenter).rgb), float3(0.299f, 0.587f, 0.114f));
 
         float nR = fract(sin(dot(grainPos, float2(12.9898f, 78.233f)) + luma * 43.0f) * 43758.5453f) * 2.0f - 1.0f;
@@ -142,11 +140,11 @@ inline half3 DCRCCDBody(
     //    lifted (keeps color fringing soft).
     if (sharpAmount > 0.001f) {
         const half3 kLumaH = half3(kDCRCCDLumaRec709);
-        half4 origCenter = src.read(gid);
-        half4 left  = dcr_ccdSafeRead(src, pos + int2(-sharpStep,  0));
-        half4 right = dcr_ccdSafeRead(src, pos + int2( sharpStep,  0));
-        half4 top   = dcr_ccdSafeRead(src, pos + int2( 0, -sharpStep));
-        half4 bot   = dcr_ccdSafeRead(src, pos + int2( 0,  sharpStep));
+        half4 origCenter = src.read(int2(gid));
+        half4 left  = src.read(pos + int2(-sharpStep,  0));
+        half4 right = src.read(pos + int2( sharpStep,  0));
+        half4 top   = src.read(pos + int2( 0, -sharpStep));
+        half4 bot   = src.read(pos + int2( 0,  sharpStep));
         // FIXME(§8.6 Tier 2): × 0.96 = 60% of SharpenFilter's × 1.6 product
         // compression (see SharpenFilter.swift's ×1.6 block). Derivation chain:
         // sharpAmount slider → SharpenFilter would apply × 1.6 → CCD uses

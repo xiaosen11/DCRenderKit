@@ -95,6 +95,16 @@ public struct ComputeDispatcher {
         guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
             throw PipelineError.device(.commandEncoderCreationFailed(kind: .compute))
         }
+        // Defensive: see ComputeBackend.execute for the same pattern.
+        // If `uniformPool.nextBuffer(...)` throws between encoder
+        // creation and `endEncoding()`, ARC-driven dealloc traps with
+        // `Command encoder released without endEncoding`.
+        var encoderEnded = false
+        defer {
+            if !encoderEnded {
+                encoder.endEncoding()
+            }
+        }
         encoder.label = "DCR.Compute.\(kernel)"
         encoder.setComputePipelineState(pso)
 
@@ -145,6 +155,7 @@ public struct ComputeDispatcher {
 
         // 7. Finalize
         encoder.endEncoding()
+        encoderEnded = true
     }
 
     // MARK: - Private helpers

@@ -129,14 +129,12 @@ internal struct CommonSubexpressionElimination: OptimizerPass {
         case .downsample, .upsample, .reduce:
             remappedKind = node.kind
         }
-        return Node(
-            id: node.id,
-            kind: remappedKind,
-            inputs: remappedInputs,
-            outputSpec: node.outputSpec,
-            isFinal: node.isFinal,
-            debugLabel: node.debugLabel
-        )
+        // Use `withReplacedRefs` (not `Node.init`) so future fields
+        // added to `Node` propagate through this rewrite automatically.
+        // CSE today runs before KernelInlining / TailSink so the
+        // optimiser markers are nil at this point — but the helper
+        // makes the invariant robust against pass-order changes.
+        return node.withReplacedRefs(kind: remappedKind, inputs: remappedInputs)
     }
 
     private func remapSingle(_ ref: NodeRef, using remap: [NodeID: NodeID]) -> NodeRef {

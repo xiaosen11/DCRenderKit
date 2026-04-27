@@ -135,7 +135,7 @@ enum FilterChainBuilder {
         if params.sharpening > 0 {
             chain.append(.single(SharpenFilter(
                 amount: params.sharpening,
-                step: max(round(1.0 * pixelsPerPoint), 1)
+                stepPixels: max(round(1.0 * pixelsPerPoint), 1)
             )))
         }
 
@@ -145,7 +145,7 @@ enum FilterChainBuilder {
                 density: params.filmGrain / 100.0,
                 roughness: params.filmGrain / 100.0,   // share with density for UI simplicity
                 chromaticity: params.filmGrainColor / 100.0,
-                grainSize: max(1.5 * pixelsPerPoint, 1)
+                grainSizePixels: max(1.5 * pixelsPerPoint, 1)
             )))
         }
 
@@ -157,9 +157,9 @@ enum FilterChainBuilder {
                 chromaticAberration: params.ccdChromaticAberration,
                 sharpening: params.ccdSharpening,
                 saturationBoost: params.ccdSaturation,
-                grainSize: max(1.5 * pixelsPerPoint, 1),
-                sharpStep: max(round(0.5 * pixelsPerPoint), 1),
-                caMaxOffset: 5.0 * pixelsPerPoint
+                grainSizePixels: max(1.5 * pixelsPerPoint, 1),
+                sharpStepPixels: max(round(0.5 * pixelsPerPoint), 1),
+                caMaxOffsetPixels: 5.0 * pixelsPerPoint
             )))
         }
 

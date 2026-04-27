@@ -61,12 +61,18 @@ struct FilmGrainUniforms {
     float chromaticity;   // 0 ... 1
 };
 
+// Body templated on `Tap` so codegen can substitute either
+// `DCRRawSourceTap` (default) or a `KernelInlining`-generated
+// fused tap that pre-applies an upstream pixelLocal body to each
+// sample. Tap.read(int2) handles bounds clamping internally.
+//
 // @dcr:body-begin DCRFilmGrainBody
+template <typename Tap>
 inline half3 DCRFilmGrainBody(
     half3 rgbIn,
     constant FilmGrainUniforms& u,
     uint2 gid,
-    texture2d<half, access::read> src
+    Tap src
 ) {
     const float density      = clamp(u.density, 0.0f, 1.0f);
     const float grainSize    = max(u.grainSize, 1.0f);
@@ -82,9 +88,10 @@ inline half3 DCRFilmGrainBody(
     float2 grainPos = floor(float2(gid) / grainSize);
 
     // Block-center pixel luma (shared across the block so luma-driven
-    // randomness doesn't re-break the quantization).
-    uint2 center = uint2(grainPos * grainSize + grainSize * 0.5f);
-    center = min(center, uint2(src.get_width() - 1, src.get_height() - 1));
+    // randomness doesn't re-break the quantization). Tap.read() clamps
+    // out-of-range coords to the texture extent so we don't need to
+    // pre-clamp `center` here.
+    int2 center = int2(grainPos * grainSize + grainSize * 0.5f);
     float luma = dot(float3(src.read(center).rgb), float3(0.299f, 0.587f, 0.114f));
 
     // sin-trick noise in [-1, 1].

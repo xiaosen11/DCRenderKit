@@ -82,8 +82,8 @@ final class SmokeTests: XCTestCase {
                 .single(SaturationFilter(saturation: 1.1)),
                 .multi(HighlightShadowFilter(highlights: -20, shadows: 15)),
                 .multi(ClarityFilter(intensity: 25)),
-                .single(SharpenFilter(amount: 40, step: 2)),
-                .single(FilmGrainFilter(density: 0.3, roughness: 0.4, chromaticity: 0.2, grainSize: 3)),
+                .single(SharpenFilter(amount: 40, stepPixels: 2)),
+                .single(FilmGrainFilter(density: 0.3, roughness: 0.4, chromaticity: 0.2, grainSizePixels: 3)),
                 .single(lut),
             ]
         )
@@ -119,7 +119,7 @@ final class SmokeTests: XCTestCase {
             input: .texture(source),
             steps: [
                 .multi(PortraitBlurFilter(strength: 100, maskTexture: mask)),
-                .single(SharpenFilter(amount: 40, step: 2)),
+                .single(SharpenFilter(amount: 40, stepPixels: 2)),
             ]
         )
         assertInGamut(output)

@@ -119,13 +119,20 @@ internal enum TextureAliasingPlanner {
             //     bucket is safe to reuse for the current node (it
             //     will NOT be read at this step because its last
             //     consumer already ran).
-            for (bucket, end) in bucketEnd {
-                if end < node.id {
-                    if let spec = bucketSpec[bucket] {
-                        freePerSpec[spec, default: []].append(bucket)
-                    }
-                    bucketEnd.removeValue(forKey: bucket)
+            //
+            // Snapshot the buckets to release first, then mutate
+            // `bucketEnd`. Iterating a `Dictionary` while removing
+            // entries from it is undefined behaviour in Swift even
+            // though the iterator may appear to work for small
+            // dictionaries — it can crash or skip entries on rehash.
+            let toRelease = bucketEnd.compactMap { (bucket, end) -> Int? in
+                end < node.id ? bucket : nil
+            }
+            for bucket in toRelease {
+                if let spec = bucketSpec[bucket] {
+                    freePerSpec[spec, default: []].append(bucket)
                 }
+                bucketEnd.removeValue(forKey: bucket)
             }
 
             // 2b. Skip allocation for chain-internal clusters —

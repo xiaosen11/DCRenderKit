@@ -134,6 +134,20 @@ inline half3 DCRWhiteBalanceBody(half3 rgbIn, constant WhiteBalanceUniforms& u) 
 
     half3 mixed = mix(rgbTinted, blended, half(tempCoef));
 
+    // SDK output contract: every filter must emit non-negative linear-
+    // sRGB. The YIQ tint matrix at extreme `tint` values can drive
+    // individual gamma channels to ≈ -0.17 on saturated primaries
+    // (verified: red input + tint=+200 → G ≈ -0.116). In linear mode
+    // the subsequent `DCRSRGBGammaToLinear` strips negatives via its
+    // internal `max(c, 0)`, but in perceptual mode the gamma value is
+    // returned directly — propagating the negative downstream and
+    // producing the "脏黑斑 / dirty black blob" symptom in any
+    // OKLab-using consumer (Saturation, Vibrance) further down the
+    // chain. Clamping here at the producer's output enforces the
+    // contract for both modes uniformly. HDR overshoot (`> 1`) is
+    // preserved.
+    mixed = max(mixed, half3(0.0h));
+
     // Re-linearize before write (no-op in perceptual mode).
     if (isLinear) {
         mixed.r = half(DCRSRGBGammaToLinear(float(mixed.r)));

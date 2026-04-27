@@ -81,3 +81,121 @@ Weierstrass 近似定理：2-3 参数的平滑函数家族几乎能拟合任何 
 - ✅ 新增滤镜
 - ✅ 重构已有滤镜的核心算法
 - ⚠️ 调整滤镜参数（极值压缩 / 默认值）不需要走完整流程，但仍应遵循第 4 步 doc comment 要求
+
+---
+
+## 🔴 SDK 输出契约（硬约束）
+
+**Why 这条是硬的**：用户编辑预览出现"脏黑斑 / blob"的真凶就是 Sat/Vib 漏掉这条契约——上游 WhiteBalance 在 perceptual 模式下输出含负值的 gamma 像素，OKLab 滤镜没做 sanitisation 直接喂给 `pow(abs(x), 1/3)`，gamut clamp 收敛到错误的 L → 黑斑。这类 bug 不会 crash，只会把视觉结果污染，且穿过整条 chain 才暴露——**必须在源头阻止**。
+
+### C.1 输出非负契约
+
+**每个 filter body 的 `return half3(...)` 输出必须满足 `r, g, b ≥ 0`**（HDR `> 1` 允许保留）。
+
+理由：
+- OKLab 数学（Sat/Vib/未来基于 OKLab 的滤镜）只对 non-negative linear sRGB 有定义；
+- `bgra8Unorm` 写到 8-bit 显示面时负值被静默 clamp 到 0 → "黑斑"；
+- 物理意义：负光 = 没有定义。
+
+**机制化执行**：`Tests/DCRenderKitTests/Contracts/SDKFilterOutputContractTests.swift` 对每个 SDK 滤镜跑非负检查。**新增滤镜必须加一个 `test<FilterName>AtExtremesIsNonNegative()` 方法**，覆盖：
+- 5 个代表性输入 patch（grey / skin / 三原色 / saturated near-edge）
+- ≥ 2 个极端参数组合（slider 极值 + 反向极值）
+
+测试模板：
+```swift
+func testYourFilterAtExtremesIsNonNegative() throws {
+    for probe in probes {
+        for v in [Float(-100), Float(+100)] {  // 适配你的 slider 范围
+            let source = try makeSinglePatchTexture(probe)
+            let output = try runFilter(source: source, filter: YourFilter(slider: v))
+            let p = try readCentrePixel(output)
+            assertOutputNonNegative(p, filter: "YourFilter", input: probe, params: "v=\(v)")
+        }
+    }
+}
+```
+
+**实现侧守则**：filter body 内做必要的 `clamp` / `max(c, 0)` / 边界裁剪。不要假设上游不会喂 OOG，因为：
+1. 别的 filter 的极端参数可能在内部产生 OOG（YIQ 矩阵、Sharpen 的 Laplacian 等）；
+2. SDK 是 HDR-aware 的，中间 `rgba16Float` 可以承载 OOG 值，但你这一站要把它消化掉。
+
+### C.2 colorSpace 参数契约
+
+**每个对 RGB 几何敏感的 filter（OKLab / log / 任何非线性曲线）必须接受 `colorSpace: DCRColorSpace` 参数**，并在 body 里据此做 gamma↔linear 转换。
+
+理由：
+- SDK 支持 `.linear` 和 `.perceptual` 两种 pipeline 模式（DCRenderKit.defaultColorSpace 切换）；
+- 在 perceptual 模式下源纹理装的是 sRGB-gamma encoded bytes，filter body 拿到的就是 gamma 值；
+- 任何对"linear sRGB 数值"敏感的数学（OKLab、log-slope 对比度、Reinhard tonemap、guided filter）在 gamma 值上跑就是错的；
+- 12 个内建滤镜里只有 Saturation / Vibrance 漏了这条契约——结果用户在 perceptual 编辑预览里就看到了黑斑。
+
+**实施模板**（mirror Exposure / Contrast / WhiteBalance 的标准）：
+
+```swift
+public struct YourFilter: FilterProtocol {
+    public var slider: Float
+    public var colorSpace: DCRColorSpace
+
+    public init(
+        slider: Float = 0,
+        colorSpace: DCRColorSpace = DCRenderKit.defaultColorSpace
+    ) { ... }
+
+    public var uniforms: FilterUniforms {
+        FilterUniforms(YourUniforms(
+            slider: slider,
+            isLinearSpace: colorSpace == .linear ? 1 : 0
+        ))
+    }
+}
+
+struct YourUniforms {
+    var slider: Float
+    var isLinearSpace: UInt32     // 必须是 UInt32（Metal `uint` 对齐）
+}
+```
+
+shader body：
+
+```metal
+struct YourUniforms {
+    float slider;
+    uint  isLinearSpace;
+};
+
+inline half3 DCRYourBody(half3 rgbIn, constant YourUniforms& u) {
+    const bool isLinear = (u.isLinearSpace != 0u);
+    
+    // C.1 sanitisation + C.2 gamma→linear 二合一
+    const float3 sanitised = max(float3(rgbIn), 0.0f);
+    const float3 rgbLinear = isLinear ? sanitised : float3(
+        DCRSRGBGammaToLinear(sanitised.x),
+        DCRSRGBGammaToLinear(sanitised.y),
+        DCRSRGBGammaToLinear(sanitised.z)
+    );
+    
+    // ... 你的 linear-domain 数学 ...
+    
+    // 出口对应转回 gamma
+    if (isLinear) return half3(rgbOut);
+    return half3(
+        DCRSRGBLinearToGamma(rgbOut.x),
+        DCRSRGBLinearToGamma(rgbOut.y),
+        DCRSRGBLinearToGamma(rgbOut.z)
+    );
+}
+```
+
+**FusionHelperSource 注册**：在 `helpersForBody(named:)` 加入 `srgbGamma` helper（如果没用 OKLab 则可省）。
+
+**FusionBody.wantsLinearInput 设为 `false`**——这是 fusion 的 metadata，告诉 VerticalFusion "我能与同样自处理 colorSpace 的兄弟节点融成一个 cluster"，不是说 body 真想要 gamma 输入。所有内建 tone/colour 滤镜都用 `false`，让它们彼此之间能融合。
+
+### C.3 自检 checklist（merge 前过一遍）
+
+写完新 filter，在 PR 描述里勾完：
+
+- [ ] body 入口对 OOG/负输入做了 sanitisation（C.1）
+- [ ] 如对线性 RGB 几何敏感，加了 `colorSpace` 参数 + isLinearSpace 分支（C.2）
+- [ ] `Tests/DCRenderKitTests/Contracts/SDKFilterOutputContractTests.swift` 加了 `test<FilterName>AtExtremesIsNonNegative` 测试方法
+- [ ] linear/perceptual 两种模式都跑通，identity 在两种模式下都成立
+- [ ] `swift test` 全绿，零 warning

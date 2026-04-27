@@ -239,17 +239,28 @@ internal enum FusionHelperSource {
     }
     """
 
-    /// MIRROR: `Shaders/Adjustment/Sharpen/SharpenFilter.metal`
-    /// `dcr_sharpenSafeRead` — edge-clamped texel read used by the
-    /// Laplacian unsharp mask body.
-    static let sharpenPrivate: String = """
-    inline half4 dcr_sharpenSafeRead(texture2d<half, access::read> tex, int2 pos) {
-        uint2 clamped = uint2(
-            clamp(pos.x, 0, int(tex.get_width()) - 1),
-            clamp(pos.y, 0, int(tex.get_height()) - 1)
-        );
-        return tex.read(clamped);
-    }
+    /// Source-tap abstraction for neighborRead bodies.
+    ///
+    /// `DCRRawSourceTap` is the un-fused variant: it wraps the
+    /// primary `input` texture and provides a bounds-clamped
+    /// `read(int2)` accessor. NeighborRead bodies (Sharpen,
+    /// FilmGrain, CCD) are templated on the tap type and always call
+    /// `tap.read(int2)`; codegen can substitute a different tap
+    /// struct (one that pre-applies an upstream pixelLocal body
+    /// before returning each sample) when `KernelInlining` has
+    /// scheduled head fusion. Substituting at the tap layer keeps
+    /// the body source unchanged across fused / un-fused dispatches.
+    static let sourceTap: String = """
+    struct DCRRawSourceTap {
+        texture2d<half, access::read> src;
+        inline half4 read(int2 pos) const {
+            const uint2 c = uint2(
+                clamp(pos.x, 0, int(src.get_width()) - 1),
+                clamp(pos.y, 0, int(src.get_height()) - 1)
+            );
+            return src.read(c);
+        }
+    };
     """
 
     /// MIRROR: `Shaders/Effects/FilmGrain/FilmGrainFilter.metal`
@@ -262,19 +273,12 @@ internal enum FusionHelperSource {
     """
 
     /// MIRROR: `Shaders/Effects/CCD/CCDFilter.metal`
-    /// Rec.709 luma constant + CCD-private SafeRead and SoftLight
-    /// helpers. Needed by `DCRCCDBody` for chromatic aberration
-    /// offset reads, grain block sampling, and luma-only sharpen.
+    /// Rec.709 luma constant + CCD-private SoftLight helper. The
+    /// previous `dcr_ccdSafeRead` helper is retired in favour of
+    /// `DCRRawSourceTap` / `KernelInlining` fused-tap codegen
+    /// (see `sourceTap`).
     static let ccdPrivate: String = """
     constant float3 kDCRCCDLumaRec709 = float3(0.2126f, 0.7152f, 0.0722f);
-
-    inline half4 dcr_ccdSafeRead(texture2d<half, access::read> tex, int2 pos) {
-        uint2 clamped = uint2(
-            clamp(pos.x, 0, int(tex.get_width()) - 1),
-            clamp(pos.y, 0, int(tex.get_height()) - 1)
-        );
-        return tex.read(clamped);
-    }
 
     inline half dcr_ccdSoftLight(half base, half blend) {
         return base + (2.0h * blend - 1.0h) * base * (1.0h - base);
@@ -301,19 +305,22 @@ internal enum FusionHelperSource {
         case "DCRWhiteBalanceBody":
             return [srgbGamma, whiteBalancePrivate]
         case "DCRSaturationBody":
-            return [oklab]
+            // sRGB helpers needed for the perceptual-mode branch:
+            // input gamma → linear before OKLab, output linear → gamma
+            // before write. See SaturationFilter.metal for rationale.
+            return [srgbGamma, oklab]
         case "DCRVibranceBody":
-            return [oklab, vibrancePrivate]
+            return [srgbGamma, oklab, vibrancePrivate]
         case "DCRLUT3DBody":
             return [srgbGamma, lut3DPrivate]
         case "DCRNormalBlendBody":
             return [normalBlendPrivate]
         case "DCRSharpenBody":
-            return [sharpenPrivate]
+            return [sourceTap]
         case "DCRFilmGrainBody":
-            return [filmGrainPrivate]
+            return [filmGrainPrivate, sourceTap]
         case "DCRCCDBody":
-            return [ccdPrivate]
+            return [ccdPrivate, sourceTap]
         default:
             // Unknown body name — caller handles this by detecting
             // an empty result; MetalSourceBuilder surfaces it as

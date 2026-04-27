@@ -75,6 +75,34 @@ until `v1.0.0`. Each breaking change is flagged explicitly below.
 
 ### Changed (breaking)
 
+- **Visual-texture spatial parameters renamed with `Pixels` suffix**
+  to make the consumer's `basePt × pixelsPerPoint` contract
+  (`.claude/rules/spatial-params.md` §1) impossible to miss at the
+  call site. Filter init signatures changed:
+  - `SharpenFilter(amount:, step:)` → `SharpenFilter(amount:, stepPixels:)`
+  - `FilmGrainFilter(..., grainSize:)` → `FilmGrainFilter(..., grainSizePixels:)`
+  - `CCDFilter(..., grainSize:, sharpStep:, caMaxOffset:)` →
+    `CCDFilter(..., grainSizePixels:, sharpStepPixels:, caMaxOffsetPixels:)`
+
+  Migration: the value passed didn't change semantics — it was
+  always a pixel count — only the parameter label is more explicit.
+  Consumers that already compute `basePt × pixelsPerPoint` (e.g.
+  `FilterChainBuilder` in the Demo) just rename the argument; the
+  expression on the right stays the same.
+
+- **`SaturationFilter` / `VibranceFilter` gained a `colorSpace:
+  DCRColorSpace` parameter** (defaults to
+  `DCRenderKit.defaultColorSpace`), matching the existing pattern in
+  Exposure / Contrast / Whites / Blacks / WhiteBalance / LUT3D. In
+  `.perceptual` mode the body now linearises sRGB-gamma input
+  before the OKLab round-trip and re-encodes on output, fixing the
+  "脏黑斑 / dirty black blob" symptom users reported on edit-preview
+  chains where the source texture loaded as raw `bgra8Unorm` carries
+  gamma values. `.linear` mode behaviour is unchanged. Filters
+  constructed without the new parameter inherit the SDK's global
+  default — no migration needed if your pipeline already uses the
+  default color space throughout.
+
 - **`FusionBodyDescriptor.init` takes `sourceText: String` +
   `sourceLabel: String` instead of `sourceMetalFile: URL`** (Phase 5
   bundling fix). Xcode's SPM integration for iOS compiles `.metal`

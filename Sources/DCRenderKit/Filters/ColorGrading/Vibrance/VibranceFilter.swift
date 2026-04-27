@@ -76,9 +76,21 @@ public struct VibranceFilter: FilterProtocol {
     /// low-chroma pixels.
     public var vibrance: Float
 
-    /// Create a ``VibranceFilter`` with the given slider.
-    public init(vibrance: Float = 0.0) {
+    /// Color space the input texture is encoded in. See
+    /// ``SaturationFilter/colorSpace`` for the same rationale —
+    /// OKLab math is calibrated for linear sRGB, so the shader
+    /// linearises perceptually-encoded input before the OKLab
+    /// round-trip and re-encodes on output.
+    public var colorSpace: DCRColorSpace
+
+    /// Create a ``VibranceFilter`` with the given slider and the
+    /// pipeline's current color-space mode.
+    public init(
+        vibrance: Float = 0.0,
+        colorSpace: DCRColorSpace = DCRenderKit.defaultColorSpace
+    ) {
         self.vibrance = vibrance
+        self.colorSpace = colorSpace
     }
 
     /// Compute-kernel binding. See ``FilterProtocol/modifier``.
@@ -88,21 +100,26 @@ public struct VibranceFilter: FilterProtocol {
 
     /// Typed uniform payload. See ``FilterProtocol/uniforms``.
     public var uniforms: FilterUniforms {
-        FilterUniforms(VibranceUniforms(vibrance: vibrance))
+        FilterUniforms(VibranceUniforms(
+            vibrance: vibrance,
+            isLinearSpace: colorSpace == .linear ? 1 : 0
+        ))
     }
 
     /// Fusion metadata. See ``FilterProtocol/fusionBody`` and
-    /// `docs/pipeline-compiler-design.md` §4. The body function
-    /// `DCRVibranceBody` lands in `VibranceFilter.metal` in Phase 3.
+    /// `docs/pipeline-compiler-design.md` §4.
     ///
-    /// `wantsLinearInput = true` because OKLab-based selective chroma
-    /// boost (Ottosson 2020) is defined on linear sRGB.
+    /// `wantsLinearInput = false` mirrors the Exposure / Contrast /
+    /// Saturation pattern — the body internally branches on
+    /// `isLinearSpace` and self-converts in perceptual mode, so
+    /// VerticalFusion can cluster Vibrance with the other tone
+    /// operators uniformly.
     public var fusionBody: FusionBodyDescriptor {
         FusionBodyDescriptor(
             functionName: "DCRVibranceBody",
             uniformStructName: "VibranceUniforms",
             kind: .pixelLocal,
-            wantsLinearInput: true,
+            wantsLinearInput: false,
             sourceText: BundledShaderSources.vibranceFilter,
             sourceLabel: "VibranceFilter.metal"
         )
@@ -113,4 +130,6 @@ public struct VibranceFilter: FilterProtocol {
 struct VibranceUniforms {
     /// `-1 ... +1`, identity at `0`. Shader clamps.
     var vibrance: Float
+    /// 1 = linear input; 0 = perceptually-gamma-encoded.
+    var isLinearSpace: UInt32
 }

@@ -66,7 +66,7 @@ internal struct KernelInlining: OptimizerPass {
         let byID: [NodeID: Node] = Dictionary(
             uniqueKeysWithValues: graph.nodes.map { ($0.id, $0) }
         )
-        let consumerCount = computeConsumerCount(graph)
+        let consumerCount = graph.consumerCounts()
 
         // Pass 1: identify inline opportunities.
         var replacement: [NodeID: Node] = [:]
@@ -87,6 +87,35 @@ internal struct KernelInlining: OptimizerPass {
                 continue
             }
 
+            // The source-tap codegen
+            // (`MetalSourceBuilder.buildNeighborReadWithSource`) builds a
+            // fused tap whose `read(int2)` calls `pBody(rgb, u)` — only
+            // shapes whose body has the `(rgb, u)` signature can be
+            // spliced. The check is centralised in
+            // `FusionBodySignatureShape.canFuseAsPixelLocalMember` so
+            // codegen / VerticalFusion / TailSink stay in lockstep.
+            guard pBody.signatureShape.canFuseAsPixelLocalMember else {
+                continue
+            }
+
+            // Today every `.neighborRead` node has exactly one input
+            // (`Lowering` enforces `inputs: [primaryInput]` for
+            // single filters and multi-pass passes). The primary
+            // slot is what we're rewriting, so fold by replacing
+            // only `inputs[0]` with `pred.inputs[0]` and preserving
+            // any future trailing inputs verbatim. The precondition
+            // documents the assumption and trips immediately if a
+            // future filter declares multi-input neighbour reads
+            // without updating this site.
+            precondition(
+                node.inputs.count == 1,
+                "KernelInlining assumes single-input neighborRead; got \(node.inputs.count) inputs on \(node.debugLabel)"
+            )
+            precondition(
+                pred.inputs.count == 1,
+                "KernelInlining assumes single-input pixelLocal predecessor; got \(pred.inputs.count) inputs on \(pred.debugLabel)"
+            )
+
             // Stage P's auxiliary refs at the tail of N's union so
             // we can hand Phase 3 a contiguous slot map.
             let rangeStart = nAux.count
@@ -106,7 +135,7 @@ internal struct KernelInlining: OptimizerPass {
                     radiusHint: nRadius,
                     additionalNodeInputs: combinedAux
                 ),
-                inputs: pred.inputs,
+                inputs: [pred.inputs[0]] + node.inputs.dropFirst(),
                 outputSpec: node.outputSpec,
                 isFinal: node.isFinal,
                 debugLabel: "\(node.debugLabel)[inline:\(pred.debugLabel)]",
@@ -139,17 +168,4 @@ internal struct KernelInlining: OptimizerPass {
         )
     }
 
-    // MARK: - Helpers
-
-    private func computeConsumerCount(_ graph: PipelineGraph) -> [NodeID: Int] {
-        var counts: [NodeID: Int] = [:]
-        for node in graph.nodes {
-            for ref in node.dependencyRefs {
-                if case .node(let id) = ref {
-                    counts[id, default: 0] += 1
-                }
-            }
-        }
-        return counts
-    }
 }

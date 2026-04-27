@@ -124,6 +124,23 @@ internal enum RenderBackend {
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: rpd) else {
             throw DispatchError.renderEncoderUnavailable
         }
+        // Metal asserts at encoder dealloc when `endEncoding()` was
+        // never called. Several throwing steps in this loop —
+        // `MetalSourceBuilder.buildFragmentClusterPipeline`,
+        // `renderCache.pipelineState(source:key:)`, and
+        // `bindFragmentResources` — can propagate errors without the
+        // caller having a chance to call `endEncoding`. The deferred
+        // close ends the encoder on every exit path; the trailing
+        // `endEncoding()` after the loop sets `encoderEnded` so the
+        // defer is a no-op on the success path. Every `throw` below
+        // can therefore drop its hand-written `encoder.endEncoding()`
+        // pre-amble — `defer` covers all of them uniformly.
+        var encoderEnded = false
+        defer {
+            if !encoderEnded {
+                encoder.endEncoding()
+            }
+        }
         let chainSummary = clusters.map { $0.debugLabel }.joined(separator: " → ")
         encoder.label = "DCR.Fusion.RenderChain[\(chainSummary)]"
 
@@ -142,7 +159,6 @@ internal enum RenderBackend {
                 extracted = ([synth], wantsLinear)
             case let .neighborRead(body, uniforms, _, _):
                 guard drawIndex == 0 else {
-                    encoder.endEncoding()
                     throw DispatchError.unsupportedNodeKind(
                         ".neighborRead can only be the init draw — its body samples source at offsets, which programmable-blending input cannot provide"
                     )
@@ -155,7 +171,6 @@ internal enum RenderBackend {
                 )
                 extracted = ([synth], false)
             default:
-                encoder.endEncoding()
                 throw DispatchError.unsupportedNodeKind(String(describing: cluster.kind))
             }
             let members = extracted.members
@@ -175,7 +190,6 @@ internal enum RenderBackend {
                 fragmentFn = built.initFragmentFunction
             } else {
                 guard let chainFn = built.chainFragmentFunction else {
-                    encoder.endEncoding()
                     throw DispatchError.unsupportedNodeKind(
                         "shape \(built.signatureShape) has no chain variant; cannot occupy non-init position"
                     )
@@ -229,6 +243,7 @@ internal enum RenderBackend {
         }
 
         encoder.endEncoding()
+        encoderEnded = true
 
         if DCRLogging.diagnosticPipelineLogging {
             DCRLogging.logger.debug(

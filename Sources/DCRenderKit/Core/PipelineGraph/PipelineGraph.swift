@@ -220,6 +220,36 @@ internal struct PipelineGraph: Sendable {
         }
     }
 
+    // MARK: - Consumer-count analysis
+
+    /// Number of distinct nodes that reference each node's output via
+    /// `NodeRef.node(_)` in their `dependencyRefs`. Final nodes
+    /// have zero consumers by graph invariant; orphaned non-final
+    /// nodes (which DCE should have removed) also report zero.
+    ///
+    /// **Single source of truth** for fan-out reasoning. Every
+    /// optimiser pass that decides "can I fuse / inline / sink this
+    /// node?" must consult this map rather than rolling its own
+    /// pass over `node.dependencyRefs` — keeping the consumer-count
+    /// definition in one place means a future change to which fields
+    /// participate in dependency tracking automatically propagates
+    /// to every fan-out check.
+    ///
+    /// O(V + E). Re-compute, don't memoise — passes typically rebuild
+    /// the graph between calls and the cost is negligible relative
+    /// to the rest of optimisation.
+    internal func consumerCounts() -> [NodeID: Int] {
+        var counts: [NodeID: Int] = [:]
+        for node in nodes {
+            for ref in node.dependencyRefs {
+                if case .node(let id) = ref {
+                    counts[id, default: 0] += 1
+                }
+            }
+        }
+        return counts
+    }
+
     // MARK: - Diagnostics
 
     /// Short debug dump: one line per node (`n{id} kind {label}`).

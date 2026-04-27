@@ -106,7 +106,7 @@ final class FilmGrainPatternTests: XCTestCase {
                 density: 1.0,
                 roughness: 0.5,
                 chromaticity: 0,
-                grainSize: 1
+                grainSizePixels: 1
             )
         )
 

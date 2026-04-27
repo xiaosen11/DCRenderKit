@@ -200,8 +200,8 @@ final class LegacyParityTests: XCTestCase {
     func testFilmGrainParityAcrossSliders() throws {
         try runParity(
             legacyKernel: "DCRLegacyFilmGrainFilter",
-            filters: [FilmGrainFilter(density: 0, grainSize: 1),
-                      FilmGrainFilter(density: 0.3, grainSize: 2)]
+            filters: [FilmGrainFilter(density: 0, grainSizePixels: 1),
+                      FilmGrainFilter(density: 0.3, grainSizePixels: 2)]
         )
     }
 
@@ -216,9 +216,9 @@ final class LegacyParityTests: XCTestCase {
                                 chromaticAberration: 30,
                                 sharpening: 30,
                                 saturationBoost: 10,
-                                grainSize: 3,
-                                sharpStep: 1.5,
-                                caMaxOffset: 5)]
+                                grainSizePixels: 3,
+                                sharpStepPixels: 1.5,
+                                caMaxOffsetPixels: 5)]
         )
     }
 

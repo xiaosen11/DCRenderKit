@@ -96,6 +96,21 @@ internal enum ComputeBackend {
         guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
             throw PipelineError.device(.commandEncoderCreationFailed(kind: .compute))
         }
+        // Metal asserts at encoder dealloc when `endEncoding()` was
+        // never called. If any throwing step between encoder
+        // creation and the explicit `endEncoding()` below propagates
+        // an error, ARC drops the encoder mid-flight and the assert
+        // surfaces as a SIGABRT with the cryptic message "Command
+        // encoder released without endEncoding". The deferred end
+        // closes the encoder on every exit path; the trailing
+        // `endEncoding()` after dispatch is a no-op on the second
+        // call (Metal tolerates idempotent end on the same encoder).
+        var encoderEnded = false
+        defer {
+            if !encoderEnded {
+                encoder.endEncoding()
+            }
+        }
         encoder.label = "DCR.Fusion.\(built.functionName)"
         encoder.setComputePipelineState(pso)
 
@@ -127,6 +142,7 @@ internal enum ComputeBackend {
         encoder.dispatchThreads(grid, threadsPerThreadgroup: threadgroup)
 
         encoder.endEncoding()
+        encoderEnded = true
     }
 
     /// Bind any `NodeRef.additional(i)` references in the node to
@@ -214,6 +230,36 @@ internal enum ComputeBackend {
                 commandBuffer: commandBuffer,
                 uniformPool: uniformPool
             )
+            // Slot ordering mirrors the kernel parameter list emitted by
+            // `MetalSourceBuilder.buildNeighborReadWithSource`:
+            //   buffer(0) = N's uniforms (above)
+            //   buffer(1) = head-fused (KernelInlining) P's uniforms,
+            //               when present
+            //   next free = tail-fused (TailSink) P's uniforms, when
+            //               present
+            // Allocating head before tail keeps the head slot fixed at
+            // buffer(1) regardless of whether a tail body exists.
+            var nextSlot = 1
+            if let inlined = node.inlinedBodyBeforeSample {
+                try bindOneUniform(
+                    inlined.uniforms,
+                    at: nextSlot,
+                    encoder: encoder,
+                    commandBuffer: commandBuffer,
+                    uniformPool: uniformPool
+                )
+                nextSlot += 1
+            }
+            if let sinked = node.tailSinkedBody {
+                try bindOneUniform(
+                    sinked.uniforms,
+                    at: nextSlot,
+                    encoder: encoder,
+                    commandBuffer: commandBuffer,
+                    uniformPool: uniformPool
+                )
+                nextSlot += 1
+            }
 
         case let .fusedPixelLocalCluster(members, _, _):
             for (index, member) in members.enumerated() {
