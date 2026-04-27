@@ -149,6 +149,9 @@ public final class Pipeline: @unchecked Sendable {
     internal let samplerCache: SamplerCache
     internal let texturePool: TexturePool
     internal let commandBufferPool: CommandBufferPool
+    internal let shaderLibrary: ShaderLibrary
+    internal let uberKernelCache: UberKernelCache
+    internal let uberRenderCache: UberRenderPipelineCache
 
     /// Per-instance memoisation of `Optimizer` + chain-internal
     /// alias + `TextureAliasingPlanner` output. Hits when the
@@ -175,10 +178,19 @@ public final class Pipeline: @unchecked Sendable {
         self.samplerCache = .shared
         self.texturePool = .shared
         self.commandBufferPool = .shared
+        self.shaderLibrary = .shared
+        self.uberKernelCache = .shared
+        self.uberRenderCache = .shared
     }
 
     /// Create a pipeline with fully-specified dependencies. Primarily for
-    /// tests that need isolated pools.
+    /// tests that need isolated pools, or for production multi-Pipeline
+    /// scenarios where each Pipeline needs its own resource budget.
+    ///
+    /// For the typical multi-Pipeline shape — independent
+    /// `texturePool` / `commandBufferPool` / `uniformPool` but shared
+    /// PSO caches and `ShaderLibrary` — see ``Pipeline/makeIsolated(...)``
+    /// which is a convenience factory over this init.
     public init(
         optimization: PipelineOptimization = .full,
         intermediatePixelFormat: MTLPixelFormat = .rgba16Float,
@@ -189,7 +201,10 @@ public final class Pipeline: @unchecked Sendable {
         uniformPool: UniformBufferPool,
         samplerCache: SamplerCache,
         texturePool: TexturePool,
-        commandBufferPool: CommandBufferPool
+        commandBufferPool: CommandBufferPool,
+        shaderLibrary: ShaderLibrary = .shared,
+        uberKernelCache: UberKernelCache = .shared,
+        uberRenderCache: UberRenderPipelineCache = .shared
     ) {
         self.optimization = optimization
         self.intermediatePixelFormat = intermediatePixelFormat
@@ -201,6 +216,9 @@ public final class Pipeline: @unchecked Sendable {
         self.samplerCache = samplerCache
         self.texturePool = texturePool
         self.commandBufferPool = commandBufferPool
+        self.shaderLibrary = shaderLibrary
+        self.uberKernelCache = uberKernelCache
+        self.uberRenderCache = uberRenderCache
     }
 
     // MARK: - Hot-path encode (caller-managed command buffer)
@@ -694,6 +712,7 @@ public final class Pipeline: @unchecked Sendable {
                 destination: destination,
                 additionalInputs: globalAdditional,
                 commandBuffer: commandBuffer,
+                uberCache: uberKernelCache,
                 uniformPool: uniformPool
             )
 
@@ -721,7 +740,8 @@ public final class Pipeline: @unchecked Sendable {
                 destination: destination,
                 commandBuffer: commandBuffer,
                 psoCache: psoCache,
-                uniformPool: uniformPool
+                uniformPool: uniformPool,
+                library: shaderLibrary
             )
 
         case let .downsample(_, kind):
@@ -742,7 +762,8 @@ public final class Pipeline: @unchecked Sendable {
                     destination: destination,
                     commandBuffer: commandBuffer,
                     psoCache: psoCache,
-                    uniformPool: uniformPool
+                    uniformPool: uniformPool,
+                    library: shaderLibrary
                 )
             case .boxAvg, .mpsMean:
                 // The IR carries these for future emitters
@@ -961,7 +982,8 @@ public final class Pipeline: @unchecked Sendable {
             source: chainSource,
             destination: chainDestination,
             clusterAuxiliaryTextures: clusterAux,
-            commandBuffer: commandBuffer
+            commandBuffer: commandBuffer,
+            renderCache: uberRenderCache
         )
     }
 
@@ -1097,7 +1119,8 @@ public final class Pipeline: @unchecked Sendable {
                     destination: destination,
                     commandBuffer: commandBuffer,
                     psoCache: psoCache,
-                    uniformPool: uniformPool
+                    uniformPool: uniformPool,
+                    library: shaderLibrary
                 )
             }
 
@@ -1155,6 +1178,7 @@ public final class Pipeline: @unchecked Sendable {
             destination: destination,
             additionalInputs: filter.additionalInputs,
             commandBuffer: commandBuffer,
+            uberCache: uberKernelCache,
             uniformPool: uniformPool
         )
     }
@@ -1184,7 +1208,141 @@ public final class Pipeline: @unchecked Sendable {
             commandBuffer: commandBuffer,
             psoCache: psoCache,
             uniformPool: uniformPool,
-            texturePool: texturePool
+            texturePool: texturePool,
+            library: shaderLibrary
+        )
+    }
+}
+
+// MARK: - Multi-Pipeline factories
+
+@available(iOS 18.0, *)
+extension Pipeline {
+
+    /// Create a Pipeline with **independent resource budgets** but
+    /// **shared compilation caches**. The standard pattern for running
+    /// multiple Pipelines concurrently — e.g. camera preview in one
+    /// tab + photo editor in another, or live preview + export running
+    /// at the same time.
+    ///
+    /// **What's isolated** (each Pipeline gets its own):
+    /// - `TexturePool` — independent memory budget
+    /// - `CommandBufferPool` — independent in-flight CB limit
+    /// - `UniformBufferPool` — independent uniform-slot ring buffer
+    ///
+    /// **What's shared** (uses the SDK-wide `.shared` instances):
+    /// - `Device`, `TextureLoader` — single GPU per process; stateless
+    /// - `PipelineStateCache`, `UberKernelCache`, `UberRenderPipelineCache` —
+    ///   PSO sharing is a perf win (compile once, reuse), and the cache
+    ///   keys include library identity so different shader libraries
+    ///   don't collide
+    /// - `SamplerCache` — sampler descriptors are immutable
+    /// - `ShaderLibrary.shared` — most apps use the SDK's built-in
+    ///   shader bundle; if you register custom shaders dynamically and
+    ///   need name-isolation across Pipelines, use
+    ///   ``makeFullyIsolated(...)`` instead
+    ///
+    /// - Parameters:
+    ///   - device: GPU device. Defaults to ``Device/shared``.
+    ///   - textureBudgetMB: Maximum bytes (in MiB) for this Pipeline's
+    ///     intermediate texture cache. Choose by intermediate size:
+    ///     ~16 MiB for camera preview (1080p single-pass), 32-64 MiB
+    ///     for editing preview (4K multi-pass), 128-256 MiB for export.
+    ///   - maxInFlightCommandBuffers: Concurrent in-flight CBs.
+    ///     30/60 fps preview wants 2-3; one-shot export wants 1.
+    ///   - uniformPoolCapacity: Number of `MTLBuffer` slots in the
+    ///     uniform pool's ring. 4 is fine for most cases; raise if
+    ///     you have many distinct uniform structs being bound rapidly
+    ///     (e.g. high-frequency slider drags across 6+ filters).
+    ///   - uniformBufferSize: Bytes per uniform-pool buffer slot.
+    ///     256 covers all SDK-shipped filter uniforms; raise only if
+    ///     you ship custom filters with > 256 byte uniforms.
+    ///   - optimization: Compiler optimisation mode. Defaults to `.full`.
+    ///   - intermediatePixelFormat: Intermediate texture format.
+    ///     Defaults to `.rgba16Float`.
+    ///   - colorSpace: Numerical-domain mode. Defaults to
+    ///     ``DCRenderKit/defaultColorSpace``.
+    public static func makeIsolated(
+        device: Device = .shared,
+        textureBudgetMB: Int,
+        maxInFlightCommandBuffers: Int = 3,
+        uniformPoolCapacity: Int = 4,
+        uniformBufferSize: Int = 256,
+        optimization: PipelineOptimization = .full,
+        intermediatePixelFormat: MTLPixelFormat = .rgba16Float,
+        colorSpace: DCRColorSpace = DCRenderKit.defaultColorSpace
+    ) -> Pipeline {
+        Pipeline(
+            optimization: optimization,
+            intermediatePixelFormat: intermediatePixelFormat,
+            colorSpace: colorSpace,
+            device: device,
+            textureLoader: .shared,
+            psoCache: .shared,
+            uniformPool: UniformBufferPool(
+                device: device,
+                capacity: uniformPoolCapacity,
+                bufferSize: uniformBufferSize
+            ),
+            samplerCache: .shared,
+            texturePool: TexturePool(
+                device: device,
+                maxBytes: textureBudgetMB * 1024 * 1024
+            ),
+            commandBufferPool: CommandBufferPool(
+                device: device,
+                maxInFlight: maxInFlightCommandBuffers
+            ),
+            shaderLibrary: .shared,
+            uberKernelCache: .shared,
+            uberRenderCache: .shared
+        )
+    }
+
+    /// Create a Pipeline with **fully independent resources** — every
+    /// pool, cache, and shader library is a fresh instance. Designed
+    /// for tests and rare scenarios where shader-name conflicts or
+    /// PSO-cache observation require complete isolation.
+    ///
+    /// Production code should prefer ``makeIsolated(...)`` (which
+    /// shares PSO caches for compile-time amortisation) or the
+    /// default ``init()`` (which shares everything via `.shared`).
+    ///
+    /// - Parameters: Same as ``makeIsolated(...)``.
+    public static func makeFullyIsolated(
+        device: Device = .shared,
+        textureBudgetMB: Int,
+        maxInFlightCommandBuffers: Int = 3,
+        uniformPoolCapacity: Int = 4,
+        uniformBufferSize: Int = 256,
+        optimization: PipelineOptimization = .full,
+        intermediatePixelFormat: MTLPixelFormat = .rgba16Float,
+        colorSpace: DCRColorSpace = DCRenderKit.defaultColorSpace
+    ) -> Pipeline {
+        Pipeline(
+            optimization: optimization,
+            intermediatePixelFormat: intermediatePixelFormat,
+            colorSpace: colorSpace,
+            device: device,
+            textureLoader: TextureLoader(device: device),
+            psoCache: PipelineStateCache(device: device),
+            uniformPool: UniformBufferPool(
+                device: device,
+                capacity: uniformPoolCapacity,
+                bufferSize: uniformBufferSize
+            ),
+            samplerCache: SamplerCache(device: device),
+            texturePool: TexturePool(
+                device: device,
+                maxBytes: textureBudgetMB * 1024 * 1024
+            ),
+            commandBufferPool: CommandBufferPool(
+                device: device,
+                maxInFlight: maxInFlightCommandBuffers
+            ),
+            shaderLibrary: ShaderLibrary(),
+            uberKernelCache: UberKernelCache(device: device),
+            uberRenderCache: UberRenderPipelineCache(device: device)
         )
     }
 }

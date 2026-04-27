@@ -27,10 +27,10 @@ import Metal
 /// re-compiling Metal source for each new attachment-format
 /// permutation; PSOs are cached by the full key including format.
 @available(iOS 18.0, *)
-internal final class UberRenderPipelineCache: @unchecked Sendable {
+public final class UberRenderPipelineCache: @unchecked Sendable {
 
     /// Default cache used by `RenderBackend`. Bound to `Device.shared`.
-    static let shared = UberRenderPipelineCache(device: .shared)
+    public static let shared = UberRenderPipelineCache(device: .shared)
 
     // MARK: - Cache key
 
@@ -38,10 +38,16 @@ internal final class UberRenderPipelineCache: @unchecked Sendable {
     /// to the same fragment function but target different attachment
     /// formats need separate PSOs — reflected by the `pixelFormat`
     /// in this key.
-    struct Key: Hashable, Sendable {
-        let vertexFunction: String
-        let fragmentFunction: String
-        let pixelFormat: MTLPixelFormat
+    public struct Key: Hashable, Sendable {
+        public let vertexFunction: String
+        public let fragmentFunction: String
+        public let pixelFormat: MTLPixelFormat
+
+        public init(vertexFunction: String, fragmentFunction: String, pixelFormat: MTLPixelFormat) {
+            self.vertexFunction = vertexFunction
+            self.fragmentFunction = fragmentFunction
+            self.pixelFormat = pixelFormat
+        }
     }
 
     // MARK: - State
@@ -51,7 +57,7 @@ internal final class UberRenderPipelineCache: @unchecked Sendable {
     private var libraries: [String: MTLLibrary] = [:]   // keyed by fragmentFunction
     private var pipelines: [Key: MTLRenderPipelineState] = [:]
 
-    init(device: Device) {
+    public init(device: Device) {
         self.device = device
     }
 
@@ -70,7 +76,7 @@ internal final class UberRenderPipelineCache: @unchecked Sendable {
     ///   on Metal library compilation failure;
     ///   `PipelineError.pipelineState(.functionNotFound)` if either
     ///   named function is missing from the compiled library.
-    func pipelineState(
+    public func pipelineState(
         source: String,
         key: Key
     ) throws -> MTLRenderPipelineState {
@@ -135,7 +141,7 @@ internal final class UberRenderPipelineCache: @unchecked Sendable {
 
     /// Drop all cached libraries and PSOs. Tests use this to
     /// observe per-test compilation deltas.
-    func clear() {
+    public func clear() {
         lock.lock()
         defer { lock.unlock() }
         libraries.removeAll()
@@ -144,7 +150,7 @@ internal final class UberRenderPipelineCache: @unchecked Sendable {
 
     /// Diagnostic snapshot: how many `(vertex, fragment, pixelFormat)`
     /// PSOs are currently cached.
-    var cachedPipelineCount: Int {
+    public var cachedPipelineCount: Int {
         lock.lock()
         defer { lock.unlock() }
         return pipelines.count
@@ -153,7 +159,7 @@ internal final class UberRenderPipelineCache: @unchecked Sendable {
     /// `true` if a PSO matching `key` is already cached. Used by
     /// `RenderBackend` diagnostic logging to label dispatches as
     /// hits / misses without touching the fast path.
-    func containsPipelineState(forKey key: Key) -> Bool {
+    public func containsPipelineState(forKey key: Key) -> Bool {
         lock.lock()
         defer { lock.unlock() }
         return pipelines[key] != nil

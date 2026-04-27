@@ -87,17 +87,17 @@ final class PipelineStateCacheTests: XCTestCase {
     func testComputePSOCompilesAndCaches() throws {
         XCTAssertEqual(cache.computeCacheCount, 0)
 
-        let pso1 = try cache.computePipelineState(forKernel: "test_identity_kernel")
+        let pso1 = try cache.computePipelineState(forKernel: "test_identity_kernel", library: .shared)
         XCTAssertEqual(cache.computeCacheCount, 1)
 
-        let pso2 = try cache.computePipelineState(forKernel: "test_identity_kernel")
+        let pso2 = try cache.computePipelineState(forKernel: "test_identity_kernel", library: .shared)
         XCTAssertTrue(pso1 === pso2, "Second lookup should return cached PSO")
         XCTAssertEqual(cache.computeCacheCount, 1)
     }
 
     func testComputePSOMissingKernelThrows() {
         do {
-            _ = try cache.computePipelineState(forKernel: "__not_a_real_kernel__")
+            _ = try cache.computePipelineState(forKernel: "__not_a_real_kernel__", library: .shared)
             XCTFail("Expected throw")
         } catch PipelineError.pipelineState(.functionNotFound(let name)) {
             XCTAssertEqual(name, "__not_a_real_kernel__")
@@ -107,7 +107,7 @@ final class PipelineStateCacheTests: XCTestCase {
     }
 
     func testClearResetsCacheCount() throws {
-        _ = try cache.computePipelineState(forKernel: "test_identity_kernel")
+        _ = try cache.computePipelineState(forKernel: "test_identity_kernel", library: .shared)
         XCTAssertEqual(cache.computeCacheCount, 1)
         cache.clear()
         XCTAssertEqual(cache.computeCacheCount, 0)

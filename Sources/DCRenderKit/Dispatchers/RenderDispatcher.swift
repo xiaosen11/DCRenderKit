@@ -86,6 +86,8 @@ public struct RenderDispatcher {
     ///   - psoCache: PSO cache (default shared).
     ///   - uniformPool: Uniform buffer pool (default shared).
     ///   - samplerCache: Sampler cache (default shared).
+    ///   - library: ShaderLibrary that resolves the descriptor's vertex /
+    ///     fragment functions. Defaults to `ShaderLibrary.shared`.
     public static func dispatch(
         descriptor: RenderPSODescriptor,
         vertexBuffer: MTLBuffer,
@@ -102,7 +104,8 @@ public struct RenderDispatcher {
         commandBuffer: MTLCommandBuffer,
         psoCache: PipelineStateCache = .shared,
         uniformPool: UniformBufferPool = .shared,
-        samplerCache: SamplerCache = .shared
+        samplerCache: SamplerCache = .shared,
+        library: ShaderLibrary = .shared
     ) throws {
         try dispatchBatch(
             descriptor: descriptor,
@@ -124,7 +127,8 @@ public struct RenderDispatcher {
             commandBuffer: commandBuffer,
             psoCache: psoCache,
             uniformPool: uniformPool,
-            samplerCache: samplerCache
+            samplerCache: samplerCache,
+            library: library
         )
     }
 
@@ -147,7 +151,8 @@ public struct RenderDispatcher {
         commandBuffer: MTLCommandBuffer,
         psoCache: PipelineStateCache = .shared,
         uniformPool: UniformBufferPool = .shared,
-        samplerCache: SamplerCache = .shared
+        samplerCache: SamplerCache = .shared,
+        library: ShaderLibrary = .shared
     ) throws {
         // 1. Validate destination
         guard destination.usage.contains(.renderTarget) else {
@@ -167,7 +172,7 @@ public struct RenderDispatcher {
         }
 
         // 2. Resolve PSO (cached)
-        let pso = try psoCache.renderPipelineState(for: descriptor)
+        let pso = try psoCache.renderPipelineState(for: descriptor, library: library)
 
         // 3. Build render pass descriptor
         let renderPass = MTLRenderPassDescriptor()

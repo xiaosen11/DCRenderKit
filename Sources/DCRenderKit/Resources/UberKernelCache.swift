@@ -29,11 +29,11 @@ import Metal
 /// the cache does not verify this because the name is already a
 /// hash of every input that affects source generation.
 @available(iOS 18.0, *)
-internal final class UberKernelCache: @unchecked Sendable {
+public final class UberKernelCache: @unchecked Sendable {
 
     /// Default cache used by `ComputeBackend`. Keyed to the shared
     /// Metal device.
-    static let shared = UberKernelCache(device: .shared)
+    public static let shared = UberKernelCache(device: .shared)
 
     // MARK: - State
 
@@ -44,7 +44,7 @@ internal final class UberKernelCache: @unchecked Sendable {
 
     // MARK: - Init
 
-    init(device: Device) {
+    public init(device: Device) {
         self.device = device
     }
 
@@ -68,7 +68,7 @@ internal final class UberKernelCache: @unchecked Sendable {
     ///   `PipelineError.pipelineState(.functionNotFound)` if
     ///   `functionName` does not appear in the compiled library
     ///   (would indicate a builder bug).
-    func pipelineState(
+    public func pipelineState(
         source: String,
         functionName: String
     ) throws -> MTLComputePipelineState {
@@ -113,7 +113,7 @@ internal final class UberKernelCache: @unchecked Sendable {
     }
 
     /// Drop all cached libraries and PSOs. Primarily for tests.
-    func clear() {
+    public func clear() {
         lock.lock()
         defer { lock.unlock() }
         libraries.removeAll()
@@ -121,7 +121,7 @@ internal final class UberKernelCache: @unchecked Sendable {
     }
 
     /// Diagnostic snapshot of how many PSOs are currently cached.
-    var cachedPipelineCount: Int {
+    public var cachedPipelineCount: Int {
         lock.lock()
         defer { lock.unlock() }
         return pipelines.count
@@ -131,7 +131,7 @@ internal final class UberKernelCache: @unchecked Sendable {
     /// cache. Used by `ComputeBackend` diagnostic logging to label
     /// each dispatch as a cache hit or miss without touching the
     /// main `pipelineState(source:functionName:)` fast path.
-    func containsPipelineState(named functionName: String) -> Bool {
+    public func containsPipelineState(named functionName: String) -> Bool {
         lock.lock()
         defer { lock.unlock() }
         return pipelines[functionName] != nil

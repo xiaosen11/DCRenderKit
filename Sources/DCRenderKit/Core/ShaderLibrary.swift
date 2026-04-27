@@ -37,13 +37,25 @@ import Metal
 public final class ShaderLibrary: @unchecked Sendable {
 
     /// The shared registry. Thread-safe.
+    ///
+    /// Most apps use this instance — the SDK's built-in shaders register
+    /// themselves here on first lookup. If you run multiple `Pipeline`
+    /// instances that need to register conflicting custom shaders (e.g.
+    /// two renderers loading different `.metallib` files with overlapping
+    /// function names), give each `Pipeline` its own `ShaderLibrary`
+    /// instance via `Pipeline(shaderLibrary:)`.
     public static let shared = ShaderLibrary()
 
     private let lock = NSLock()
     private var libraries: [MTLLibrary] = []
     private var defaultLibraryAttempted = false
 
-    private init() {}
+    /// Create a new, empty registry.
+    ///
+    /// Most callers should use ``shared`` instead. Construct a private
+    /// instance only when you need shader-name isolation between
+    /// concurrent `Pipeline`s — see `docs/multi-pipeline-cookbook.md`.
+    public init() {}
 
     // MARK: - Registration
 

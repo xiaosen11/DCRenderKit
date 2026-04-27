@@ -69,6 +69,9 @@ public struct ComputeDispatcher {
     ///   - psoCache: PSO cache; defaults to `PipelineStateCache.shared`.
     ///   - uniformPool: Buffer pool for uniforms; defaults to
     ///     `UniformBufferPool.shared`.
+    ///   - library: ShaderLibrary that resolves `kernel`; defaults to
+    ///     `ShaderLibrary.shared`. Pass an injected library when running
+    ///     multiple `Pipeline`s with independent shader registrations.
     /// - Throws: `PipelineError` variants on PSO compile failure, dimension
     ///   mismatch, or encoder creation failure.
     public static func dispatch(
@@ -79,13 +82,14 @@ public struct ComputeDispatcher {
         destination: MTLTexture,
         commandBuffer: MTLCommandBuffer,
         psoCache: PipelineStateCache = .shared,
-        uniformPool: UniformBufferPool = .shared
+        uniformPool: UniformBufferPool = .shared,
+        library: ShaderLibrary = .shared
     ) throws {
         // 1. Validate dimensions
         try validateDimensions(source: source, destination: destination)
 
         // 2. Resolve PSO (cached)
-        let pso = try psoCache.computePipelineState(forKernel: kernel)
+        let pso = try psoCache.computePipelineState(forKernel: kernel, library: library)
 
         // 3. Create compute encoder
         guard let encoder = commandBuffer.makeComputeCommandEncoder() else {

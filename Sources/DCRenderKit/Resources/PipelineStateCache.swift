@@ -23,11 +23,17 @@ import Metal
 ///
 /// ## Caching scheme
 ///
-/// - **Compute PSOs** are keyed by kernel function name alone (the function
-///   fully determines the pipeline).
-/// - **Render PSOs** are keyed by a composite of `(vertex, fragment,
-///   colorPixelFormat, blendDescriptor, rasterSampleCount)`. Two filters
-///   using the same shaders but different blend modes get different PSOs.
+/// - **Compute PSOs** are keyed by `(kernel function name, library identity)`.
+///   The library identity is the `ObjectIdentifier` of the `ShaderLibrary`
+///   that resolved the function — this prevents cross-`Pipeline` collisions
+///   when two pipelines register different shaders under the same function
+///   name.
+/// - **Render PSOs** are keyed by `(vertex, fragment, library identity,
+///   colorPixelFormat, blendDescriptor, rasterSampleCount)`.
+///
+/// In the common case where every `Pipeline` shares `ShaderLibrary.shared`,
+/// the library identity collapses to a single value and cache hit-rate is
+/// identical to the pre-multi-Pipeline behaviour.
 @available(iOS 18.0, *)
 public final class PipelineStateCache: @unchecked Sendable {
 
@@ -41,7 +47,7 @@ public final class PipelineStateCache: @unchecked Sendable {
 
     private let device: Device
     private let lock = NSLock()
-    private var computeCache: [String: MTLComputePipelineState] = [:]
+    private var computeCache: [ComputePSOKey: MTLComputePipelineState] = [:]
     private var renderCache: [RenderPSOKey: MTLRenderPipelineState] = [:]
 
     // MARK: - Init
@@ -55,25 +61,32 @@ public final class PipelineStateCache: @unchecked Sendable {
     /// Return a `MTLComputePipelineState` for the given kernel function name,
     /// compiling and caching it on first access.
     ///
-    /// - Parameter kernelName: Name of a kernel function in any registered
-    ///   Metal library.
+    /// - Parameters:
+    ///   - kernelName: Name of a kernel function in `library`.
+    ///   - library: The `ShaderLibrary` that resolves `kernelName`. The cache
+    ///     keys on `(kernelName, ObjectIdentifier(library))` so two pipelines
+    ///     using independent libraries with overlapping kernel names get
+    ///     distinct PSOs.
     /// - Returns: The cached or newly-created pipeline state.
     /// - Throws: `PipelineError.pipelineState(.computeCompileFailed)` on
     ///   compilation failure or `.functionNotFound` if the kernel name does
-    ///   not resolve.
+    ///   not resolve in `library`.
     public func computePipelineState(
-        forKernel kernelName: String
+        forKernel kernelName: String,
+        library: ShaderLibrary
     ) throws -> MTLComputePipelineState {
+        let key = ComputePSOKey(kernelName: kernelName, libraryID: ObjectIdentifier(library))
+
         // Fast path: cache hit without holding the lock for compilation.
         lock.lock()
-        if let cached = computeCache[kernelName] {
+        if let cached = computeCache[key] {
             lock.unlock()
             return cached
         }
         lock.unlock()
 
         // Resolve function (may itself be cached by ShaderLibrary).
-        let function = try ShaderLibrary.shared.function(named: kernelName)
+        let function = try library.function(named: kernelName)
 
         // Compile the PSO. This is the expensive step.
         let pso: MTLComputePipelineState
@@ -88,11 +101,11 @@ public final class PipelineStateCache: @unchecked Sendable {
         // Store in cache. If another thread raced us to compile the same
         // kernel, their result wins (both are equivalent).
         lock.lock()
-        if let racedWinner = computeCache[kernelName] {
+        if let racedWinner = computeCache[key] {
             lock.unlock()
             return racedWinner
         }
-        computeCache[kernelName] = pso
+        computeCache[key] = pso
         lock.unlock()
 
         DCRLogging.logger.debug(
@@ -108,15 +121,21 @@ public final class PipelineStateCache: @unchecked Sendable {
     /// Return a `MTLRenderPipelineState` for the given descriptor, compiling
     /// and caching on first access.
     ///
-    /// - Parameter descriptor: A `RenderPSODescriptor` capturing all variables
-    ///   that affect PSO compilation.
+    /// - Parameters:
+    ///   - descriptor: A `RenderPSODescriptor` capturing the vertex/fragment
+    ///     names and all variables that affect PSO compilation.
+    ///   - library: The `ShaderLibrary` that resolves both the vertex and
+    ///     fragment functions named in `descriptor`. Mixed libraries (vertex
+    ///     from library A, fragment from library B) are not supported — the
+    ///     cache key uses one library identity.
     /// - Returns: The cached or newly-created pipeline state.
     /// - Throws: `PipelineError.pipelineState(.renderCompileFailed)` on
     ///   compilation failure.
     public func renderPipelineState(
-        for descriptor: RenderPSODescriptor
+        for descriptor: RenderPSODescriptor,
+        library: ShaderLibrary
     ) throws -> MTLRenderPipelineState {
-        let key = descriptor.cacheKey
+        let key = descriptor.cacheKey(libraryID: ObjectIdentifier(library))
 
         lock.lock()
         if let cached = renderCache[key] {
@@ -125,8 +144,8 @@ public final class PipelineStateCache: @unchecked Sendable {
         }
         lock.unlock()
 
-        let vertexFunction = try ShaderLibrary.shared.function(named: descriptor.vertexFunction)
-        let fragmentFunction = try ShaderLibrary.shared.function(named: descriptor.fragmentFunction)
+        let vertexFunction = try library.function(named: descriptor.vertexFunction)
+        let fragmentFunction = try library.function(named: descriptor.fragmentFunction)
 
         let mtlDesc = MTLRenderPipelineDescriptor()
         mtlDesc.vertexFunction = vertexFunction
@@ -229,10 +248,11 @@ public struct RenderPSODescriptor: Sendable, Hashable {
         self.rasterSampleCount = rasterSampleCount
     }
 
-    fileprivate var cacheKey: RenderPSOKey {
+    fileprivate func cacheKey(libraryID: ObjectIdentifier) -> RenderPSOKey {
         RenderPSOKey(
             vertex: vertexFunction,
             fragment: fragmentFunction,
+            libraryID: libraryID,
             pixelFormat: colorPixelFormat.rawValue,
             blend: blend,
             samples: rasterSampleCount
@@ -307,12 +327,21 @@ public struct BlendConfig: Sendable, Hashable {
     )
 }
 
-// MARK: - Internal key
+// MARK: - Internal keys
+
+/// Opaque, hashable key for the compute PSO cache. Includes a
+/// `ShaderLibrary` identity so two pipelines with independent libraries
+/// don't collide on the same kernel name.
+private struct ComputePSOKey: Hashable {
+    let kernelName: String
+    let libraryID: ObjectIdentifier
+}
 
 /// Opaque, hashable key used for the render PSO cache dictionary.
 private struct RenderPSOKey: Hashable {
     let vertex: String
     let fragment: String
+    let libraryID: ObjectIdentifier
     let pixelFormat: UInt
     let blend: BlendConfig
     let samples: Int

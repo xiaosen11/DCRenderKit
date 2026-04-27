@@ -86,7 +86,8 @@ struct MultiPassExecutor {
         commandBuffer: MTLCommandBuffer,
         psoCache: PipelineStateCache = .shared,
         uniformPool: UniformBufferPool = .shared,
-        texturePool: TexturePool = .shared
+        texturePool: TexturePool = .shared,
+        library: ShaderLibrary = .shared
     ) throws -> MTLTexture {
         // Empty graph = identity; return source unchanged.
         if passes.isEmpty {
@@ -161,7 +162,8 @@ struct MultiPassExecutor {
                     destination: outputTexture,
                     commandBuffer: commandBuffer,
                     psoCache: psoCache,
-                    uniformPool: uniformPool
+                    uniformPool: uniformPool,
+                    library: library
                 )
 
             case .render, .blit, .mps:

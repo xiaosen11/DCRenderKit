@@ -91,7 +91,8 @@ public enum PipelineCompilerWarmUp {
     /// the pattern this API is meant to prevent.
     public static func preheat(
         combinations: [[AnyFilter]],
-        intermediatePixelFormat: MTLPixelFormat = .rgba16Float
+        intermediatePixelFormat: MTLPixelFormat = .rgba16Float,
+        uberCache: UberKernelCache = .shared
     ) async throws {
         // A canonical placeholder source info. Single-pass lowerings
         // ignore the width / height (they only use the source's
@@ -109,7 +110,7 @@ public enum PipelineCompilerWarmUp {
         )
 
         for combination in combinations {
-            try preheatOne(combination, source: source)
+            try preheatOne(combination, source: source, uberCache: uberCache)
             // Yield between combinations so the warm-up task doesn't
             // monopolise the priority-inheriting executor if the
             // caller ran us on .userInitiated.
@@ -126,7 +127,8 @@ public enum PipelineCompilerWarmUp {
     /// PSOs on first dispatch.
     private static func preheatOne(
         _ combination: [AnyFilter],
-        source: TextureInfo
+        source: TextureInfo,
+        uberCache: UberKernelCache
     ) throws {
         guard let lowered = Lowering.lower(combination, source: source) else {
             // Non-lowerable chain (render / blit / MPS single-pass
@@ -139,7 +141,7 @@ public enum PipelineCompilerWarmUp {
         for node in graph.nodes {
             switch node.kind {
             case .pixelLocal, .neighborRead, .fusedPixelLocalCluster:
-                try compileUberKernel(for: node)
+                try compileUberKernel(for: node, uberCache: uberCache)
             default:
                 // `.nativeCompute` / `.downsample` / `.upsample` /
                 // `.reduce` / `.blend` — not a `MetalSourceBuilder`
@@ -151,13 +153,44 @@ public enum PipelineCompilerWarmUp {
     }
 
     /// Run the Phase-3 codegen for `node` and shove the resulting
-    /// PSO into the shared cache. Subsequent runtime calls that
-    /// hash to the same function name are cache hits.
-    private static func compileUberKernel(for node: Node) throws {
+    /// PSO into `uberCache`. Subsequent runtime calls that hash to
+    /// the same function name and use the same cache are cache hits.
+    private static func compileUberKernel(for node: Node, uberCache: UberKernelCache) throws {
         let build = try MetalSourceBuilder.build(for: node)
-        _ = try UberKernelCache.shared.pipelineState(
+        _ = try uberCache.pipelineState(
             source: build.source,
             functionName: build.functionName
+        )
+    }
+}
+
+// MARK: - Pipeline instance method
+
+@available(iOS 18.0, *)
+extension Pipeline {
+
+    /// Pre-compile uber-kernel PSOs for the given filter combinations
+    /// against this Pipeline's `UberKernelCache`, so the first runtime
+    /// frame is a full cache-hit instead of paying compile time.
+    ///
+    /// Use this on a long-lived Pipeline at app launch (or when entering
+    /// an editing screen). Each combination is one complete chain shape
+    /// — passing every slider value combination is unnecessary because
+    /// uber-kernel hashes exclude uniform values.
+    ///
+    /// - Parameters:
+    ///   - combinations: Filter chains to warm up.
+    ///   - intermediatePixelFormat: Pixel format used to resolve graph
+    ///     output specs. Defaults to this Pipeline's
+    ///     `intermediatePixelFormat`.
+    public func warmUp(
+        combinations: [[AnyFilter]],
+        intermediatePixelFormat: MTLPixelFormat? = nil
+    ) async throws {
+        try await PipelineCompilerWarmUp.preheat(
+            combinations: combinations,
+            intermediatePixelFormat: intermediatePixelFormat ?? self.intermediatePixelFormat,
+            uberCache: self.uberKernelCache
         )
     }
 }
