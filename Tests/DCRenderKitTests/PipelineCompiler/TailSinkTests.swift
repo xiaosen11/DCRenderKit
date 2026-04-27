@@ -309,6 +309,79 @@ final class TailSinkTests: XCTestCase {
         XCTAssertEqual(auxID, 0, "Blend aux must be rewritten from P=1 to M=0")
     }
 
+    /// Regression — cluster absorption must reject P whose body has
+    /// a non-`.pixelLocalOnly` signature shape. Cluster codegen
+    /// (`MetalSourceBuilder.buildFusedPixelLocalCluster`) requires
+    /// every member to be `.pixelLocalOnly`. Pre-fix, TailSink would
+    /// happily merge a `.pixelLocalWithLUT3D` body (LUT3DFilter) into
+    /// the cluster, producing a mixed-shape graph that codegen
+    /// rejected — manifesting as a hung preview + CPU spike from
+    /// repeated failed builds.
+    func testClusterDoesNotAbsorbNonPixelLocalOnlyShape() {
+        // Producer M: a `.pixelLocalOnly` cluster.
+        let cluster = Node(
+            id: 0,
+            kind: .fusedPixelLocalCluster(
+                members: [
+                    FusedClusterMember(
+                        body: Fx.dummyBody("Exposure"),
+                        uniforms: .empty,
+                        debugLabel: "Exposure",
+                        additionalRange: 0..<0
+                    ),
+                ],
+                wantsLinearInput: false,
+                additionalNodeInputs: []
+            ),
+            inputs: [.source],
+            outputSpec: .sameAsSource,
+            isFinal: false,
+            debugLabel: "ClusterExposure"
+        )
+
+        // P: pixelLocal with `.pixelLocalWithLUT3D` shape — modelling
+        // an LUT3DFilter that would otherwise pass every other
+        // TailSink merge gate (single producer, sameAsSource, etc.).
+        let lut3DBody = Fx.dummyBody(
+            "DCRLUT3DBody",
+            signatureShape: .pixelLocalWithLUT3D
+        )
+        let p = Node(
+            id: 1,
+            kind: .pixelLocal(
+                body: lut3DBody,
+                uniforms: .empty,
+                wantsLinearInput: false,
+                additionalNodeInputs: [.additional(0)]
+            ),
+            inputs: [.node(0)],
+            outputSpec: .sameAsSource,
+            isFinal: true,
+            debugLabel: "LUT3D"
+        )
+
+        let graph = PipelineGraph(
+            nodes: [cluster, p],
+            totalAdditionalInputs: 1
+        )
+
+        let out = pass.run(graph)
+
+        // Both nodes must survive — TailSink saw the shape mismatch
+        // and skipped the absorption. Mixed-shape cluster never gets
+        // built; codegen never gets to throw.
+        XCTAssertEqual(out.nodes.count, 2)
+        guard
+            let unchangedCluster = out.nodes.first(where: { $0.id == 0 }),
+            case let .fusedPixelLocalCluster(members, _, _) = unchangedCluster.kind
+        else {
+            XCTFail("Expected fusedPixelLocalCluster at id 0")
+            return
+        }
+        XCTAssertEqual(members.count, 1, "LUT3D must not have been added as a cluster member")
+        XCTAssertEqual(members[0].body.functionName, "Exposure")
+    }
+
     /// `additionalNodeInputs` on `.nativeCompute` (and the other
     /// kinds that carry it) is also rewritten on absorption.
     func testNativeComputeAdditionalNodeInputsRewritten() {

@@ -125,6 +125,22 @@ internal struct TailSink: OptimizerPass {
                     case let .fusedPixelLocalCluster(members, wantsLinear, clusterAux) = producer.kind
                 else { continue }
 
+                // Cluster codegen (`MetalSourceBuilder.buildFusedPixelLocalCluster`)
+                // requires every member to use `.pixelLocalOnly` shape — it
+                // emits a uniform `(rgb, uN)` member-call signature. Other
+                // shapes (`.pixelLocalWithLUT3D` / `.pixelLocalWithOverlay` /
+                // `.pixelLocalWithGid` / `.neighborReadWithSource`) need
+                // additional bound textures or `gid` parameters. Absorbing a
+                // P with a non-`.pixelLocalOnly` shape produced a mixed-shape
+                // cluster that codegen rejected with
+                // `BuildError.unsupportedSignatureShape`, surfacing as a
+                // hung preview + CPU spike (every frame retried the failing
+                // build). LUT3DFilter (`.pixelLocalWithLUT3D`) was the
+                // observed trigger.
+                guard pBody.signatureShape == .pixelLocalOnly else {
+                    continue
+                }
+
                 let rangeStart = clusterAux.count
                 let newAux = clusterAux + pAux
                 let newMember = FusedClusterMember(
