@@ -158,19 +158,19 @@ final class TailSinkTests: XCTestCase {
         }
     }
 
-    /// Regression — TailSink must NOT absorb a non-final pixelLocal
-    /// that still has downstream consumers. This pattern occurs when
-    /// a multi-pass filter's later pass references an earlier
-    /// pixelLocal-style node by `NodeRef.node(P.id)`. Dropping P would
-    /// orphan that reference, and `PipelineGraph.init`'s validator
-    /// then aborts with "node X references Y which is not declared
-    /// earlier".
+    /// Regression — when TailSink absorbs a non-final pixelLocal P
+    /// into producer M, every other surviving node that referenced
+    /// `.node(P.id)` must be rewritten to `.node(M.id)`. Otherwise
+    /// dropping P leaves dangling references that
+    /// `PipelineGraph.init`'s validator rejects as "node X references
+    /// Y which is not declared earlier".
     ///
-    /// Original repro: a real-world chain ending with
-    /// HighlightShadow + ClarityFilter (multi-pass) — Clarity's pass
-    /// #7 (downsample) referenced an earlier pixelLocal that
-    /// TailSink had absorbed. The crash was deterministic.
-    func testNonFinalPixelLocalWithDownstreamConsumerIsNotAbsorbed() {
+    /// Original repro: real-world chain ending with HighlightShadow
+    /// + ClarityFilter (multi-pass) — Clarity's pass #7 (downsample)
+    /// referenced an earlier pixelLocal that TailSink had absorbed.
+    /// Pre-fix, the run aborted with a fatalError inside the
+    /// validating PipelineGraph initialiser.
+    func testNonFinalPixelLocalAbsorptionRewritesDownstreamRefs() {
         // Producer M: a fused cluster the optimiser is happy to
         // extend if its only consumer is the next pixelLocal P.
         let cluster = Node(
@@ -193,8 +193,8 @@ final class TailSinkTests: XCTestCase {
             debugLabel: "ClusterExposure"
         )
 
-        // P: pixelLocal with M as its only input. Crucially, P is
-        // *not* final and is read by another node downstream.
+        // P: pixelLocal with M as its only input. Non-final, and
+        // referenced by another node downstream.
         let p = Fx.pixelLocalNode(
             id: 1,
             bodyName: "PreClarity",
@@ -202,10 +202,10 @@ final class TailSinkTests: XCTestCase {
             isFinal: false
         )
 
-        // The downstream consumer that still needs P's id intact.
-        // Modeled as a `.downsample` (the same kind that triggered
-        // the original ClarityFilter#7 crash) which `dependencyRefs`
-        // counts via `inputs`.
+        // Downstream consumer that references P. Modelled as a
+        // `.downsample` (same kind that triggered the original
+        // ClarityFilter#7 crash) — its only ref-bearing field is
+        // `inputs`.
         let downstream = Node(
             id: 2,
             kind: .downsample(factor: 4, kind: .guidedLuma),
@@ -222,15 +222,151 @@ final class TailSinkTests: XCTestCase {
 
         // `pass.run` re-builds the result through the validating
         // PipelineGraph initialiser, so the original bug surfaced as
-        // a fatalError inside this call. The fix turns the run into a
-        // no-op for this graph shape.
+        // a fatalError inside this call. Post-fix, P is absorbed
+        // and node 2's `.node(1)` is rewritten to `.node(0)`.
         let out = pass.run(graph)
 
-        // All three nodes must survive — TailSink is forbidden from
-        // absorbing P because doing so would orphan node 2's
-        // reference to node 1.
-        XCTAssertEqual(out.nodes.count, 3, "TailSink must not drop P when P has downstream consumers")
-        XCTAssertEqual(Set(out.nodes.map { $0.id }), [0, 1, 2])
+        // 2 survivors: the merged cluster (id=0) and the downsample
+        // (id=2). P (id=1) is absorbed and dropped.
+        XCTAssertEqual(out.nodes.count, 2)
+        let ids = out.nodes.map { $0.id }
+        XCTAssertEqual(Set(ids), [0, 2])
+
+        // The cluster grew a new member from P.
+        guard
+            let merged = out.nodes.first(where: { $0.id == 0 }),
+            case let .fusedPixelLocalCluster(members, _, _) = merged.kind
+        else {
+            XCTFail("Expected fusedPixelLocalCluster at id 0")
+            return
+        }
+        XCTAssertEqual(members.map { $0.body.functionName }, ["Exposure", "PreClarity"])
+
+        // The downsample's `.node(1)` reference was rewritten to
+        // `.node(0)` — this is the bit that previously crashed.
+        guard let ds = out.nodes.first(where: { $0.id == 2 }) else {
+            XCTFail("Expected downsample at id 2")
+            return
+        }
+        XCTAssertEqual(ds.inputs, [.node(0)])
+    }
+
+    /// `.blend` aux refs are also rewritten, because blend's `aux`
+    /// is a separate `NodeRef` field outside `inputs`.
+    func testBlendAuxRefIsRewrittenOnAbsorption() {
+        let cluster = Node(
+            id: 0,
+            kind: .fusedPixelLocalCluster(
+                members: [
+                    FusedClusterMember(
+                        body: Fx.dummyBody("Base"),
+                        uniforms: .empty,
+                        debugLabel: "Base",
+                        additionalRange: 0..<0
+                    ),
+                ],
+                wantsLinearInput: false,
+                additionalNodeInputs: []
+            ),
+            inputs: [.source],
+            outputSpec: .sameAsSource,
+            isFinal: false,
+            debugLabel: "ClusterBase"
+        )
+        let p = Fx.pixelLocalNode(
+            id: 1, bodyName: "Tweak", input: .node(0), isFinal: false
+        )
+        // A blend node that takes its primary from .source and aux
+        // from P. Forward-reference invariant requires aux's id < blend's.
+        let blender = Node(
+            id: 2,
+            kind: .blend(op: .normalAlpha, aux: .node(1)),
+            inputs: [.source],
+            outputSpec: .sameAsSource,
+            isFinal: true,
+            debugLabel: "Blend"
+        )
+
+        let graph = PipelineGraph(
+            nodes: [cluster, p, blender],
+            totalAdditionalInputs: 0
+        )
+
+        let out = pass.run(graph)
+        XCTAssertEqual(out.nodes.count, 2)
+
+        guard
+            let blend = out.nodes.first(where: { $0.id == 2 }),
+            case let .blend(_, aux) = blend.kind
+        else {
+            XCTFail("Expected blend at id 2")
+            return
+        }
+        guard case .node(let auxID) = aux else {
+            XCTFail("Blend aux should still be a node ref")
+            return
+        }
+        XCTAssertEqual(auxID, 0, "Blend aux must be rewritten from P=1 to M=0")
+    }
+
+    /// `additionalNodeInputs` on `.nativeCompute` (and the other
+    /// kinds that carry it) is also rewritten on absorption.
+    func testNativeComputeAdditionalNodeInputsRewritten() {
+        let cluster = Node(
+            id: 0,
+            kind: .fusedPixelLocalCluster(
+                members: [
+                    FusedClusterMember(
+                        body: Fx.dummyBody("Base"),
+                        uniforms: .empty,
+                        debugLabel: "Base",
+                        additionalRange: 0..<0
+                    ),
+                ],
+                wantsLinearInput: false,
+                additionalNodeInputs: []
+            ),
+            inputs: [.source],
+            outputSpec: .sameAsSource,
+            isFinal: false,
+            debugLabel: "ClusterBase"
+        )
+        let p = Fx.pixelLocalNode(
+            id: 1, bodyName: "Tweak", input: .node(0), isFinal: false
+        )
+        let nc = Fx.nativeComputeNode(
+            id: 2,
+            kernelName: "Custom",
+            additionalNodeInputs: [.node(1)]
+        )
+        // Make `nc` final so the graph has exactly one final node.
+        let ncFinal = Node(
+            id: nc.id,
+            kind: nc.kind,
+            inputs: nc.inputs,
+            outputSpec: nc.outputSpec,
+            isFinal: true,
+            debugLabel: nc.debugLabel,
+            inlinedBodyBeforeSample: nc.inlinedBodyBeforeSample,
+            tailSinkedBody: nc.tailSinkedBody
+        )
+
+        let graph = PipelineGraph(
+            nodes: [cluster, p, ncFinal],
+            totalAdditionalInputs: 0
+        )
+
+        let out = pass.run(graph)
+        XCTAssertEqual(out.nodes.count, 2)
+
+        guard
+            let nativeOut = out.nodes.first(where: { $0.id == 2 }),
+            case let .nativeCompute(_, _, additional) = nativeOut.kind
+        else {
+            XCTFail("Expected nativeCompute at id 2")
+            return
+        }
+        XCTAssertEqual(additional, [.node(0)], "nativeCompute aux must be rewritten from P=1 to M=0")
     }
 
     /// NativeCompute producer is opaque → no sink.

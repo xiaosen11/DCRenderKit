@@ -27,8 +27,8 @@
 
 import Foundation
 
-/// Absorb a downstream tail `.pixelLocal` into its producer's
-/// write path.
+/// Absorb a downstream `.pixelLocal` into its producer's write
+/// path.
 ///
 /// ## Merge conditions
 ///
@@ -41,22 +41,13 @@ import Foundation
 /// 2. `P.inputs == [.node(M.id)]` — P reads M directly and
 ///    nothing else.
 /// 3. `M` has exactly one consumer (namely P).
-/// 4. **`P` has no consumers** — P must be a graph leaf
-///    (typically `isFinal == true`). When P is non-final but
-///    still has downstream consumers (common when a multi-pass
-///    filter's later passes reference an earlier pixelLocal-style
-///    intermediate by `NodeRef.node(P.id)`), absorbing P into M
-///    would drop P's id from the graph and leave dangling
-///    references — the validator at `PipelineGraph.init` rejects
-///    these as "node X references Y which is not declared
-///    earlier" with a fatal error.
-/// 5. `M.outputSpec == P.outputSpec == .sameAsSource` — no
+/// 4. `M.outputSpec == P.outputSpec == .sameAsSource` — no
 ///    resolution change across the boundary.
-/// 6. `M.kind` is one of `.fusedPixelLocalCluster` or
+/// 5. `M.kind` is one of `.fusedPixelLocalCluster` or
 ///    `.neighborRead`. `.pixelLocal` producers are already handled
 ///    by `VerticalFusion`; `.nativeCompute` producers are opaque
 ///    to the codegen and therefore skipped.
-/// 7. `M.tailSinkedBody == nil` — no double-sinking yet.
+/// 6. `M.tailSinkedBody == nil` — no double-sinking yet.
 ///
 /// When the conditions hold:
 ///
@@ -67,7 +58,23 @@ import Foundation
 ///   the same range-into-aux convention. The neighbour-read's
 ///   `additionalNodeInputs` are extended with P's auxiliaries.
 ///
-/// P is then dropped from the graph.
+/// ## Reference rewriting
+///
+/// After absorption, `M` (id preserved) produces what was P's
+/// output — so any downstream node that referenced `P.id` must
+/// have its reference rewritten to `M.id`. This is essential
+/// when P is non-final and still has consumers (typical in
+/// chains that mix single-pass pixel-local filters with multi-
+/// pass filters whose internal passes reference earlier
+/// intermediates via `NodeRef.node`). Without rewriting, dropping
+/// P leaves dangling refs that `PipelineGraph.init`'s validator
+/// rejects as "node X references Y which is not declared
+/// earlier" with a fatal error.
+///
+/// P is dropped, and **every surviving node has its `inputs`,
+/// per-kind `additionalNodeInputs` (or `aux` for `.blend`)
+/// rewritten** to redirect any `NodeRef.node(P.id)` to
+/// `NodeRef.node(M.id)`.
 @available(iOS 18.0, *)
 internal struct TailSink: OptimizerPass {
 
@@ -81,6 +88,10 @@ internal struct TailSink: OptimizerPass {
 
         var replacement: [NodeID: Node] = [:]
         var dropped: Set<NodeID> = []
+        // refRewrite: P.id → M.id. After absorption, M produces what
+        // was P's output, so every surviving node's `NodeRef.node(P)`
+        // gets redirected to M.
+        var refRewrite: [NodeID: NodeID] = [:]
 
         for node in graph.nodes {
             // We want `node == P` (the downstream pixelLocal).
@@ -95,15 +106,6 @@ internal struct TailSink: OptimizerPass {
                 // nodes still see M's pre-absorption output and the merged
                 // M+P kernel would change their input.
                 (consumerCount[producerID] ?? 0) == 1,
-                // P itself must have no consumers — i.e. be a graph leaf
-                // (typically the final node). When P is non-final but
-                // still consumed (common when a multi-pass filter's later
-                // pass references an earlier pixelLocal intermediate via
-                // NodeRef.node(P.id)), absorbing P into M would drop P's
-                // id from the graph and leave dangling references that
-                // PipelineGraph.init rejects as "node X references Y
-                // which is not declared earlier".
-                (consumerCount[node.id] ?? 0) == 0,
                 producer.outputSpec == .sameAsSource,
                 producer.tailSinkedBody == nil
             else {
@@ -111,7 +113,8 @@ internal struct TailSink: OptimizerPass {
             }
 
             // Don't double-transform a producer we already
-            // scheduled to sink another P into.
+            // scheduled to sink another P into; nor a producer
+            // that's itself an absorbed P.
             if replacement[producerID] != nil || dropped.contains(producerID) {
                 continue
             }
@@ -147,6 +150,7 @@ internal struct TailSink: OptimizerPass {
                 )
                 replacement[producer.id] = newCluster
                 dropped.insert(node.id)
+                refRewrite[node.id] = producer.id
 
             case .neighborRead(let nBody, let nUniforms, let nRadius, let nAux):
                 let rangeStart = nAux.count
@@ -174,6 +178,7 @@ internal struct TailSink: OptimizerPass {
                 )
                 replacement[producer.id] = newNeighbor
                 dropped.insert(node.id)
+                refRewrite[node.id] = producer.id
 
             // .pixelLocal producers → VerticalFusion already handled
             // .nativeCompute producers → codegen can't splice
@@ -190,21 +195,89 @@ internal struct TailSink: OptimizerPass {
             return graph
         }
 
+        // Build survivors, then rewrite every NodeRef.node(P) →
+        // NodeRef.node(M) for any (P, M) in refRewrite. Applied
+        // uniformly to both unchanged originals and replaced
+        // (M+P) nodes — replaced nodes inherit M's `inputs`, which
+        // may themselves point at a separately-absorbed P'.
         var survivors: [Node] = []
         survivors.reserveCapacity(graph.nodes.count)
         for node in graph.nodes {
             if dropped.contains(node.id) { continue }
-            if let rep = replacement[node.id] {
-                survivors.append(rep)
-            } else {
-                survivors.append(node)
-            }
+            let raw = replacement[node.id] ?? node
+            survivors.append(rewriteRefs(in: raw, using: refRewrite))
         }
 
         return PipelineGraph(
             nodes: survivors,
             totalAdditionalInputs: graph.totalAdditionalInputs
         )
+    }
+
+    // MARK: - Reference rewriting
+
+    /// Replace every `NodeRef.node(id)` in `node` (across `inputs`
+    /// and per-kind `additionalNodeInputs` / `aux`) where `id` is a
+    /// key in `map`. `.source` and `.additional(_)` references pass
+    /// through unchanged. Other ref-bearing fields on the surviving
+    /// node (label, output spec, uniforms) are untouched.
+    private func rewriteRefs(in node: Node, using map: [NodeID: NodeID]) -> Node {
+        guard !map.isEmpty else { return node }
+
+        let newInputs = node.inputs.map { rewriteRef($0, using: map) }
+        let newKind: NodeKind
+
+        switch node.kind {
+        case let .pixelLocal(body, uniforms, linear, aux):
+            newKind = .pixelLocal(
+                body: body,
+                uniforms: uniforms,
+                wantsLinearInput: linear,
+                additionalNodeInputs: aux.map { rewriteRef($0, using: map) }
+            )
+        case let .neighborRead(body, uniforms, radius, aux):
+            newKind = .neighborRead(
+                body: body,
+                uniforms: uniforms,
+                radiusHint: radius,
+                additionalNodeInputs: aux.map { rewriteRef($0, using: map) }
+            )
+        case let .nativeCompute(name, uniforms, aux):
+            newKind = .nativeCompute(
+                kernelName: name,
+                uniforms: uniforms,
+                additionalNodeInputs: aux.map { rewriteRef($0, using: map) }
+            )
+        case let .fusedPixelLocalCluster(members, linear, aux):
+            newKind = .fusedPixelLocalCluster(
+                members: members,
+                wantsLinearInput: linear,
+                additionalNodeInputs: aux.map { rewriteRef($0, using: map) }
+            )
+        case let .blend(op, aux):
+            newKind = .blend(op: op, aux: rewriteRef(aux, using: map))
+        case .downsample, .upsample, .reduce:
+            // No NodeRefs beyond `inputs` (already handled above).
+            newKind = node.kind
+        }
+
+        return Node(
+            id: node.id,
+            kind: newKind,
+            inputs: newInputs,
+            outputSpec: node.outputSpec,
+            isFinal: node.isFinal,
+            debugLabel: node.debugLabel,
+            inlinedBodyBeforeSample: node.inlinedBodyBeforeSample,
+            tailSinkedBody: node.tailSinkedBody
+        )
+    }
+
+    private func rewriteRef(_ ref: NodeRef, using map: [NodeID: NodeID]) -> NodeRef {
+        if case .node(let id) = ref, let target = map[id] {
+            return .node(target)
+        }
+        return ref
     }
 
     private func computeConsumerCount(_ graph: PipelineGraph) -> [NodeID: Int] {
