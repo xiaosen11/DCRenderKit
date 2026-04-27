@@ -119,17 +119,24 @@ func testYourFilterAtExtremesIsNonNegative() throws {
 1. 别的 filter 的极端参数可能在内部产生 OOG（YIQ 矩阵、Sharpen 的 Laplacian 等）；
 2. SDK 是 HDR-aware 的，中间 `rgba16Float` 可以承载 OOG 值，但你这一站要把它消化掉。
 
-### C.2 colorSpace 参数契约
+### C.2 colorSpace 契约：两种合法形态
 
-**每个对 RGB 几何敏感的 filter（OKLab / log / 任何非线性曲线）必须接受 `colorSpace: DCRColorSpace` 参数**，并在 body 里据此做 gamma↔linear 转换。
+每个新 filter 必须先回答："我的数学是否对 'linear sRGB 数值' 敏感？" — 然后选下面**两种**形态之一，**禁止**自创第三种。
+
+| 形态 | 适用 | 实施 |
+|------|------|------|
+| **(a) 双轨** | 数学在 gamma 上跑也无致命错误（曲线/log-slope/tonemap），只是 perceptual 视觉与 linear 视觉略有差异 | 接 `colorSpace: DCRColorSpace` 参数 + `isLinearSpace: UInt32` uniform 分支，body 内据此走 gamma↔linear 转换。例：Exposure / Contrast / Whites / Blacks / WhiteBalance / LUT3D |
+| **(b) 硬契约** | 数学**只对** linear sRGB 有定义（OKLab、Lab、LMS、任何依赖 `pow(abs(x), 1/3)` 的色空间），gamma 输入会在边界产生 NaN / 黑斑 / 颜色错位 | `colorSpace` 参数保留为 API 对称，`init` 里 `precondition(colorSpace == .linear, ...)` 在 Debug + Release 都 trap。例：Saturation / Vibrance |
+
+**禁止的第三种**：在硬契约场景里偷偷加一个 perceptual round-trip（gamma→linear→OKLab→linear→gamma）。这看起来"通了"但只是把错误推迟到下游 — perceptual 模式假设的"用户看到的就是 gamma byte"在 OKLab 这种感知空间里已不再有 well-defined 解释，结果是慢且仍可能出黑斑。**正确做法是让 SDK 用户在 call site 自己 wrap linearise → filter → re-encode**。
 
 理由：
-- SDK 支持 `.linear` 和 `.perceptual` 两种 pipeline 模式（DCRenderKit.defaultColorSpace 切换）；
+- SDK 支持 `.linear` 和 `.perceptual` 两种 pipeline 模式（`DCRenderKit.defaultColorSpace` 切换）；
 - 在 perceptual 模式下源纹理装的是 sRGB-gamma encoded bytes，filter body 拿到的就是 gamma 值；
-- 任何对"linear sRGB 数值"敏感的数学（OKLab、log-slope 对比度、Reinhard tonemap、guided filter）在 gamma 值上跑就是错的；
-- 12 个内建滤镜里只有 Saturation / Vibrance 漏了这条契约——结果用户在 perceptual 编辑预览里就看到了黑斑。
+- (a) 形态的 filter 自己处理 colorSpace，链上不互相干扰；
+- (b) 形态的 filter 拒绝 perceptual 输入，让错误在 call site 立刻暴露而不是污染像素。
 
-**实施模板**（mirror Exposure / Contrast / WhiteBalance 的标准）：
+**(a) 形态实施模板**（Exposure / Contrast / WhiteBalance 标准）：
 
 ```swift
 public struct YourFilter: FilterProtocol {
@@ -155,8 +162,6 @@ struct YourUniforms {
 }
 ```
 
-shader body：
-
 ```metal
 struct YourUniforms {
     float slider;
@@ -165,18 +170,13 @@ struct YourUniforms {
 
 inline half3 DCRYourBody(half3 rgbIn, constant YourUniforms& u) {
     const bool isLinear = (u.isLinearSpace != 0u);
-    
-    // C.1 sanitisation + C.2 gamma→linear 二合一
     const float3 sanitised = max(float3(rgbIn), 0.0f);
     const float3 rgbLinear = isLinear ? sanitised : float3(
         DCRSRGBGammaToLinear(sanitised.x),
         DCRSRGBGammaToLinear(sanitised.y),
         DCRSRGBGammaToLinear(sanitised.z)
     );
-    
-    // ... 你的 linear-domain 数学 ...
-    
-    // 出口对应转回 gamma
+    // ... linear-domain math ...
     if (isLinear) return half3(rgbOut);
     return half3(
         DCRSRGBLinearToGamma(rgbOut.x),
@@ -186,16 +186,58 @@ inline half3 DCRYourBody(half3 rgbIn, constant YourUniforms& u) {
 }
 ```
 
-**FusionHelperSource 注册**：在 `helpersForBody(named:)` 加入 `srgbGamma` helper（如果没用 OKLab 则可省）。
+`FusionHelperSource.helpersForBody` 注册 `srgbGamma`；`fusionBody.wantsLinearInput = false`（filter 自己处理 gamma↔linear，不要求上游切换）。
 
-**FusionBody.wantsLinearInput 设为 `false`**——这是 fusion 的 metadata，告诉 VerticalFusion "我能与同样自处理 colorSpace 的兄弟节点融成一个 cluster"，不是说 body 真想要 gamma 输入。所有内建 tone/colour 滤镜都用 `false`，让它们彼此之间能融合。
+**(b) 形态实施模板**（Saturation / Vibrance 标准）：
+
+```swift
+public struct YourFilter: FilterProtocol {
+    public var slider: Float
+    // 不存 colorSpace 字段：参数仅用于守卫，存了反而暗示能改
+    public init(
+        slider: Float = 0,
+        colorSpace: DCRColorSpace = .linear
+    ) {
+        precondition(
+            colorSpace == .linear,
+            "YourFilter only supports .linear color space — <math> is " +
+            "calibrated for linear sRGB. To use in a .perceptual pipeline, " +
+            "wrap with explicit linearise / re-encode steps."
+        )
+        self.slider = slider
+    }
+
+    public var uniforms: FilterUniforms {
+        FilterUniforms(YourUniforms(slider: slider))
+    }
+}
+
+struct YourUniforms {
+    var slider: Float
+    // 没有 isLinearSpace 字段
+}
+```
+
+```metal
+struct YourUniforms {
+    float slider;
+};
+
+inline half3 DCRYourBody(half3 rgbIn, constant YourUniforms& u) {
+    const float3 rgbLinear = max(float3(rgbIn), 0.0f);  // C.1 sanitisation
+    // ... linear-only math ...
+    return half3(rgbOut);
+}
+```
+
+`fusionBody.wantsLinearInput = true`（声明硬契约）；`helpersForBody` 不注册 `srgbGamma`（body 里没用）。
 
 ### C.3 自检 checklist（merge 前过一遍）
 
 写完新 filter，在 PR 描述里勾完：
 
 - [ ] body 入口对 OOG/负输入做了 sanitisation（C.1）
-- [ ] 如对线性 RGB 几何敏感，加了 `colorSpace` 参数 + isLinearSpace 分支（C.2）
+- [ ] 选了 (a) 双轨 或 (b) 硬契约 形态 — 没有自创第三种（C.2）
+- [ ] (a) 形态：`isLinearSpace` 分支 + identity 在 linear/perceptual 两种模式下都成立；(b) 形态：`init` 里 `precondition(colorSpace == .linear)` + `wantsLinearInput: true`
 - [ ] `Tests/DCRenderKitTests/Contracts/SDKFilterOutputContractTests.swift` 加了 `test<FilterName>AtExtremesIsNonNegative` 测试方法
-- [ ] linear/perceptual 两种模式都跑通，identity 在两种模式下都成立
 - [ ] `swift test` 全绿，零 warning

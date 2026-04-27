@@ -187,76 +187,10 @@ final class SaturationVibranceOOGRobustnessTests: ContractTestCase {
                              "Blue character lost. Got (\(p.x), \(p.y), \(p.z))")
     }
 
-    // MARK: - Perceptual-mode (the edit-preview "脏黑斑" trigger)
-
-    /// In `.perceptual` mode the source texture carries sRGB-gamma
-    /// values directly (raw `bgra8Unorm` from a JPEG / PNG loader).
-    /// OKLab math is calibrated for **linear** sRGB; if the
-    /// Saturation body fails to linearise the gamma input it produces
-    /// a perceptually-wrong `L`, the gamut clamp converges to
-    /// near-black on chromatic pixels, and the user sees scattered
-    /// dark blobs in the edit preview.
-    ///
-    /// This test emulates the edit-preview path: a chromatic gamma-
-    /// encoded mid-tone (gamma 0.6/0.3/0.5 ≈ linear 0.32/0.07/0.21
-    /// — a muted purple) is fed into Saturation in perceptual mode at
-    /// a non-trivial slider value. The output must be a sensible
-    /// purple, NOT near-black.
-    func testSaturationPerceptualModeOnGammaEncodedInputDoesNotBlacken() throws {
-        let gammaInput = SIMD3<Float>(0.6, 0.3, 0.5)
-        let source = try makeSinglePatchTexture(gammaInput)
-        let output = try runFilter(
-            source: source,
-            filter: SaturationFilter(saturation: 1.4, colorSpace: .perceptual)
-        )
-        let p = try readCentrePixel(output)
-        // The output gamma luminance should stay in the same
-        // ball-park as the input. If the perceptual-mode round-trip
-        // is broken, output collapses to near-black (all channels
-        // < 0.05) on this kind of chromatic input.
-        let outLuma = (Double(p.x) + Double(p.y) + Double(p.z)) / 3
-        XCTAssertGreaterThan(
-            outLuma, 0.2,
-            "Perceptual-mode Saturation collapsed gamma input \(gammaInput) to near-black: got (\(p.x), \(p.y), \(p.z)). Body is failing to linearise input before OKLab math."
-        )
-    }
-
-    func testVibrancePerceptualModeOnGammaEncodedInputDoesNotBlacken() throws {
-        let gammaInput = SIMD3<Float>(0.6, 0.3, 0.5)
-        let source = try makeSinglePatchTexture(gammaInput)
-        let output = try runFilter(
-            source: source,
-            filter: VibranceFilter(vibrance: 0.8, colorSpace: .perceptual)
-        )
-        let p = try readCentrePixel(output)
-        let outLuma = (Double(p.x) + Double(p.y) + Double(p.z)) / 3
-        XCTAssertGreaterThan(
-            outLuma, 0.2,
-            "Perceptual-mode Vibrance collapsed gamma input \(gammaInput) to near-black: got (\(p.x), \(p.y), \(p.z))."
-        )
-    }
-
-    /// `colorSpace = .linear` and `colorSpace = .perceptual` must
-    /// both round-trip an identity-saturation input cleanly. Without
-    /// the gamma-linear branch the perceptual path silently
-    /// degrades.
-    func testSaturationIdentityRoundtripInBothColorSpaces() throws {
-        let probe = SIMD3<Float>(0.6, 0.3, 0.5)
-        for space in [DCRColorSpace.linear, DCRColorSpace.perceptual] {
-            let source = try makeSinglePatchTexture(probe)
-            let output = try runFilter(
-                source: source,
-                filter: SaturationFilter(saturation: 1.0, colorSpace: space)
-            )
-            let p = try readCentrePixel(output)
-            // Identity at saturation=1: output ≈ input on both spaces.
-            // Tolerance covers Float16 round-trip.
-            XCTAssertEqual(Double(p.x), Double(probe.x), accuracy: 0.01,
-                           "\(space): R drift on identity")
-            XCTAssertEqual(Double(p.y), Double(probe.y), accuracy: 0.01,
-                           "\(space): G drift on identity")
-            XCTAssertEqual(Double(p.z), Double(probe.z), accuracy: 0.01,
-                           "\(space): B drift on identity")
-        }
-    }
+    // Perceptual-mode tests removed: SaturationFilter / VibranceFilter
+    // are hard-contracted to `.linear` via `precondition` (OKLab math
+    // is only calibrated for linear sRGB). Misuse traps in both Debug
+    // and Release; there is no perceptual-mode body branch left to
+    // exercise. See SaturationFilter.swift / VibranceFilter.swift for
+    // the precondition rationale.
 }

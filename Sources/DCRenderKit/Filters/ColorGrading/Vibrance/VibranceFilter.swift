@@ -76,21 +76,29 @@ public struct VibranceFilter: FilterProtocol {
     /// low-chroma pixels.
     public var vibrance: Float
 
-    /// Color space the input texture is encoded in. See
-    /// ``SaturationFilter/colorSpace`` for the same rationale —
-    /// OKLab math is calibrated for linear sRGB, so the shader
-    /// linearises perceptually-encoded input before the OKLab
-    /// round-trip and re-encodes on output.
-    public var colorSpace: DCRColorSpace
-
-    /// Create a ``VibranceFilter`` with the given slider and the
-    /// pipeline's current color-space mode.
+    /// Create a ``VibranceFilter`` with the given slider.
+    ///
+    /// `colorSpace` exists as a contract guard, not a routing
+    /// parameter: OKLab math (Ottosson 2020) is calibrated for
+    /// linear sRGB only, and gamma input produces incorrect
+    /// perceptual L. See ``SaturationFilter/init`` for the full
+    /// rationale — Vibrance shares the same hard contract.
+    ///
+    /// - Precondition: `colorSpace == .linear`. Anything else traps
+    ///   in both Debug and Release.
     public init(
         vibrance: Float = 0.0,
-        colorSpace: DCRColorSpace = DCRenderKit.defaultColorSpace
+        colorSpace: DCRColorSpace = .linear
     ) {
+        precondition(
+            colorSpace == .linear,
+            "VibranceFilter only supports .linear color space — OKLab " +
+            "math is calibrated for linear sRGB and produces incorrect " +
+            "perceptual L for gamma input. Got: \(colorSpace). To use " +
+            "Vibrance in a .perceptual pipeline, wrap the call with " +
+            "explicit linearise / re-encode steps."
+        )
         self.vibrance = vibrance
-        self.colorSpace = colorSpace
     }
 
     /// Compute-kernel binding. See ``FilterProtocol/modifier``.
@@ -100,26 +108,23 @@ public struct VibranceFilter: FilterProtocol {
 
     /// Typed uniform payload. See ``FilterProtocol/uniforms``.
     public var uniforms: FilterUniforms {
-        FilterUniforms(VibranceUniforms(
-            vibrance: vibrance,
-            isLinearSpace: colorSpace == .linear ? 1 : 0
-        ))
+        FilterUniforms(VibranceUniforms(vibrance: vibrance))
     }
 
     /// Fusion metadata. See ``FilterProtocol/fusionBody`` and
     /// `docs/pipeline-compiler-design.md` §4.
     ///
-    /// `wantsLinearInput = false` mirrors the Exposure / Contrast /
-    /// Saturation pattern — the body internally branches on
-    /// `isLinearSpace` and self-converts in perceptual mode, so
-    /// VerticalFusion can cluster Vibrance with the other tone
-    /// operators uniformly.
+    /// `wantsLinearInput = true` reflects the body's hard contract:
+    /// OKLab math is defined for linear sRGB only. Vibrance does not
+    /// cluster with `wantsLinearInput: false` filters (Exposure /
+    /// Contrast / WhiteBalance), which is correct — those run their
+    /// internal math in gamma space.
     public var fusionBody: FusionBodyDescriptor {
         FusionBodyDescriptor(
             functionName: "DCRVibranceBody",
             uniformStructName: "VibranceUniforms",
             kind: .pixelLocal,
-            wantsLinearInput: false,
+            wantsLinearInput: true,
             sourceText: BundledShaderSources.vibranceFilter,
             sourceLabel: "VibranceFilter.metal"
         )
@@ -130,6 +135,4 @@ public struct VibranceFilter: FilterProtocol {
 struct VibranceUniforms {
     /// `-1 ... +1`, identity at `0`. Shader clamps.
     var vibrance: Float
-    /// 1 = linear input; 0 = perceptually-gamma-encoded.
-    var isLinearSpace: UInt32
 }

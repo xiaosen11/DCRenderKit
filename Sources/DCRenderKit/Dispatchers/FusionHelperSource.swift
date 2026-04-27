@@ -311,12 +311,14 @@ internal enum FusionHelperSource {
         case "DCRWhiteBalanceBody":
             return [srgbGamma, whiteBalancePrivate]
         case "DCRSaturationBody":
-            // sRGB helpers needed for the perceptual-mode branch:
-            // input gamma → linear before OKLab, output linear → gamma
-            // before write. See SaturationFilter.metal for rationale.
-            return [srgbGamma, oklab]
+            // OKLab helpers only — Saturation is hard-contracted to
+            // linear sRGB input via Swift-side `precondition`, so no
+            // sRGB gamma round-trip is needed in the kernel.
+            return [oklab]
         case "DCRVibranceBody":
-            return [srgbGamma, oklab, vibrancePrivate]
+            // Same hard-contract as Saturation; Vibrance adds the
+            // skin-hue gate via `vibrancePrivate`.
+            return [oklab, vibrancePrivate]
         case "DCRLUT3DBody":
             return [srgbGamma, lut3DPrivate]
         case "DCRNormalBlendBody":

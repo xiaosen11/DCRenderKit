@@ -56,22 +56,21 @@ final class MetalSourceBuilderTests: XCTestCase {
                       "Uber kernel must call the body function")
     }
 
-    /// Saturation pulls in the OKLab helper block instead of the
-    /// SRGBGamma one (OKLab is Saturation's sole helper dependency).
-    func testSaturationGeneratedSourcePullsOKLabAndSRGBHelpers() throws {
+    /// Saturation pulls in the OKLab helper block (its sole helper
+    /// dependency) and does NOT pull in the SRGBGamma helpers — the
+    /// filter is hard-contracted to linear input via Swift-side
+    /// `precondition`, so no gamma round-trip exists in the body.
+    func testSaturationGeneratedSourcePullsOKLabHelpers() throws {
         let filter = SaturationFilter(saturation: 1.3)
         let node = loweredSingleNode(for: .single(filter))
 
         let result = try MetalSourceBuilder.build(for: node)
         XCTAssertTrue(result.source.contains("DCRLinearSRGBToOKLab"))
         XCTAssertTrue(result.source.contains("DCROKLChGamutClamp"))
-        // Post-fix: Saturation now linearises gamma input in
-        // perceptual mode and re-encodes on output, so it requires
-        // the canonical SRGBGamma helpers alongside OKLab. See
-        // SaturationFilter.metal for the rationale.
-        XCTAssertTrue(result.source.contains("DCRSRGBGammaToLinear"),
-                      "SRGBGamma helper must be injected for the perceptual-mode round-trip")
-        XCTAssertTrue(result.source.contains("DCRSRGBLinearToGamma"))
+        XCTAssertFalse(result.source.contains("inline float DCRSRGBLinearToGamma"),
+                       "Saturation must NOT inject SRGBGamma helpers — body is linear-only")
+        XCTAssertFalse(result.source.contains("inline float DCRSRGBGammaToLinear"),
+                       "Saturation must NOT inject SRGBGamma helpers — body is linear-only")
     }
 
     /// Vibrance pulls in OKLab + its own private helpers

@@ -115,75 +115,35 @@ static inline float3 DCROKLChGamutClamp(float3 lch) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// MIRROR: Foundation/SRGBGamma.metal
-// ═══════════════════════════════════════════════════════════════════
-// Needed for the perceptual-mode branch — the body linearises
-// gamma-encoded input before running OKLab math (which is calibrated
-// for linear sRGB by Ottosson 2020), then re-encodes on output.
-// Same canonical-helper-mirror discipline as the other tone filters
-// (Exposure, Contrast, Whites, Blacks, WhiteBalance).
-
-inline float DCRSRGBLinearToGamma(float c) {
-    float cc = max(c, 0.0f);
-    return cc <= 0.0031308f ? 12.92f * cc
-                             : 1.055f * pow(cc, 1.0f / 2.4f) - 0.055f;
-}
-inline float DCRSRGBGammaToLinear(float c) {
-    float cc = max(c, 0.0f);
-    return cc <= 0.04045f ? cc / 12.92f
-                          : pow((cc + 0.055f) / 1.055f, 2.4f);
-}
-
-// ═══════════════════════════════════════════════════════════════════
 // Saturation kernel
 // ═══════════════════════════════════════════════════════════════════
 
 struct SaturationUniforms {
     float saturation;
-    uint  isLinearSpace;   // 1 = linear input; 0 = gamma-encoded.
 };
 
 // @dcr:body-begin DCRSaturationBody
 inline half3 DCRSaturationBody(half3 rgbIn, constant SaturationUniforms& u) {
     const float s = clamp(u.saturation, 0.0f, 2.0f);
-    const bool isLinear = (u.isLinearSpace != 0u);
 
     // OKLab is defined for non-negative linear sRGB (Ottosson 2020).
-    // Two-stage input normalisation, both required:
+    // The Swift-side `SaturationFilter.init` enforces a
+    // `precondition(colorSpace == .linear)` so this body can assume
+    // linear input — no perceptual-mode round-trip is needed.
     //
-    //  Stage 1 — sub-gamut clamp (`x < 0` → `0`):
-    //    Sub-gamut overshoot like `(-0.05, -0.05, 0.5)` from upstream
-    //    WhiteBalance YIQ-tint extremes passes cleanly through
-    //    OKLab's `sign(x)·pow(abs(x),1/3)` but the resulting `L`
-    //    mixes positive coefficients across signed `l_/m_/s_`, no
-    //    longer matching the pixel's perceptual brightness. The
-    //    gamut clamp then drives `C` toward zero at this wrong `L`,
-    //    emitting near-black grey — the "脏黑斑 / dirty black blob"
-    //    symptom. Treat sub-gamut input as no light.
-    //
-    //  Stage 2 — gamma → linear (perceptual mode only):
-    //    In `.perceptual` mode the source texture carries sRGB-gamma
-    //    bytes (raw `bgra8Unorm` from a JPEG / PNG loader). OKLab
-    //    fed gamma values produces a wrong `L` for chromatic pixels
-    //    (gamma 0.5 ≈ linear 0.21 — different OKLab brightness).
-    //    Linearise via IEC 61966-2-1 piecewise sRGB so OKLab
-    //    operates on the values it is calibrated for. The helper's
-    //    own `max(c, 0)` makes Stage 1 a no-op on this branch — but
-    //    keeping it explicit on the linear branch makes the
-    //    sanitisation contract visible at a glance, instead of
-    //    relying on a "buried inside the helper" guarantee.
+    // The single sanitisation here is the sub-gamut clamp: upstream
+    // overshoot like `(-0.05, -0.05, 0.5)` (e.g. WhiteBalance YIQ-tint
+    // extremes) passes cleanly through OKLab's
+    // `sign(x)·pow(abs(x),1/3)` but the resulting `L` mixes positive
+    // coefficients across signed `l_/m_/s_`, no longer matching the
+    // pixel's perceptual brightness; the gamut clamp would then drive
+    // `C` toward zero at this wrong `L` and emit near-black. Treat
+    // sub-gamut input as no light.
     //
     // HDR overshoot (`> 1`) is preserved unchanged because OKLab is
     // defined for `L > 1` and the gamut clamp drives `C` to 0,
     // emitting a bright grey — the intended HDR behaviour.
-    const float3 rgbSanitised = max(float3(rgbIn), 0.0f);
-    const float3 rgbLinear = isLinear
-        ? rgbSanitised
-        : float3(
-            DCRSRGBGammaToLinear(rgbSanitised.x),
-            DCRSRGBGammaToLinear(rgbSanitised.y),
-            DCRSRGBGammaToLinear(rgbSanitised.z)
-        );
+    const float3 rgbLinear = max(float3(rgbIn), 0.0f);
 
     // linear sRGB → OKLCh
     const float3 lab = DCRLinearSRGBToOKLab(rgbLinear);
@@ -197,17 +157,7 @@ inline half3 DCRSaturationBody(half3 rgbIn, constant SaturationUniforms& u) {
 
     // OKLCh → linear sRGB
     const float3 lab_out = DCROKLChToOKLab(lch);
-    const float3 rgbOut = DCROKLabToLinearSRGB(lab_out);
-
-    // Re-encode if the pipeline carries gamma-encoded values.
-    if (isLinear) {
-        return half3(rgbOut);
-    }
-    return half3(
-        DCRSRGBLinearToGamma(rgbOut.x),
-        DCRSRGBLinearToGamma(rgbOut.y),
-        DCRSRGBLinearToGamma(rgbOut.z)
-    );
+    return half3(DCROKLabToLinearSRGB(lab_out));
 }
 // @dcr:body-end
 

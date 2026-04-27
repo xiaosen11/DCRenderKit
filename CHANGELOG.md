@@ -90,18 +90,23 @@ until `v1.0.0`. Each breaking change is flagged explicitly below.
   `FilterChainBuilder` in the Demo) just rename the argument; the
   expression on the right stays the same.
 
-- **`SaturationFilter` / `VibranceFilter` gained a `colorSpace:
-  DCRColorSpace` parameter** (defaults to
-  `DCRenderKit.defaultColorSpace`), matching the existing pattern in
-  Exposure / Contrast / Whites / Blacks / WhiteBalance / LUT3D. In
-  `.perceptual` mode the body now linearises sRGB-gamma input
-  before the OKLab round-trip and re-encodes on output, fixing the
-  "脏黑斑 / dirty black blob" symptom users reported on edit-preview
-  chains where the source texture loaded as raw `bgra8Unorm` carries
-  gamma values. `.linear` mode behaviour is unchanged. Filters
-  constructed without the new parameter inherit the SDK's global
-  default — no migration needed if your pipeline already uses the
-  default color space throughout.
+- **`SaturationFilter` / `VibranceFilter` are hard-contracted to
+  `colorSpace: .linear`** via Swift-side `precondition`. OKLab math
+  (Ottosson 2020) is calibrated only for linear sRGB and produces
+  perceptually-wrong `L` for gamma-encoded input — the gamut clamp
+  then converges on near-black for chromatic pixels (the historical
+  "脏黑斑 / dirty black blob" symptom). Rather than maintaining a
+  perceptual-mode round-trip that would only paper over misuse,
+  these filters now trap in both Debug and Release if handed
+  anything other than `.linear`, surfacing the problem at the call
+  site instead of in the rendered output. The `colorSpace`
+  parameter remains for API symmetry with other filters but only
+  `.linear` is accepted. Pipelines running in `.perceptual` mode
+  must wrap Saturation / Vibrance with explicit linearise → filter
+  → re-encode steps; the SDK's default `.linear` mode is unchanged.
+  Resolves the dirty-blob root cause (`atan2(0, 0)` returning NaN
+  on Apple Metal GPU at C ≈ 0; see `Foundation/OKLab.metal` for the
+  in-shader guard).
 
 - **`FusionBodyDescriptor.init` takes `sourceText: String` +
   `sourceLabel: String` instead of `sourceMetalFile: URL`** (Phase 5

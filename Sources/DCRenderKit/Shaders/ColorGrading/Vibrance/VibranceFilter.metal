@@ -147,40 +147,21 @@ float DCRVibranceSkinHueGate(float h) {
 // Vibrance kernel
 // ═══════════════════════════════════════════════════════════════════
 
-// MIRROR: Foundation/SRGBGamma.metal (perceptual-mode round-trip)
-inline float DCRSRGBLinearToGamma(float c) {
-    float cc = max(c, 0.0f);
-    return cc <= 0.0031308f ? 12.92f * cc
-                             : 1.055f * pow(cc, 1.0f / 2.4f) - 0.055f;
-}
-inline float DCRSRGBGammaToLinear(float c) {
-    float cc = max(c, 0.0f);
-    return cc <= 0.04045f ? cc / 12.92f
-                          : pow((cc + 0.055f) / 1.055f, 2.4f);
-}
-
 struct VibranceUniforms {
     float vibrance;
-    uint  isLinearSpace;
 };
 
 // @dcr:body-begin DCRVibranceBody
 inline half3 DCRVibranceBody(half3 rgbIn, constant VibranceUniforms& u) {
     const float vib = clamp(u.vibrance, -1.0f, 1.0f);
-    const bool isLinear = (u.isLinearSpace != 0u);
 
-    // See SaturationFilter.metal for the full rationale. Two-stage
-    // sanitisation: clamp sub-gamut overshoot to zero, then linearise
-    // gamma-encoded input (perceptual mode) before the OKLab round-
-    // trip. HDR overshoot (`> 1`) is preserved.
-    const float3 rgbSanitised = max(float3(rgbIn), 0.0f);
-    const float3 rgbLinear = isLinear
-        ? rgbSanitised
-        : float3(
-            DCRSRGBGammaToLinear(rgbSanitised.x),
-            DCRSRGBGammaToLinear(rgbSanitised.y),
-            DCRSRGBGammaToLinear(rgbSanitised.z)
-        );
+    // OKLab is defined for non-negative linear sRGB (Ottosson 2020).
+    // The Swift-side `VibranceFilter.init` enforces a
+    // `precondition(colorSpace == .linear)` so this body can assume
+    // linear input — no perceptual-mode round-trip is needed. See
+    // SaturationFilter.metal for the full sub-gamut clamp rationale;
+    // Vibrance shares the same hard contract.
+    const float3 rgbLinear = max(float3(rgbIn), 0.0f);
 
     // linear sRGB → OKLCh
     const float3 lab = DCRLinearSRGBToOKLab(rgbLinear);
@@ -202,16 +183,7 @@ inline half3 DCRVibranceBody(half3 rgbIn, constant VibranceUniforms& u) {
 
     // OKLCh → linear sRGB
     const float3 lab_out = DCROKLChToOKLab(lch);
-    const float3 rgbOut  = DCROKLabToLinearSRGB(lab_out);
-
-    if (isLinear) {
-        return half3(rgbOut);
-    }
-    return half3(
-        DCRSRGBLinearToGamma(rgbOut.x),
-        DCRSRGBLinearToGamma(rgbOut.y),
-        DCRSRGBLinearToGamma(rgbOut.z)
-    );
+    return half3(DCROKLabToLinearSRGB(lab_out));
 }
 // @dcr:body-end
 
